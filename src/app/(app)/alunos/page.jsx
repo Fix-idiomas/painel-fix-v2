@@ -1,0 +1,448 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { financeGateway, FINANCE_ADAPTER } from "@/lib/financeGateway";
+import Modal from "@/components/Modal";
+
+const fmtBRL = (n) =>
+  (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+// evita bug de timezone ao exibir datas puras (YYYY-MM-DD)
+const fmtYmdBR = (s) => {
+  if (!s) return "-";
+  const [y, m, d] = String(s).split("-");
+  if (!y || !m || !d) return "-";
+  return `${d}/${m}/${y}`;
+};
+
+const PAYER_MODE = { SELF: "self", EXISTING: "existing", NEW: "new" };
+
+export default function AlunosPage() {
+  const [list, setList] = useState([]);
+  const [payers, setPayers] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // --------- Modal CADASTRAR ----------
+  const [openCreate, setOpenCreate] = useState(false);
+  const [savingCreate, setSavingCreate] = useState(false);
+  const [formCreate, setFormCreate] = useState({
+    name: "",
+    monthly_value: "",
+    due_day: "5",
+    birth_date: "",
+  });
+  const [payerMode, setPayerMode] = useState(PAYER_MODE.SELF);
+  const [payerId, setPayerId] = useState("");
+  const [newPayer, setNewPayer] = useState({ name: "", email: "" });
+
+  // --------- Modal EDITAR ----------
+  const [openEdit, setOpenEdit] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [formEdit, setFormEdit] = useState({
+    name: "",
+    monthly_value: "",
+    due_day: "5",
+    birth_date: "",
+  });
+
+  async function load() {
+    setLoading(true);
+    const [students, payers] = await Promise.all([
+      financeGateway.listStudents(),
+      financeGateway.listPayers?.() ?? [],
+    ]);
+    setList(students);
+    setPayers(payers);
+    setLoading(false);
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  // ---------- Create ----------
+  function resetCreate() {
+    setFormCreate({ name: "", monthly_value: "", due_day: "5", birth_date: "" });
+    setPayerMode(PAYER_MODE.SELF);
+    setPayerId("");
+    setNewPayer({ name: "", email: "" });
+    setSavingCreate(false);
+  }
+
+  async function onSubmitCreate(e) {
+    e?.preventDefault?.();
+    try {
+      setSavingCreate(true);
+
+      let chosenPayerId = null;
+      if (payerMode === PAYER_MODE.EXISTING) {
+        if (!payerId) throw new Error("Selecione um pagador existente.");
+        chosenPayerId = payerId;
+      } else if (payerMode === PAYER_MODE.NEW) {
+        if (!newPayer.name.trim()) throw new Error("Informe o nome do novo pagador.");
+        const py = await financeGateway.createPayer({
+          name: newPayer.name.trim(),
+          email: newPayer.email.trim() || null,
+        });
+        chosenPayerId = py.id;
+      } // SELF: deixa null
+
+      await financeGateway.createStudent({
+        name: formCreate.name.trim(),
+        monthly_value: Number(formCreate.monthly_value || 0),
+        due_day: Math.min(Math.max(Number(formCreate.due_day || 5), 1), 28),
+        birth_date: formCreate.birth_date || null, // yyyy-mm-dd
+        payer_id: chosenPayerId,
+      });
+
+      resetCreate();
+      setOpenCreate(false);
+      await load();
+    } catch (e) {
+      alert(e.message || String(e));
+    } finally {
+      setSavingCreate(false);
+    }
+  }
+
+  // ---------- Edit ----------
+  function openEditModal(s) {
+    setEditId(s.id);
+    setFormEdit({
+      name: s.name || "",
+      monthly_value: String(s.monthly_value ?? ""),
+      due_day: String(s.due_day ?? "5"),
+      birth_date: s.birth_date || "", // yyyy-mm-dd
+    });
+    setOpenEdit(true);
+  }
+
+  async function onSubmitEdit(e) {
+    e?.preventDefault?.();
+    if (!editId) return;
+    try {
+      setSavingEdit(true);
+      await financeGateway.updateStudent(editId, {
+        name: formEdit.name.trim(),
+        monthly_value: Number(formEdit.monthly_value || 0),
+        due_day: Math.min(Math.max(Number(formEdit.due_day || 5), 1), 28),
+        birth_date: formEdit.birth_date || null, // yyyy-mm-dd
+      });
+      setOpenEdit(false);
+      setEditId(null);
+      await load();
+    } catch (e) {
+      alert(e.message || String(e));
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  function closeEdit() {
+    if (savingEdit) return;
+    setOpenEdit(false);
+    setEditId(null);
+  }
+
+  // ---------- Ações de linha ----------
+  async function onToggleStatus(s) {
+    const next = s.status === "ativo" ? "inativo" : "ativo";
+    await financeGateway.setStudentStatus(s.id, next);
+    await load();
+  }
+  async function onDelete(s) {
+    if (
+      !confirm(
+        `Excluir aluno "${s.name}"?\n\n` +
+          "- Lançamentos NÃO pagos serão removidos.\n" +
+          "- Lançamentos pagos (recebidos) serão mantidos para contabilidade."
+      )
+    )
+      return;
+    await financeGateway.deleteStudent(s.id);
+    await load();
+  }
+
+  return (
+    <main className="p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-slate-500">
+          Adapter: <b>{FINANCE_ADAPTER}</b>
+        </div>
+        <button onClick={() => setOpenCreate(true)} className="border rounded px-3 py-2">
+          + Cadastrar aluno
+        </button>
+      </div>
+
+      {/* Tabela */}
+      <section className="border rounded overflow-auto">
+        {loading ? (
+          <div className="p-4">Carregando…</div>
+        ) : list.length === 0 ? (
+          <div className="p-4">Nenhum aluno cadastrado.</div>
+        ) : (
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <Th>Nome</Th>
+                <Th>Mensalidade</Th>
+                <Th>Venc.</Th>
+                <Th>Nascimento</Th>
+                <Th>Status</Th>
+                <Th>Ações</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((s) => (
+                <tr key={s.id} className="border-t">
+                  <Td>{s.name}</Td>
+                  <Td>{fmtBRL(s.monthly_value)}</Td>
+                  <Td>{s.due_day}</Td>
+                  {/* <-- aqui usamos o formatter seguro, sem Date() */}
+                  <Td>{fmtYmdBR(s.birth_date)}</Td>
+                  <Td>{s.status}</Td>
+                  <Td className="py-2">
+                    <div className="flex gap-2">
+                      <button onClick={() => openEditModal(s)} className="px-2 py-1 border rounded">
+                        Editar
+                      </button>
+                      <button onClick={() => onToggleStatus(s)} className="px-2 py-1 border rounded">
+                        {s.status === "ativo" ? "Inativar" : "Ativar"}
+                      </button>
+                      <button onClick={() => onDelete(s)} className="px-2 py-1 border rounded">
+                        Excluir
+                      </button>
+                    </div>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {/* Modal CADASTRAR */}
+      <Modal
+        open={openCreate}
+        onClose={() => {
+          if (savingCreate) return;
+          setOpenCreate(false);
+          resetCreate();
+        }}
+        title="Cadastrar aluno"
+        footer={
+          <>
+            <button
+              onClick={() => {
+                if (savingCreate) return;
+                setOpenCreate(false);
+                resetCreate();
+              }}
+              className="px-3 py-2 border rounded disabled:opacity-50"
+              disabled={savingCreate}
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={onSubmitCreate}
+              className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
+              disabled={savingCreate}
+            >
+              {savingCreate ? "Salvando…" : "Salvar"}
+            </button>
+          </>
+        }
+      >
+        <form onSubmit={onSubmitCreate} className="grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label className="block text-sm mb-1">Nome*</label>
+            <input
+              value={formCreate.name}
+              onChange={(e) => setFormCreate((f) => ({ ...f, name: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Mensalidade (R$)*</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={formCreate.monthly_value}
+              onChange={(e) => setFormCreate((f) => ({ ...f, monthly_value: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Vencimento (1–28)*</label>
+            <input
+              type="number"
+              min="1"
+              max="28"
+              value={formCreate.due_day}
+              onChange={(e) => setFormCreate((f) => ({ ...f, due_day: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+              required
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-sm mb-1">Data de nascimento (opcional)</label>
+            <input
+              type="date"
+              value={formCreate.birth_date}
+              onChange={(e) => setFormCreate((f) => ({ ...f, birth_date: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+            />
+          </div>
+
+          {/* Pagador */}
+          <div className="sm:col-span-2 mt-2">
+            <div className="text-sm font-semibold mb-1">Pagador</div>
+            <div className="flex flex-col gap-2">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="payerMode"
+                  checked={payerMode === PAYER_MODE.SELF}
+                  onChange={() => setPayerMode(PAYER_MODE.SELF)}
+                />
+                <span>Próprio aluno</span>
+              </label>
+
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="payerMode"
+                  checked={payerMode === PAYER_MODE.EXISTING}
+                  onChange={() => setPayerMode(PAYER_MODE.EXISTING)}
+                />
+                <span>Selecionar existente</span>
+              </label>
+              {payerMode === PAYER_MODE.EXISTING && (
+                <select
+                  value={payerId}
+                  onChange={(e) => setPayerId(e.target.value)}
+                  className="border rounded px-3 py-2 w-full"
+                >
+                  <option value="">— escolha um pagador —</option>
+                  {payers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} {p.email ? `— ${p.email}` : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="payerMode"
+                  checked={payerMode === PAYER_MODE.NEW}
+                  onChange={() => setPayerMode(PAYER_MODE.NEW)}
+                />
+                <span>Criar novo pagador</span>
+              </label>
+              {payerMode === PAYER_MODE.NEW && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input
+                    placeholder="Nome do pagador*"
+                    value={newPayer.name}
+                    onChange={(e) => setNewPayer((n) => ({ ...n, name: e.target.value }))}
+                    className="border rounded px-3 py-2 w-full"
+                    required
+                  />
+                  <input
+                    placeholder="E-mail (opcional)"
+                    type="email"
+                    value={newPayer.email}
+                    onChange={(e) => setNewPayer((n) => ({ ...n, email: e.target.value }))}
+                    className="border rounded px-3 py-2 w-full"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal EDITAR */}
+      <Modal
+        open={openEdit}
+        onClose={closeEdit}
+        title="Editar aluno"
+        footer={
+          <>
+            <button
+              onClick={closeEdit}
+              className="px-3 py-2 border rounded disabled:opacity-50"
+              disabled={savingEdit}
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={onSubmitEdit}
+              className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
+              disabled={savingEdit}
+            >
+              {savingEdit ? "Salvando…" : "Salvar"}
+            </button>
+          </>
+        }
+      >
+        <form onSubmit={onSubmitEdit} className="grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label className="block text-sm mb-1">Nome*</label>
+            <input
+              value={formEdit.name}
+              onChange={(e) => setFormEdit((f) => ({ ...f, name: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Mensalidade (R$)*</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={formEdit.monthly_value}
+              onChange={(e) => setFormEdit((f) => ({ ...f, monthly_value: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Vencimento (1–28)*</label>
+            <input
+              type="number"
+              min="1"
+              max="28"
+              value={formEdit.due_day}
+              onChange={(e) => setFormEdit((f) => ({ ...f, due_day: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+              required
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-sm mb-1">Data de nascimento (opcional)</label>
+            <input
+              type="date"
+              value={formEdit.birth_date}
+              onChange={(e) => setFormEdit((f) => ({ ...f, birth_date: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+            />
+          </div>
+        </form>
+      </Modal>
+    </main>
+  );
+}
+
+function Th({ children }) {
+  return <th className="text-left px-3 py-2 font-medium">{children}</th>;
+}
+function Td({ children }) {
+  return <td className="px-3 py-2">{children}</td>;
+}
