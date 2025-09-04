@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { financeGateway, FINANCE_ADAPTER } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
+import Link from "next/link";
 
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -46,14 +47,19 @@ export default function AlunosPage() {
     birth_date: "",
   });
 
+  // pagador no EDIT
+  const [payerModeEdit, setPayerModeEdit] = useState(PAYER_MODE.SELF);
+  const [payerIdEdit, setPayerIdEdit] = useState("");
+  const [newPayerEdit, setNewPayerEdit] = useState({ name: "", email: "" });
+
   async function load() {
     setLoading(true);
-    const [students, payers] = await Promise.all([
+    const [students, py] = await Promise.all([
       financeGateway.listStudents(),
       financeGateway.listPayers?.() ?? [],
     ]);
     setList(students);
-    setPayers(payers);
+    setPayers(py);
     setLoading(false);
   }
   useEffect(() => {
@@ -85,7 +91,7 @@ export default function AlunosPage() {
           email: newPayer.email.trim() || null,
         });
         chosenPayerId = py.id;
-      } // SELF: deixa null
+      } // SELF: deixa null, o back cria quando necessário
 
       await financeGateway.createStudent({
         name: formCreate.name.trim(),
@@ -114,6 +120,17 @@ export default function AlunosPage() {
       due_day: String(s.due_day ?? "5"),
       birth_date: s.birth_date || "", // yyyy-mm-dd
     });
+
+    // configura pagador atual do aluno
+    if (!s.payer_id) {
+      setPayerModeEdit(PAYER_MODE.SELF);
+      setPayerIdEdit("");
+    } else {
+      setPayerModeEdit(PAYER_MODE.EXISTING);
+      setPayerIdEdit(s.payer_id);
+    }
+    setNewPayerEdit({ name: "", email: "" });
+
     setOpenEdit(true);
   }
 
@@ -122,12 +139,32 @@ export default function AlunosPage() {
     if (!editId) return;
     try {
       setSavingEdit(true);
+
+      // resolver pagador conforme seleção do EDIT
+      let chosenPayerId = null;
+      if (payerModeEdit === PAYER_MODE.EXISTING) {
+        if (!payerIdEdit) throw new Error("Selecione um pagador existente.");
+        chosenPayerId = payerIdEdit;
+      } else if (payerModeEdit === PAYER_MODE.NEW) {
+        if (!newPayerEdit.name.trim()) throw new Error("Informe o nome do novo pagador.");
+        const py = await financeGateway.createPayer({
+          name: newPayerEdit.name.trim(),
+          email: newPayerEdit.email.trim() || null,
+        });
+        chosenPayerId = py.id;
+      } else {
+        // SELF
+        chosenPayerId = null;
+      }
+
       await financeGateway.updateStudent(editId, {
         name: formEdit.name.trim(),
         monthly_value: Number(formEdit.monthly_value || 0),
         due_day: Math.min(Math.max(Number(formEdit.due_day || 5), 1), 28),
         birth_date: formEdit.birth_date || null, // yyyy-mm-dd
+        payer_id: chosenPayerId,
       });
+
       setOpenEdit(false);
       setEditId(null);
       await load();
@@ -194,28 +231,30 @@ export default function AlunosPage() {
             </thead>
             <tbody>
               {list.map((s) => (
-                <tr key={s.id} className="border-t">
-                  <Td>{s.name}</Td>
-                  <Td>{fmtBRL(s.monthly_value)}</Td>
-                  <Td>{s.due_day}</Td>
-                  {/* <-- aqui usamos o formatter seguro, sem Date() */}
-                  <Td>{fmtYmdBR(s.birth_date)}</Td>
-                  <Td>{s.status}</Td>
-                  <Td className="py-2">
-                    <div className="flex gap-2">
-                      <button onClick={() => openEditModal(s)} className="px-2 py-1 border rounded">
-                        Editar
-                      </button>
-                      <button onClick={() => onToggleStatus(s)} className="px-2 py-1 border rounded">
-                        {s.status === "ativo" ? "Inativar" : "Ativar"}
-                      </button>
-                      <button onClick={() => onDelete(s)} className="px-2 py-1 border rounded">
-                        Excluir
-                      </button>
-                    </div>
-                  </Td>
-                </tr>
-              ))}
+  <tr key={s.id} className="border-t">
+    <Td>{s.name}</Td>
+    <Td>{fmtBRL(s.monthly_value)}</Td>
+    <Td>{s.due_day}</Td>
+    <Td>{s.birth_date ? new Date(s.birth_date).toLocaleDateString("pt-BR") : "-"}</Td>
+    <Td>{s.status}</Td>
+    <Td className="py-2">
+      <div className="flex gap-2">
+        <button onClick={() => openEditModal(s)} className="px-2 py-1 border rounded">
+          Editar
+        </button>
+        <Link href={`/alunos/${s.id}/evolucao`} className="px-2 py-1 border rounded">
+          Evolução
+        </Link>
+        <button onClick={() => onToggleStatus(s)} className="px-2 py-1 border rounded">
+          {s.status === "ativo" ? "Inativar" : "Ativar"}
+        </button>
+        <button onClick={() => onDelete(s)} className="px-2 py-1 border rounded">
+          Excluir
+        </button>
+      </div>
+    </Td>
+  </tr>
+))}
             </tbody>
           </table>
         )}
@@ -266,25 +305,19 @@ export default function AlunosPage() {
           <div>
             <label className="block text-sm mb-1">Mensalidade (R$)*</label>
             <input
-              type="number"
-              min="0"
-              step="0.01"
+              type="number" min="0" step="0.01"
               value={formCreate.monthly_value}
               onChange={(e) => setFormCreate((f) => ({ ...f, monthly_value: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
+              className="border rounded px-3 py-2 w-full" required
             />
           </div>
           <div>
             <label className="block text-sm mb-1">Vencimento (1–28)*</label>
             <input
-              type="number"
-              min="1"
-              max="28"
+              type="number" min="1" max="28"
               value={formCreate.due_day}
               onChange={(e) => setFormCreate((f) => ({ ...f, due_day: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
+              className="border rounded px-3 py-2 w-full" required
             />
           </div>
           <div className="sm:col-span-2">
@@ -297,14 +330,13 @@ export default function AlunosPage() {
             />
           </div>
 
-          {/* Pagador */}
+          {/* Pagador (cadastro) */}
           <div className="sm:col-span-2 mt-2">
             <div className="text-sm font-semibold mb-1">Pagador</div>
             <div className="flex flex-col gap-2">
               <label className="inline-flex items-center gap-2">
                 <input
-                  type="radio"
-                  name="payerMode"
+                  type="radio" name="payerMode"
                   checked={payerMode === PAYER_MODE.SELF}
                   onChange={() => setPayerMode(PAYER_MODE.SELF)}
                 />
@@ -313,8 +345,7 @@ export default function AlunosPage() {
 
               <label className="inline-flex items-center gap-2">
                 <input
-                  type="radio"
-                  name="payerMode"
+                  type="radio" name="payerMode"
                   checked={payerMode === PAYER_MODE.EXISTING}
                   onChange={() => setPayerMode(PAYER_MODE.EXISTING)}
                 />
@@ -337,8 +368,7 @@ export default function AlunosPage() {
 
               <label className="inline-flex items-center gap-2">
                 <input
-                  type="radio"
-                  name="payerMode"
+                  type="radio" name="payerMode"
                   checked={payerMode === PAYER_MODE.NEW}
                   onChange={() => setPayerMode(PAYER_MODE.NEW)}
                 />
@@ -350,12 +380,10 @@ export default function AlunosPage() {
                     placeholder="Nome do pagador*"
                     value={newPayer.name}
                     onChange={(e) => setNewPayer((n) => ({ ...n, name: e.target.value }))}
-                    className="border rounded px-3 py-2 w-full"
-                    required
+                    className="border rounded px-3 py-2 w-full" required
                   />
                   <input
-                    placeholder="E-mail (opcional)"
-                    type="email"
+                    placeholder="E-mail (opcional)" type="email"
                     value={newPayer.email}
                     onChange={(e) => setNewPayer((n) => ({ ...n, email: e.target.value }))}
                     className="border rounded px-3 py-2 w-full"
@@ -374,11 +402,7 @@ export default function AlunosPage() {
         title="Editar aluno"
         footer={
           <>
-            <button
-              onClick={closeEdit}
-              className="px-3 py-2 border rounded disabled:opacity-50"
-              disabled={savingEdit}
-            >
+            <button onClick={closeEdit} className="px-3 py-2 border rounded disabled:opacity-50" disabled={savingEdit}>
               Cancelar
             </button>
             <button
@@ -397,32 +421,25 @@ export default function AlunosPage() {
             <input
               value={formEdit.name}
               onChange={(e) => setFormEdit((f) => ({ ...f, name: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
+              className="border rounded px-3 py-2 w-full" required
             />
           </div>
           <div>
             <label className="block text-sm mb-1">Mensalidade (R$)*</label>
             <input
-              type="number"
-              min="0"
-              step="0.01"
+              type="number" min="0" step="0.01"
               value={formEdit.monthly_value}
               onChange={(e) => setFormEdit((f) => ({ ...f, monthly_value: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
+              className="border rounded px-3 py-2 w-full" required
             />
           </div>
           <div>
             <label className="block text-sm mb-1">Vencimento (1–28)*</label>
             <input
-              type="number"
-              min="1"
-              max="28"
+              type="number" min="1" max="28"
               value={formEdit.due_day}
               onChange={(e) => setFormEdit((f) => ({ ...f, due_day: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
+              className="border rounded px-3 py-2 w-full" required
             />
           </div>
           <div className="sm:col-span-2">
@@ -434,15 +451,74 @@ export default function AlunosPage() {
               className="border rounded px-3 py-2 w-full"
             />
           </div>
+
+          {/* Pagador (edição) */}
+          <div className="sm:col-span-2 mt-2">
+            <div className="text-sm font-semibold mb-1">Pagador</div>
+            <div className="flex flex-col gap-2">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio" name="payerModeEdit"
+                  checked={payerModeEdit === PAYER_MODE.SELF}
+                  onChange={() => setPayerModeEdit(PAYER_MODE.SELF)}
+                />
+                <span>Próprio aluno</span>
+              </label>
+
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio" name="payerModeEdit"
+                  checked={payerModeEdit === PAYER_MODE.EXISTING}
+                  onChange={() => setPayerModeEdit(PAYER_MODE.EXISTING)}
+                />
+                <span>Selecionar existente</span>
+              </label>
+              {payerModeEdit === PAYER_MODE.EXISTING && (
+                <select
+                  value={payerIdEdit}
+                  onChange={(e) => setPayerIdEdit(e.target.value)}
+                  className="border rounded px-3 py-2 w-full"
+                >
+                  <option value="">— escolha um pagador —</option>
+                  {payers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} {p.email ? `— ${p.email}` : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio" name="payerModeEdit"
+                  checked={payerModeEdit === PAYER_MODE.NEW}
+                  onChange={() => setPayerModeEdit(PAYER_MODE.NEW)}
+                />
+                <span>Criar novo pagador</span>
+              </label>
+              {payerModeEdit === PAYER_MODE.NEW && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input
+                    placeholder="Nome do pagador*"
+                    value={newPayerEdit.name}
+                    onChange={(e) => setNewPayerEdit((n) => ({ ...n, name: e.target.value }))}
+                    className="border rounded px-3 py-2 w-full" required
+                  />
+                  <input
+                    placeholder="E-mail (opcional)" type="email"
+                    value={newPayerEdit.email}
+                    onChange={(e) => setNewPayerEdit((n) => ({ ...n, email: e.target.value }))}
+                    className="border rounded px-3 py-2 w-full"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
         </form>
       </Modal>
     </main>
   );
 }
 
-function Th({ children }) {
-  return <th className="text-left px-3 py-2 font-medium">{children}</th>;
-}
-function Td({ children }) {
-  return <td className="px-3 py-2">{children}</td>;
-}
+function Th({ children }) { return <th className="text-left px-3 py-2 font-medium">{children}</th>; }
+function Td({ children }) { return <td className="px-3 py-2">{children}</td>; }

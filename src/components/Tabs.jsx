@@ -38,6 +38,7 @@ export default function Tabs() {
       <Tab href="/financeiro" active={isActive("/financeiro")}>
         Financeiro
       </Tab>
+        <Tab href="/turmas" active={isActive('/turmas')}>Turmas</Tab>
 
       {/* deixe os demais conforme for criando as páginas */}
       {/* <Tab href="/evolucao" active={isActive("/evolucao")}>Evolução Pedagógica</Tab>
@@ -123,3 +124,4 @@ function MenuItem({ href, children }) {
     </Link>
   );
 }
+
