@@ -9,7 +9,7 @@ function loadStore() {
       teachers: [],
       turmas: [],
       turma_members: [], // {turma_id, student_id}
-      sessions: [], // {id, turma_id, date, notes}
+      sessions: [], // {id, turma_id, date, notes, duration_hours}
       attendance: [], // {id, session_id, turma_id, student_id, present, note, snapshots...}
     };
   }
@@ -167,7 +167,6 @@ async function createPayer({ name, email = null }) {
   return py;
 }
 
-// ----------------- Teachers (mínimo) -----------------
 // ----------------- Teachers -----------------
 async function listTeachers() {
   return _teachers.map((t) => ({
@@ -266,7 +265,6 @@ async function removeStudentFromTurma(turma_id, student_id) {
 }
 
 // ----------------- Sessões -----------------
-// ----------------- Sessões -----------------
 async function listSessions(turma_id) {
   return _sessions
     .filter((s) => s.turma_id === turma_id)
@@ -281,7 +279,7 @@ async function createSession({ turma_id, date, notes = "", duration_hours = 1 })
     turma_id,
     date,
     notes: notes || "",
-    duration_hours: Math.max(0, Number(duration_hours || 0.5)), // horas
+    duration_hours: Math.max(0, Number(duration_hours || 0.5)), // default 0.5h
     created_at: new Date().toISOString(),
   };
   _sessions.push(s);
@@ -302,11 +300,12 @@ async function updateSession(id, changes) {
 
 async function deleteSession(id) {
   _sessions = _sessions.filter((x) => x.id !== id);
-  // apaga também attendance dessa sessão (se usar essa coleção)
+  // apaga também attendance dessa sessão
   _attendance = _attendance.filter((a) => a.session_id !== id);
   persist();
   return true;
 }
+
 // ----------------- Payout de Professor -----------------
 async function listTeacherSessionsByMonth(teacher_id, ym) {
   const ymKey = (ym || "").slice(0, 7);
@@ -388,7 +387,77 @@ async function listAttendanceByStudent(student_id) {
     .sort((a,b) => (b.session_date_snapshot||"").localeCompare(a.session_date_snapshot||""));
 }
 
-// ----------------- Financeiro (mínimo para sua tela atual) -----------------
+// ----------------- Attendance Reports -----------------
+function _ymKey(ym) {
+  return (ym || "").slice(0, 7);
+}
+
+async function getAttendanceReportByTurma(turma_id, ym) {
+  const key = _ymKey(ym);
+  if (!turma_id || key.length !== 7) return [];
+
+  const turma = _turmas.find(t => t.id === turma_id) || null;
+  const members = await listTurmaMembers(turma_id); // [{id,name,status}]
+  const stuById = new Map(members.map(m => [m.id, m.name]));
+
+  // filtra attendance por turma e mês
+  const rows = _attendance.filter(a =>
+    a.turma_id === turma_id &&
+    typeof a.session_date_snapshot === "string" &&
+    a.session_date_snapshot.slice(0,7) === key
+  );
+
+  // agrega por aluno
+  const agg = new Map(); // id -> { presents, absents }
+  for (const a of rows) {
+    const id = a.student_id;
+    if (!agg.has(id)) agg.set(id, { presents: 0, absents: 0 });
+    const cur = agg.get(id);
+    if (a.present) cur.presents += 1;
+    else cur.absents += 1;
+  }
+
+  // garante todos os membros com 0/0 mesmo sem registros
+  for (const m of members) {
+    if (!agg.has(m.id)) agg.set(m.id, { presents: 0, absents: 0 });
+  }
+
+  const out = [];
+  for (const [student_id, { presents, absents }] of agg.entries()) {
+    const total = presents + absents;
+    out.push({
+      turma_id,
+      turma_name: turma?.name || "(Turma)",
+      student_id,
+      student_name: stuById.get(student_id) || "(Aluno)",
+      presents,
+      absents,
+      total,
+      rate: total > 0 ? presents / total : 0,
+    });
+  }
+
+  out.sort((a,b) => a.student_name.localeCompare(b.student_name));
+  return out;
+}
+
+async function getAttendanceReportAllTurmas(ym) {
+  const key = _ymKey(ym);
+  if (key.length !== 7) return [];
+
+  const out = [];
+  for (const t of _turmas) {
+    const rows = await getAttendanceReportByTurma(t.id, key);
+    out.push(...rows);
+  }
+  out.sort((a,b) =>
+    (a.turma_name||"").localeCompare(b.turma_name||"") ||
+    a.student_name.localeCompare(b.student_name)
+  );
+  return out;
+}
+
+// ----------------- Financeiro -----------------
 const isoMonthStart = (ym) => (ym.length === 7 ? ym + "-01" : ym).slice(0, 10);
 const calcDueDate = (ym) => {
   const d = new Date(ym.length === 7 ? ym + "-01" : ym);
@@ -580,6 +649,10 @@ export const financeGateway = {
   upsertAttendance,
   listAttendanceByStudent,
 
+  // attendance reports
+  getAttendanceReportByTurma,
+  getAttendanceReportAllTurmas,
+
   // financeiro
   previewGenerateMonth,
   generateMonth,
@@ -588,7 +661,7 @@ export const financeGateway = {
   cancelPayment,
   reopenPayment,
 
-  //novas funções
+  // payout professor
   listTeacherSessionsByMonth,
   sumTeacherPayoutByMonth,
 

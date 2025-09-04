@@ -4,9 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
+import Link from "next/link";
 
 const fmtBR = (s) => (s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-");
-const fmtNum = (n) => (Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+const fmtNum = (n) =>
+  (Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+// mês atual no formato yyyy-mm para o link do relatório
+const ym = new Date().toISOString().slice(0, 7);
 
 export default function TurmaDetailPage() {
   const params = useParams();
@@ -62,7 +66,9 @@ export default function TurmaDetailPage() {
     setLoading(false);
   }
 
-  useEffect(() => { if (turmaId) loadAll(); }, [turmaId]);
+  useEffect(() => {
+    if (turmaId) loadAll();
+  }, [turmaId]);
 
   const teacherName = useMemo(() => {
     if (!turma?.teacher_id) return "—";
@@ -85,7 +91,10 @@ export default function TurmaDetailPage() {
     });
     setOpenEdit(true);
   }
-  function closeEditTurma() { if (savingEdit) return; setOpenEdit(false); }
+  function closeEditTurma() {
+    if (savingEdit) return;
+    setOpenEdit(false);
+  }
   async function onSubmitTurma(e) {
     e?.preventDefault?.();
     try {
@@ -97,8 +106,11 @@ export default function TurmaDetailPage() {
       });
       setOpenEdit(false);
       await loadAll();
-    } catch (e) { alert(e.message || String(e)); }
-    finally { setSavingEdit(false); }
+    } catch (e) {
+      alert(e.message || String(e));
+    } finally {
+      setSavingEdit(false);
+    }
   }
 
   // sessão (unificado)
@@ -106,14 +118,25 @@ export default function TurmaDetailPage() {
     if (!arr || arr.length === 0) return false;
     return arr.every((r) => !!r.present);
   }
+
+  function recomputeAllPresentFromDraft(nextDraft) {
+    setAllPresent(nextDraft.length > 0 && nextDraft.every((r) => !!r.present));
+  }
+
   function openCreateSession() {
     setEditingSessId(null);
     setFormSess({ date: "", notes: "", duration_hours: "0.5" }); // default 30 min
-    const draft = members.map((m) => ({ student_id: m.id, name: m.name, present: false, note: "" }));
+    const draft = members.map((m) => ({
+      student_id: m.id,
+      name: m.name,
+      present: false, // por padrão AUSENTE (explícito)
+      note: "",
+    }));
     setAttendanceDraft(draft);
     setAllPresent(computeAllPresent(draft));
     setOpenSess(true);
   }
+
   async function openEditSession(s) {
     setEditingSessId(s.id);
     setFormSess({
@@ -126,18 +149,26 @@ export default function TurmaDetailPage() {
     const draft = members.map((m) => ({
       student_id: m.id,
       name: m.name,
-      present: byStu.get(m.id)?.present ?? false,
+      present: byStu.get(m.id)?.present ?? false, // explicitamente ausente se não marcado
       note: byStu.get(m.id)?.note ?? "",
     }));
     setAttendanceDraft(draft);
     setAllPresent(computeAllPresent(draft));
     setOpenSess(true);
   }
-  function closeSess() { if (savingSess) return; setOpenSess(false); }
-  function toggleAllPresent(next) {
-    setAllPresent(!!next);
-    setAttendanceDraft((prev) => prev.map((r) => ({ ...r, present: !!next })));
+
+  function closeSess() {
+    if (savingSess) return;
+    setOpenSess(false);
   }
+
+  function setAllPresentValue(value) {
+    const next = !!value;
+    setAllPresent(next);
+    const draft = attendanceDraft.map((r) => ({ ...r, present: next }));
+    setAttendanceDraft(draft);
+  }
+
   async function onSubmitSess(e) {
     e?.preventDefault?.();
     try {
@@ -164,16 +195,20 @@ export default function TurmaDetailPage() {
       if (!sessionId) throw new Error("Falha ao obter o ID da sessão.");
       for (const row of attendanceDraft) {
         await financeGateway.upsertAttendance(sessionId, row.student_id, {
-          present: !!row.present,
+          present: !!row.present, // true = presente; false = ausente
           note: row.note || "",
         });
       }
 
       setOpenSess(false);
       await loadAll();
-    } catch (e) { alert(e.message || String(e)); }
-    finally { setSavingSess(false); }
+    } catch (e) {
+      alert(e.message || String(e));
+    } finally {
+      setSavingSess(false);
+    }
   }
+
   async function onDeleteSess(s) {
     if (!confirm(`Excluir sessão de ${fmtBR(s.date)}?`)) return;
     await financeGateway.deleteSession(s.id);
@@ -208,8 +243,19 @@ export default function TurmaDetailPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => router.push("/turmas")} className="border rounded px-3 py-2">Voltar</button>
-          <button onClick={openEditTurma} className="border rounded px-3 py-2">Editar turma</button>
+          <button onClick={() => router.push("/turmas")} className="border rounded px-3 py-2">
+            Voltar
+          </button>
+          <button onClick={openEditTurma} className="border rounded px-3 py-2">
+            Editar turma
+          </button>
+          {/* NOVO: botão Relatório (mês atual + turma atual) */}
+          <Link
+            href={`/relatorios/assiduidade?turma=${turma.id}&ym=${ym}`}
+            className="border rounded px-3 py-2"
+          >
+            Relatório
+          </Link>
         </div>
       </div>
 
@@ -218,11 +264,21 @@ export default function TurmaDetailPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b">
           <h2 className="font-semibold">Alunos da turma</h2>
           <div className="flex gap-2">
-            <select value={addStudentId} onChange={(e) => setAddStudentId(e.target.value)} className="border rounded px-3 py-2 min-w-[260px]">
+            <select
+              value={addStudentId}
+              onChange={(e) => setAddStudentId(e.target.value)}
+              className="border rounded px-3 py-2 min-w-[260px]"
+            >
               <option value="">— adicionar aluno (somente ativos) —</option>
-              {candidates.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {candidates.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
             </select>
-            <button onClick={onAddMember} className="border rounded px-3 py-2">Adicionar</button>
+            <button onClick={onAddMember} className="border rounded px-3 py-2">
+              Adicionar
+            </button>
           </div>
         </div>
 
@@ -244,7 +300,9 @@ export default function TurmaDetailPage() {
                   <Td>{m.status}</Td>
                   <Td className="py-2">
                     <div className="flex gap-2">
-                      <button onClick={() => onRemoveMember(m.id)} className="px-2 py-1 border rounded">Remover</button>
+                      <button onClick={() => onRemoveMember(m.id)} className="px-2 py-1 border rounded">
+                        Remover
+                      </button>
                     </div>
                   </Td>
                 </tr>
@@ -258,7 +316,9 @@ export default function TurmaDetailPage() {
       <section className="border rounded">
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="font-semibold">Aulas / Sessões</h2>
-          <button onClick={openCreateSession} className="border rounded px-3 py-2">+ Criar sessão</button>
+          <button onClick={openCreateSession} className="border rounded px-3 py-2">
+            + Criar sessão
+          </button>
         </div>
 
         {sessions.length === 0 ? (
@@ -281,8 +341,12 @@ export default function TurmaDetailPage() {
                   <Td>{s.notes || "—"}</Td>
                   <Td className="py-2">
                     <div className="flex gap-2">
-                      <button onClick={() => openEditSession(s)} className="px-2 py-1 border rounded">Abrir / Editar</button>
-                      <button onClick={() => onDeleteSess(s)} className="px-2 py-1 border rounded">Excluir</button>
+                      <button onClick={() => openEditSession(s)} className="px-2 py-1 border rounded">
+                        Abrir / Editar
+                      </button>
+                      <button onClick={() => onDeleteSess(s)} className="px-2 py-1 border rounded">
+                        Excluir
+                      </button>
                     </div>
                   </Td>
                 </tr>
@@ -299,10 +363,18 @@ export default function TurmaDetailPage() {
         title="Editar turma"
         footer={
           <>
-            <button onClick={closeEditTurma} className="px-3 py-2 border rounded disabled:opacity-50" disabled={savingEdit}>
+            <button
+              onClick={closeEditTurma}
+              className="px-3 py-2 border rounded disabled:opacity-50"
+              disabled={savingEdit}
+            >
               Cancelar
             </button>
-            <button onClick={onSubmitTurma} className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50" disabled={savingEdit}>
+            <button
+              onClick={onSubmitTurma}
+              className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
+              disabled={savingEdit}
+            >
               {savingEdit ? "Salvando…" : "Salvar"}
             </button>
           </>
@@ -311,18 +383,37 @@ export default function TurmaDetailPage() {
         <form onSubmit={onSubmitTurma} className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className="block text-sm mb-1">Nome*</label>
-            <input value={formTurma.name} onChange={(e) => setFormTurma(f => ({ ...f, name: e.target.value }))} className="border rounded px-3 py-2 w-full" required />
+            <input
+              value={formTurma.name}
+              onChange={(e) => setFormTurma((f) => ({ ...f, name: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+              required
+            />
           </div>
           <div>
             <label className="block text-sm mb-1">Professor</label>
-            <select value={formTurma.teacher_id} onChange={(e) => setFormTurma(f => ({ ...f, teacher_id: e.target.value }))} className="border rounded px-3 py-2 w-full">
+            <select
+              value={formTurma.teacher_id}
+              onChange={(e) => setFormTurma((f) => ({ ...f, teacher_id: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+            >
               <option value="">— sem professor —</option>
-              {teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              {teachers.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
             </select>
           </div>
           <div>
             <label className="block text-sm mb-1">Capacidade</label>
-            <input type="number" min="1" value={formTurma.capacity} onChange={(e) => setFormTurma(f => ({ ...f, capacity: e.target.value }))} className="border rounded px-3 py-2 w-full" />
+            <input
+              type="number"
+              min="1"
+              value={formTurma.capacity}
+              onChange={(e) => setFormTurma((f) => ({ ...f, capacity: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+            />
           </div>
         </form>
       </Modal>
@@ -334,8 +425,18 @@ export default function TurmaDetailPage() {
         title={editingSessId ? "Editar sessão" : "Criar sessão"}
         footer={
           <>
-            <button onClick={closeSess} className="px-3 py-2 border rounded disabled:opacity-50" disabled={savingSess}>Cancelar</button>
-            <button onClick={onSubmitSess} className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50" disabled={savingSess}>
+            <button
+              onClick={closeSess}
+              className="px-3 py-2 border rounded disabled:opacity-50"
+              disabled={savingSess}
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={onSubmitSess}
+              className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
+              disabled={savingSess}
+            >
               {savingSess ? "Salvando…" : "Salvar"}
             </button>
           </>
@@ -346,13 +447,19 @@ export default function TurmaDetailPage() {
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="sm:col-span-1">
               <label className="block text-sm mb-1">Data*</label>
-              <input type="date" value={formSess.date} onChange={(e) => setFormSess(f => ({ ...f, date: e.target.value }))} className="border rounded px-3 py-2 w-full" required />
+              <input
+                type="date"
+                value={formSess.date}
+                onChange={(e) => setFormSess((f) => ({ ...f, date: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+                required
+              />
             </div>
             <div className="sm:col-span-1">
               <label className="block text-sm mb-1">Duração (h)*</label>
               <select
                 value={formSess.duration_hours}
-                onChange={(e) => setFormSess(f => ({ ...f, duration_hours: e.target.value }))}
+                onChange={(e) => setFormSess((f) => ({ ...f, duration_hours: e.target.value }))}
                 className="border rounded px-3 py-2 w-full"
                 required
               >
@@ -362,29 +469,48 @@ export default function TurmaDetailPage() {
                 <option value="2">2 h</option>
               </select>
             </div>
-            <div className="sm:col-span-1 flex items-end">
-              <label className="inline-flex items-center gap-2">
-                <input type="checkbox" checked={allPresent} onChange={(e) => toggleAllPresent(e.target.checked)} />
-                <span className="text-sm">Marcar todos presentes</span>
-              </label>
+            <div className="sm:col-span-1 flex items-end gap-3">
+              <button
+                type="button"
+                onClick={() => setAllPresentValue(true)}
+                className="px-3 py-2 border rounded"
+                title="Marcar todos como presentes"
+              >
+                Todos presentes
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllPresentValue(false)}
+                className="px-3 py-2 border rounded"
+                title="Marcar todos como ausentes"
+              >
+                Todos ausentes
+              </button>
             </div>
           </div>
 
           <div>
             <label className="block text-sm mb-1">Resumo / Observação geral</label>
-            <textarea value={formSess.notes} onChange={(e) => setFormSess(f => ({ ...f, notes: e.target.value }))} className="border rounded px-3 py-2 w-full" rows={4} />
+            <textarea
+              value={formSess.notes}
+              onChange={(e) => setFormSess((f) => ({ ...f, notes: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+              rows={4}
+            />
           </div>
 
           {/* Individuais */}
           {members.length === 0 ? (
-            <div className="p-2 text-slate-600">Adicione alunos à turma para registrar presenças.</div>
+            <div className="p-2 text-slate-600">
+              Adicione alunos à turma para registrar presenças.
+            </div>
           ) : (
-            <div className="border rounded">
+            <div className="border rounded overflow-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
                     <Th>Aluno</Th>
-                    <Th>Presente?</Th>
+                    <Th>Presença</Th>
                     <Th>Observação individual</Th>
                   </tr>
                 </thead>
@@ -393,28 +519,48 @@ export default function TurmaDetailPage() {
                     <tr key={row.student_id} className="border-t">
                       <Td className="whitespace-nowrap">{row.name}</Td>
                       <Td>
-                        <input
-                          type="checkbox"
-                          checked={!!row.present}
-                          onChange={(e) =>
-                            setAttendanceDraft((prev) =>
-                              prev.map((x) =>
-                                x.student_id === row.student_id ? { ...x, present: e.target.checked } : x
-                              )
-                            )
-                          }
-                        />
+                        <div className="flex items-center gap-4">
+                          <label className="inline-flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name={`presenca_${row.student_id}`}
+                              checked={!!row.present}
+                              onChange={() => {
+                                const next = attendanceDraft.map((x) =>
+                                  x.student_id === row.student_id ? { ...x, present: true } : x
+                                );
+                                setAttendanceDraft(next);
+                                recomputeAllPresentFromDraft(next);
+                              }}
+                            />
+                            <span>Presente</span>
+                          </label>
+                          <label className="inline-flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name={`presenca_${row.student_id}`}
+                              checked={!row.present}
+                              onChange={() => {
+                                const next = attendanceDraft.map((x) =>
+                                  x.student_id === row.student_id ? { ...x, present: false } : x
+                                );
+                                setAttendanceDraft(next);
+                                recomputeAllPresentFromDraft(next);
+                              }}
+                            />
+                            <span>Ausente</span>
+                          </label>
+                        </div>
                       </Td>
                       <Td>
                         <input
                           value={row.note || ""}
-                          onChange={(e) =>
-                            setAttendanceDraft((prev) =>
-                              prev.map((x) =>
-                                x.student_id === row.student_id ? { ...x, note: e.target.value } : x
-                              )
-                            )
-                          }
+                          onChange={(e) => {
+                            const next = attendanceDraft.map((x) =>
+                              x.student_id === row.student_id ? { ...x, note: e.target.value } : x
+                            );
+                            setAttendanceDraft(next);
+                          }}
                           className="border rounded px-3 py-2 w-full"
                           placeholder="Observação pessoal (opcional)"
                         />
@@ -431,5 +577,9 @@ export default function TurmaDetailPage() {
   );
 }
 
-function Th({ children }) { return <th className="text-left px-3 py-2 font-medium">{children}</th>; }
-function Td({ children }) { return <td className="px-3 py-2">{children}</td>; }
+function Th({ children }) {
+  return <th className="text-left px-3 py-2 font-medium">{children}</th>;
+}
+function Td({ children }) {
+  return <td className="px-3 py-2">{children}</td>;
+}

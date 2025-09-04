@@ -9,7 +9,7 @@ export default function Tabs() {
 
   // rotas agrupadas dentro de "Cadastros" (hub)
   const cadastrosPaths = [
-    "/cadastros",      // hub
+    "/cadastros", // hub
     "/alunos",
     "/professores",
     "/pagadores",
@@ -38,12 +38,14 @@ export default function Tabs() {
       <Tab href="/financeiro" active={isActive("/financeiro")}>
         Financeiro
       </Tab>
-        <Tab href="/turmas" active={isActive('/turmas')}>Turmas</Tab>
 
-      {/* deixe os demais conforme for criando as páginas */}
-      {/* <Tab href="/evolucao" active={isActive("/evolucao")}>Evolução Pedagógica</Tab>
-      <Tab href="/turmas" active={isActive("/turmas")}>Turmas</Tab>
-      <Tab href="/relatorios" active={isActive("/relatorios")}>Relatórios</Tab> */}
+      <Tab href="/turmas" active={isActive("/turmas")}>
+        Turmas
+      </Tab>
+
+      <Tab href="/relatorios" active={isActive("/relatorios")}>
+        Relatórios
+      </Tab>
     </nav>
   );
 }
@@ -67,6 +69,7 @@ function Tab({ href, active, children }) {
 function CadastrosMenu({ active }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  const pathname = usePathname();
 
   // fecha ao clicar fora
   useEffect(() => {
@@ -75,6 +78,20 @@ function CadastrosMenu({ active }) {
     };
     document.addEventListener("mousedown", onClickOutside);
     return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  // fecha ao trocar de rota
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
+
+  // fecha com ESC
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, []);
 
   return (
@@ -124,4 +141,3 @@ function MenuItem({ href, children }) {
     </Link>
   );
 }
-
