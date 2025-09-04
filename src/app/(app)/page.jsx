@@ -1,131 +1,110 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { financeGateway } from "@/lib/financeGateway";
+import Modal from "@/components/Modal";
+import { sendMail } from "@/lib/sendMailClient";
 
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-const fmtBR = (s) => (s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-");
-const ymNow = () => new Date().toISOString().slice(0, 7);
 
 export default function HomePage() {
-  const [ym, setYm] = useState(ymNow());
+  const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
+  const [showValues, setShowValues] = useState(true);
+
+  // dados
+  const [kpisFin, setKpisFin] = useState({ billed: 0, paid: 0, pending: 0, overdueMoney: 0 });
+  const [kpisExp, setKpisExp] = useState({ total: 0, paid: 0, pending: 0, overdue: 0 });
+  const [counts, setCounts] = useState({ studentsActive: 0 });
+
   const [loading, setLoading] = useState(true);
 
-  // toggle "ocultar valores"
-  const [hideValues, setHideValues] = useState(false);
+  // modal e-mail
+  const [openMail, setOpenMail] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [mailForm, setMailForm] = useState({ to: "", subject: "", message: "" });
 
-  // dados básicos
-  const [students, setStudents] = useState([]);
-  const [paymentsRows, setPaymentsRows] = useState([]);
-  const [paymentsKpis, setPaymentsKpis] = useState({
-    total_billed: 0,
-    total_paid: 0,
-    total_pending: 0,
-    total_overdue: 0,
-  });
+  function maskMoney(n) { return showValues ? fmtBRL(n) : "•••"; }
+  function maskCount(n) { return showValues ? String(n) : "••"; }
 
-  // gastos
-  const [expenseRows, setExpenseRows] = useState([]);
-  const [expenseKpis, setExpenseKpis] = useState({
-    total: 0,
-    paid: 0,
-    pending: 0,
-    overdue: 0,
-  });
+  async function load() {
+    setLoading(true);
 
-  // próximos vencimentos (7 dias)
-  const [upcoming, setUpcoming] = useState([]);
+    const [payments, expenses, students] = await Promise.all([
+      financeGateway.listPayments({ ym }),                   // tem rows + kpis (billed/paid/pending/overdue por nosso cálculo)
+      financeGateway.listExpenseEntries({ ym }),             // tem rows + kpis.total/paid/pending/overdue
+      financeGateway.listStudents(),
+    ]);
 
-  // aniversariantes do mês
-  const [birthdays, setBirthdays] = useState([]);
+    // financeiros (receitas)
+    const finKpis = {
+      billed: Number(payments?.kpis?.total_billed || 0),
+      paid: Number(payments?.kpis?.total_paid || 0),
+      pending: Number(payments?.kpis?.total_pending || 0),
+      overdueMoney: Number(
+        (payments?.rows || [])
+          .filter(r => r.status === "pending" && (r.days_overdue || 0) > 0)
+          .reduce((a, b) => a + Number(b.amount || 0), 0)
+      ),
+    };
 
-  useEffect(() => {
-    // carrega preferência do toggle
+    // despesas (gastos)
+    const expKpis = {
+      total: Number(expenses?.kpis?.total || 0),
+      paid: Number(expenses?.kpis?.paid || 0),
+      pending: Number(expenses?.kpis?.pending || 0),
+      overdue: Number(expenses?.kpis?.overdue || 0),
+    };
+
+    // contagens
+    const studentsActive = (students || []).filter(s => s.status === "ativo").length;
+
+    setKpisFin(finKpis);
+    setKpisExp(expKpis);
+    setCounts({ studentsActive });
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, [ym]);
+
+  // ---- envio de email (geral) ----
+  async function onSendMail(e) {
+    e?.preventDefault?.();
     try {
-      const v = localStorage.getItem("__dash_hide_values__");
-      setHideValues(v === "1");
-    } catch {}
-  }, []);
+      setSending(true);
+      const to = mailForm.to.trim();        // aceita "a@b, c@d"
+      const subject = mailForm.subject.trim();
+      const message = mailForm.message.trim();
 
-  useEffect(() => {
-    async function loadAll() {
-      setLoading(true);
+      if (!to) throw new Error("Informe o(s) destinatário(s).");
+      if (!subject) throw new Error("Informe o assunto.");
+      if (!message) throw new Error("Escreva a mensagem.");
 
-      // alunos
-      const studs = await financeGateway.listStudents();
-      setStudents(studs);
-
-      // financeiro (mês)
-      const { rows, kpis } = await financeGateway.listPayments({
-        ym,
-        status: "all",
+      await sendMail({
+        to,
+        subject,
+        // HTML simples; se quiser, acrescente cabeçalho/rodapé padrão
+        html: `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;line-height:1.5;">
+                 ${message.replace(/\n/g, "<br/>")}
+               </div>`,
       });
-      setPaymentsRows(rows);
-      setPaymentsKpis(kpis);
 
-      // gastos (mês) — usa filtros padrão (all)
-      if (financeGateway.listExpenseEntries) {
-        const exp = await financeGateway.listExpenseEntries({
-          ym,
-          status: null,
-          cost_center: null,
-        });
-        setExpenseRows(exp.rows || []);
-        setExpenseKpis(exp.kpis || { total: 0, paid: 0, pending: 0, overdue: 0 });
-      } else {
-        setExpenseRows([]);
-        setExpenseKpis({ total: 0, paid: 0, pending: 0, overdue: 0 });
-      }
-
-      // próximos vencimentos (7 dias) — a partir das rows do mês
-      const today = new Date().toISOString().slice(0, 10);
-      const plus7 = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
-      const coming = rows
-        .filter((r) => r.status === "pending" && r.due_date >= today && r.due_date <= plus7)
-        .sort((a, b) => (a.due_date || "").localeCompare(b.due_date || ""))
-        .slice(0, 5);
-      setUpcoming(coming);
-
-      // aniversariantes do mês
-      const mm = ym.slice(5, 7);
-      const bdays = studs
-        .filter((s) => s.birth_date && s.birth_date.slice(5, 7) === mm)
-        .map((s) => ({
-          id: s.id,
-          name: s.name,
-          day: s.birth_date.slice(8, 10),
-          birth_date: s.birth_date,
-        }))
-        .sort((a, b) => a.day.localeCompare(b.day));
-      setBirthdays(bdays);
-
-      setLoading(false);
+      alert("E-mail enviado ✅");
+      setOpenMail(false);
+      setMailForm({ to: "", subject: "", message: "" });
+    } catch (err) {
+      alert(err.message || String(err));
+    } finally {
+      setSending(false);
     }
-    loadAll();
-  }, [ym]);
-
-  const activeCount = useMemo(() => students.filter((s) => s.status === "ativo").length, [students]);
-
-  // helpers "ocultar"
-  const maskMoney = (n) => (hideValues ? "••••" : fmtBRL(n));
-  const maskInt = (n) => (hideValues ? "••" : String(n));
-
-  const toggleHide = () => {
-    const nv = !hideValues;
-    setHideValues(nv);
-    try {
-      localStorage.setItem("__dash_hide_values__", nv ? "1" : "0");
-    } catch {}
-  };
+  }
 
   return (
-    <main className="p-6 space-y-8">
-      {/* Título + controles */}
+    <main className="p-6 space-y-6">
+      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold">Bem-vindo 👋</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold">Início</h1>
           <label className="text-sm text-slate-600">Mês:</label>
           <input
             type="month"
@@ -133,95 +112,113 @@ export default function HomePage() {
             onChange={(e) => setYm(e.target.value.slice(0, 7))}
             className="border rounded px-2 py-1"
           />
+        </div>
+
+        <div className="flex items-center gap-2">
           <button
-            onClick={toggleHide}
+            onClick={() => setShowValues((v) => !v)}
             className="border rounded px-3 py-2"
-            title="Ocultar/mostrar valores e contagens"
           >
-            {hideValues ? "Mostrar valores" : "Ocultar valores"}
+            {showValues ? "Ocultar valores" : "Mostrar valores"}
+          </button>
+
+          <button
+            onClick={() => setOpenMail(true)}
+            className="border rounded px-3 py-2"
+          >
+            Enviar e-mail
           </button>
         </div>
       </div>
 
-      <p className="text-slate-600">
-        Resumo do mês atual. Use as abas acima para detalhes.
-      </p>
+      {/* KPIs */}
+      {loading ? (
+        <div className="p-4">Carregando…</div>
+      ) : (
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Kpi title="Receita prevista (mês)" value={maskMoney(kpisFin.billed)} />
+          <Kpi title="Recebido (mês)" value={maskMoney(kpisFin.paid)} />
+          <Kpi title="Em atraso (mensalidades)" value={maskMoney(kpisFin.overdueMoney)} />
+          <Kpi title="Gastos (mês)" value={maskMoney(kpisExp.total)} />
+        </section>
+      )}
 
-      {/* Linha 1 — KPIs principais + Gastos + Atrasos */}
-      <section className="grid gap-4 md:grid-cols-6">
-        <KpiCard title="Alunos ativos" value={maskInt(activeCount)} />
-        <KpiCard title="Receita prevista" value={maskMoney(paymentsKpis.total_billed)} />
-        <KpiCard title="Recebido" value={maskMoney(paymentsKpis.total_paid)} />
-        <KpiCard title="Pendentes" value={maskMoney(paymentsKpis.total_pending)} />
-        <KpiCard title="Gastos do mês" value={maskMoney(expenseKpis.total)} />
-        <KpiCard title="Mensalidades atrasadas" value={maskMoney(paymentsKpis.total_overdue)} />
-      </section>
+      {/* Contagens/chaves rápidas */}
+      {!loading && (
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Kpi title="Alunos ativos" value={maskCount(counts.studentsActive)} />
+          <Kpi title="Pendências (receita)" value={maskMoney(kpisFin.pending)} />
+          <Kpi title="Gastos pendentes" value={maskMoney(kpisExp.pending)} />
+          <Kpi title="Gastos em atraso" value={maskMoney(kpisExp.overdue)} />
+        </section>
+      )}
 
-      {/* Linha 2 — Aniversariantes e Próximos vencimentos */}
-      <section className="grid gap-4 md:grid-cols-2">
-        <div className="border rounded overflow-hidden">
-          <div className="p-3 border-b font-semibold">Aniversariantes (mês)</div>
-          {loading ? (
-            <div className="p-4">Carregando…</div>
-          ) : birthdays.length === 0 ? (
-            <div className="p-4 text-slate-600">Nenhum aniversariante este mês.</div>
-          ) : (
-            <ul className="divide-y">
-              {birthdays.map((b) => (
-                <li key={b.id} className="p-3 flex items-center justify-between">
-                  <span>{b.name}</span>
-                  <span className="text-slate-600">{b.day}/{ym.slice(5,7)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className="border rounded overflow-hidden">
-          <div className="p-3 border-b font-semibold flex items-center justify-between">
-            <span>Próximos vencimentos (7 dias)</span>
-            <Link href="/financeiro" className="text-sm underline">
-              ver todos
-            </Link>
+      {/* Modal de E-mail Geral */}
+      <Modal
+        open={openMail}
+        onClose={() => setOpenMail(false)}
+        title="Enviar e-mail"
+        footer={
+          <>
+            <button
+              onClick={() => setOpenMail(false)}
+              className="px-3 py-2 border rounded"
+              disabled={sending}
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={onSendMail}
+              className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
+              disabled={sending}
+            >
+              {sending ? "Enviando…" : "Enviar"}
+            </button>
+          </>
+        }
+      >
+        <form onSubmit={onSendMail} className="grid gap-3">
+          <div>
+            <label className="block text-sm mb-1">Para* (separe por vírgula)</label>
+            <input
+              value={mailForm.to}
+              onChange={(e) => setMailForm((f) => ({ ...f, to: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+              placeholder="aluno@ex.com, responsavel@ex.com"
+              required
+            />
           </div>
-          {loading ? (
-            <div className="p-4">Carregando…</div>
-          ) : upcoming.length === 0 ? (
-            <div className="p-4 text-slate-600">Nenhum vencimento nos próximos 7 dias.</div>
-          ) : (
-            <ul className="divide-y">
-              {upcoming.map((r) => (
-                <li key={r.payment_id} className="p-3 flex items-center justify-between">
-                  <div className="truncate">
-                    <div className="font-medium truncate">{r.student_name}</div>
-                    <div className="text-xs text-slate-600 truncate">{r.payer_name}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm">{fmtBR(r.due_date)}</div>
-                    <div className="text-xs text-slate-600">{maskMoney(r.amount)}</div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
-
-      {/* Observação final */}
-      <div className="text-xs text-slate-500">
-        * Valores e contagens podem ser ocultados pelo botão “Ocultar valores”.
-      </div>
+          <div>
+            <label className="block text-sm mb-1">Assunto*</label>
+            <input
+              value={mailForm.subject}
+              onChange={(e) => setMailForm((f) => ({ ...f, subject: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Mensagem*</label>
+            <textarea
+              value={mailForm.message}
+              onChange={(e) => setMailForm((f) => ({ ...f, message: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+              rows={8}
+              placeholder="Escreva sua mensagem…"
+              required
+            />
+          </div>
+        </form>
+      </Modal>
     </main>
   );
 }
 
-/* ----------------------- UI helpers ----------------------- */
-
-function KpiCard({ title, value, className = "" }) {
+function Kpi({ title, value }) {
   return (
-    <div className={`border rounded p-3 ${className}`}>
+    <div className="border rounded p-3">
       <div className="text-xs text-slate-500">{title}</div>
-      <div className="text-lg font-semibold">{value}</div>
+      <div className="text-xl font-semibold">{value}</div>
     </div>
   );
 }
