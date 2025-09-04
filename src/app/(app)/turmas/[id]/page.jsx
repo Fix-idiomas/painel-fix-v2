@@ -175,10 +175,13 @@ export default function TurmaDetailPage() {
       setSavingSess(true);
       if (!formSess.date) throw new Error("Data é obrigatória.");
 
+      const enrolledNow = members.filter(m => m.status === "ativo").length;
+      
       const payload = {
         date: formSess.date,
         notes: formSess.notes,
         duration_hours: Number(formSess.duration_hours || 0.5),
+        headcount_snapshot: enrolledNow
       };
 
       let sessionId = editingSessId;

@@ -1,122 +1,140 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
-import Link from "next/link";
 
 const fmtBRL = (n) =>
-  (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-
-export default function ProfessoresPage() {
-  // filtro de mês
-  const [ym, setYm] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  (Number(n) || 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
   });
 
-  const [rows, setRows] = useState([]);
+const fmtDateBR = (s) =>
+  s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-";
+
+const monthNow = () => new Date().toISOString().slice(0, 7); // "YYYY-MM"
+
+export default function ProfessoresPage() {
+  const [teachers, setTeachers] = useState([]);
+  const [turmas, setTurmas] = useState([]);
+  const [students, setStudents] = useState([]);
+  const [members, setMembers] = useState([]); // {turma_id, student_id}
   const [loading, setLoading] = useState(true);
 
-  // Modal criar/editar professor
+  // competência (mês) para cálculo do pagamento
+  const [ym, setYm] = useState(monthNow());
+  const [payouts, setPayouts] = useState({}); // { [teacher_id]: {hours, sessions, amount, hourly_rate, pay_day} }
+
+  // ---- Modal: criar/editar professor (igual à versão anterior)
   const [openEdit, setOpenEdit] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [editingId, setEditingId] = useState(null);
+  const [editId, setEditId] = useState(null);
   const [form, setForm] = useState({
     name: "",
     email: "",
     phone: "",
-    status: "ativo",       // "ativo" | "inativo"
+    status: "ativo",
     hourly_rate: "0",
-    pay_day: "5",          // 1..28
+    pay_day: "5",
+    rate_mode: "flat",
+    rate_rules: [],
   });
 
-  // Carrega e enriquece
+  // ---- Modal: Detalhes do mês (NOVO)
+  const [openDetails, setOpenDetails] = useState(false);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsTeacher, setDetailsTeacher] = useState(null);
+  const [detailsSessions, setDetailsSessions] = useState([]); // [{id, turma_id, date, duration_hours, notes}]
+  // map para achar nome da turma por id
+  const turmaNameOf = useMemo(() => {
+    const map = new Map();
+    turmas.forEach((t) => map.set(t.id, t.name));
+    return map;
+  }, [turmas]);
+
   async function load() {
     setLoading(true);
 
-    const toArray = (x) =>
-      Array.isArray(x) ? x : Array.isArray(x?.data) ? x.data : Array.isArray(x?.rows) ? x.rows : [];
-
-    const [teachersRaw, turmasRaw] = await Promise.all([
-      financeGateway.listTeachers?.() ?? [],
-      financeGateway.listTurmas?.() ?? [],
+    const [ths, tms, sts] = await Promise.all([
+      financeGateway.listTeachers(),
+      financeGateway.listTurmas(),
+      financeGateway.listStudents(),
     ]);
 
-    const teachers = toArray(teachersRaw);
-    const turmas = toArray(turmasRaw);
-
-    // agrupa turmas por professor
-    const turmasByTeacher = new Map();
-    for (const t of turmas) {
-      const tid = t.teacher_id ?? null;
-      if (!tid) continue;
-      if (!turmasByTeacher.has(tid)) turmasByTeacher.set(tid, []);
-      turmasByTeacher.get(tid).push(t);
+    // carrega membros de todas as turmas (para contagem de alunos por prof.)
+    let allMems = [];
+    for (const t of tms) {
+      const ms = await financeGateway.listTurmaMembers(t.id);
+      allMems = allMems.concat(ms.map((m) => ({ turma_id: t.id, student_id: m.id })));
     }
 
-    const enriched = [];
-    for (const prof of teachers) {
-      // payout mensal (horas x R$/h)
-      const payout =
-        (await financeGateway.sumTeacherPayoutByMonth?.(prof.id, ym)) ?? {
-          hours: 0,
-          sessions: 0,
-          amount: 0,
-          hourly_rate: Number(prof.hourly_rate || 0),
-          pay_day: Number(prof.pay_day || 5),
-        };
-
-      // contagem de alunos (ativos/inativos) nas turmas dele (sem duplicar)
-      let activeCount = 0,
-        inactiveCount = 0;
-      const myTurmas = turmasByTeacher.get(prof.id) || [];
-      const seen = new Set();
-      for (const t of myTurmas) {
-        try {
-          const members = await financeGateway.listTurmaMembers?.(t.id);
-          const arr = toArray(members);
-          for (const m of arr) {
-            if (!m?.id || seen.has(m.id)) continue;
-            seen.add(m.id);
-            if (m.status === "inativo") inactiveCount++;
-            else activeCount++;
-          }
-        } catch {}
-      }
-
-      enriched.push({
-        id: prof.id,
-        name: prof.name ?? "(sem nome)",
-        email: prof.email ?? "",
-        phone: prof.phone ?? "",
-        status: prof.status ?? "",
-        turmas_count: myTurmas.length,
-
-        // alunos
-        students_active_count: activeCount,
-        students_inactive_count: inactiveCount,
-
-        // pagamento mês
-        hourly_rate: Number(payout.hourly_rate || prof.hourly_rate || 0),
-        pay_day: Number(payout.pay_day || prof.pay_day || 5),
-        sessions_count: Number(payout.sessions || 0),
-        hours_total: Number(payout.hours || 0),
-        amount_total: Number(payout.amount || 0),
-      });
-    }
-
-    setRows(enriched);
+    setTeachers(ths);
+    setTurmas(tms);
+    setStudents(sts);
+    setMembers(allMems);
     setLoading(false);
   }
 
   useEffect(() => {
     load();
-  }, [ym]);
+  }, []);
 
-  // ---------- Modal: criar/editar ----------
+  // calcula os pagamentos (mês selecionado) para cada professor
+  useEffect(() => {
+    async function computePayouts() {
+      const out = {};
+      for (const t of teachers) {
+        const p = await financeGateway.sumTeacherPayoutByMonth(t.id, ym);
+        out[t.id] = p; // {hours, sessions, amount, hourly_rate, pay_day}
+      }
+      setPayouts(out);
+    }
+    if (teachers.length) computePayouts();
+  }, [teachers, ym]);
+
+  // linhas agregadas (contagens + mensalidades + payout)
+  const rows = useMemo(() => {
+    return teachers.map((th) => {
+      const myTurmas = turmas.filter((t) => t.teacher_id === th.id).map((t) => t.id);
+      const myMembers = members.filter((m) => myTurmas.includes(m.turma_id));
+      const myStudents = myMembers
+        .map((m) => students.find((s) => s.id === m.student_id))
+        .filter(Boolean);
+
+      const activeCount = myStudents.filter((s) => s.status === "ativo").length;
+      const inactiveCount = myStudents.filter((s) => s.status !== "ativo").length;
+      const sumMonthlyActive = myStudents
+        .filter((s) => s.status === "ativo")
+        .reduce((acc, s) => acc + Number(s.monthly_value || 0), 0);
+      const sumMonthlyAll = myStudents.reduce(
+        (acc, s) => acc + Number(s.monthly_value || 0),
+        0
+      );
+
+      const pay = payouts[th.id] || {
+        hours: 0,
+        sessions: 0,
+        amount: 0,
+        hourly_rate: 0,
+        pay_day: 5,
+      };
+
+      return {
+        teacher: th,
+        turmaCount: myTurmas.length,
+        activeCount,
+        inactiveCount,
+        sumMonthlyActive,
+        sumMonthlyAll,
+        payout: pay,
+      };
+    });
+  }, [teachers, turmas, members, students, payouts]);
+
+  // ---------------- Modal Editar/Criar professor ----------------
   function openCreate() {
-    setEditingId(null);
+    setEditId(null);
     setForm({
       name: "",
       email: "",
@@ -124,25 +142,57 @@ export default function ProfessoresPage() {
       status: "ativo",
       hourly_rate: "0",
       pay_day: "5",
+      rate_mode: "flat",
+      rate_rules: [],
     });
     setOpenEdit(true);
   }
-  function openEditModal(row) {
-    setEditingId(row.id);
+
+  function openEditModal(t) {
+    setEditId(t.id);
     setForm({
-      name: row.name || "",
-      email: row.email || "",
-      phone: row.phone || "",
-      status: row.status || "ativo",
-      hourly_rate: String(row.hourly_rate ?? "0"),
-      pay_day: String(row.pay_day ?? "5"),
+      name: t.name || "",
+      email: t.email || "",
+      phone: t.phone || "",
+      status: t.status || "ativo",
+      hourly_rate: String(t.hourly_rate ?? "0"),
+      pay_day: String(t.pay_day ?? "5"),
+      rate_mode: t.rate_mode || "flat",
+      rate_rules: Array.isArray(t.rate_rules)
+        ? t.rate_rules.map((r) => ({
+            min: String(r.min ?? ""),
+            max: String(r.max ?? ""),
+            rate: String(r.rate ?? ""),
+          }))
+        : [],
     });
     setOpenEdit(true);
   }
+
   function closeEdit() {
     if (saving) return;
     setOpenEdit(false);
-    setEditingId(null);
+  }
+
+  function addRule() {
+    setForm((f) => ({
+      ...f,
+      rate_rules: [...(f.rate_rules || []), { min: "", max: "", rate: "" }],
+    }));
+  }
+  function removeRule(idx) {
+    setForm((f) => ({
+      ...f,
+      rate_rules: f.rate_rules.filter((_, i) => i !== idx),
+    }));
+  }
+  function updateRule(idx, key, val) {
+    setForm((f) => ({
+      ...f,
+      rate_rules: f.rate_rules.map((r, i) =>
+        i === idx ? { ...r, [key]: val } : r
+      ),
+    }));
   }
 
   async function onSubmit(e) {
@@ -153,135 +203,157 @@ export default function ProfessoresPage() {
         name: form.name.trim(),
         email: form.email.trim() || null,
         phone: form.phone.trim() || null,
-        status: form.status || "ativo",
-        hourly_rate: Number(form.hourly_rate || 0),
+        status: form.status,
         pay_day: Math.min(Math.max(Number(form.pay_day || 5), 1), 28),
       };
-      if (!payload.name) throw new Error("Nome é obrigatório.");
-
-      if (editingId) {
-        await financeGateway.updateTeacher(editingId, payload);
+      if (form.rate_mode === "by_size") {
+        payload.rate_mode = "by_size";
+        payload.rate_rules = (form.rate_rules || [])
+          .map((r) => ({
+            min: Number(r.min || 0),
+            max: Number(r.max || 0),
+            rate: Number(r.rate || 0),
+          }))
+          .filter((r) => r.max >= r.min);
+        payload.hourly_rate = Number(form.hourly_rate || 0); // fallback
       } else {
-        await financeGateway.createTeacher(payload);
+        payload.rate_mode = "flat";
+        payload.hourly_rate = Number(form.hourly_rate || 0);
+        payload.rate_rules = [];
       }
+
+      if (editId) await financeGateway.updateTeacher(editId, payload);
+      else await financeGateway.createTeacher(payload);
+
       setOpenEdit(false);
-      setEditingId(null);
       await load();
-    } catch (err) {
-      alert(err.message || String(err));
+    } catch (e) {
+      alert(e.message || String(e));
     } finally {
       setSaving(false);
     }
   }
 
-  async function onDelete(row) {
-    if (!financeGateway.deleteTeacher) {
-      alert("Excluir professor não está disponível neste ambiente.");
-      return;
-    }
-    if (!confirm(`Excluir professor "${row.name}"?`)) return;
+  // ---------------- Modal DETALHES do mês ----------------
+  async function openDetailsForTeacher(teacher) {
     try {
-      await financeGateway.deleteTeacher(row.id);
-      await load();
+      setDetailsLoading(true);
+      setDetailsTeacher(teacher);
+      setOpenDetails(true);
+      const list = await financeGateway.listTeacherSessionsByMonth(teacher.id, ym);
+      setDetailsSessions(list || []);
     } catch (e) {
       alert(e.message || String(e));
+    } finally {
+      setDetailsLoading(false);
     }
+  }
+
+  function closeDetails() {
+    setOpenDetails(false);
+    setDetailsTeacher(null);
+    setDetailsSessions([]);
   }
 
   return (
     <main className="p-6 space-y-6">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Professores</h1>
-        <div className="flex items-end gap-4">
-          <div>
-            <label className="block text-sm mb-1">Mês de referência</label>
-            <input
-              type="month"
-              value={ym}
-              onChange={(e) => setYm(e.target.value)}
-              className="border rounded px-3 py-2"
-            />
-          </div>
-          <button
-            onClick={openCreate}
-            className="border rounded px-3 py-2 self-start mt-6"
-          >
-            + Cadastrar professor
-          </button>
+
+        {/* seletor de mês para o cálculo do “A pagar” */}
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-slate-600">Competência:</label>
+          <input
+            type="month"
+            value={ym}
+            onChange={(e) => setYm(e.target.value.slice(0, 7))}
+            className="border rounded px-2 py-1"
+          />
         </div>
+
+        <button onClick={openCreate} className="border rounded px-3 py-2">
+          + Cadastrar professor
+        </button>
       </div>
 
       <section className="border rounded overflow-auto">
         {loading ? (
           <div className="p-4">Carregando…</div>
-        ) : rows.length === 0 ? (
+        ) : teachers.length === 0 ? (
           <div className="p-4">Nenhum professor cadastrado.</div>
         ) : (
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <Th>Professor</Th>
+                <Th>Nome</Th>
+                <Th>Status</Th>
                 <Th>Turmas</Th>
                 <Th>Alunos ativos</Th>
                 <Th>Alunos inativos</Th>
-                <Th>R$/hora</Th>
-                <Th>Venc. (dia)</Th>
-                <Th>Sessões (mês)</Th>
-                <Th>Horas (mês)</Th>
+                <Th>Mensalidades (ativos)</Th>
+                <Th>Mensalidades (todos)</Th>
+                <Th>Tarifa</Th>
                 <Th>A pagar (mês)</Th>
                 <Th>Ações</Th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className="border-t">
-                  <Td>
-                    <div className="font-medium">{r.name}</div>
-                    <div className="text-xs text-slate-500">
-                      {r.email || r.phone
-                        ? `${r.email || ""}${r.email && r.phone ? " • " : ""}${r.phone || ""}`
-                        : "—"}
-                    </div>
-                    <div className="text-xs text-slate-500 mt-0.5">
-                      Status: <b>{r.status || "—"}</b>
-                    </div>
-                  </Td>
-                  <Td>{r.turmas_count}</Td>
-                  <Td>{r.students_active_count}</Td>
-                  <Td>{r.students_inactive_count}</Td>
-                  <Td>{fmtBRL(r.hourly_rate)}</Td>
-                  <Td>{r.pay_day}</Td>
-                  <Td>{r.sessions_count}</Td>
-                  <Td>{r.hours_total.toFixed(2)}</Td>
-                  <Td className="font-semibold">{fmtBRL(r.amount_total)}</Td>
-                  <Td className="py-2">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => openEditModal(r)}
-                        className="px-2 py-1 border rounded"
-                      >
-                        Editar
-                      </button>
-                      <button
-                        onClick={() => onDelete(r)}
-                        className="px-2 py-1 border rounded"
-                      >
-                        Excluir
-                      </button>
-                    </div>
-                  </Td>
-                </tr>
-              ))}
+              {rows.map(
+                ({
+                  teacher,
+                  turmaCount,
+                  activeCount,
+                  inactiveCount,
+                  sumMonthlyActive,
+                  sumMonthlyAll,
+                  payout,
+                }) => (
+                  <tr key={teacher.id} className="border-t">
+                    <Td>{teacher.name}</Td>
+                    <Td>{teacher.status}</Td>
+                    <Td>{turmaCount}</Td>
+                    <Td>{activeCount}</Td>
+                    <Td>{inactiveCount}</Td>
+                    <Td>{fmtBRL(sumMonthlyActive)}</Td>
+                    <Td>{fmtBRL(sumMonthlyAll)}</Td>
+                    <Td>
+                      {teacher.rate_mode === "by_size"
+                        ? "Por tamanho da turma"
+                        : `Único: ${fmtBRL(teacher.hourly_rate)}/h`}
+                    </Td>
+                    <Td title={`Horas: ${payout.hours} • Sessões: ${payout.sessions}`}>
+                      {fmtBRL(payout.amount)}
+                    </Td>
+                    <Td>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => openEditModal(teacher)}
+                          className="px-2 py-1 border rounded"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          onClick={() => openDetailsForTeacher(teacher)}
+                          className="px-2 py-1 border rounded"
+                          title="Ver sessões e horas do mês"
+                        >
+                          Ver detalhes do mês
+                        </button>
+                      </div>
+                    </Td>
+                  </tr>
+                )
+              )}
             </tbody>
           </table>
         )}
       </section>
 
-      {/* MODAL: Criar/Editar Professor */}
+      {/* Modal criar/editar professor */}
       <Modal
         open={openEdit}
         onClose={closeEdit}
-        title={editingId ? "Editar professor" : "Cadastrar professor"}
+        title={editId ? "Editar professor" : "Cadastrar professor"}
         footer={
           <>
             <button
@@ -311,7 +383,6 @@ export default function ProfessoresPage() {
               required
             />
           </div>
-
           <div>
             <label className="block text-sm mb-1">E-mail</label>
             <input
@@ -329,7 +400,6 @@ export default function ProfessoresPage() {
               className="border rounded px-3 py-2 w-full"
             />
           </div>
-
           <div>
             <label className="block text-sm mb-1">Status</label>
             <select
@@ -341,31 +411,207 @@ export default function ProfessoresPage() {
               <option value="inativo">Inativo</option>
             </select>
           </div>
-
           <div>
-            <label className="block text-sm mb-1">Valor hora (R$)</label>
+            <label className="block text-sm mb-1">Dia de pagamento</label>
             <input
               type="number"
-              min="0"
-              step="0.01"
-              value={form.hourly_rate}
-              onChange={(e) => setForm((f) => ({ ...f, hourly_rate: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1">Dia de vencimento (1–28)</label>
-            <input
-              type="number"
-              min="1"
-              max="28"
+              min={1}
+              max={28}
               value={form.pay_day}
               onChange={(e) => setForm((f) => ({ ...f, pay_day: e.target.value }))}
               className="border rounded px-3 py-2 w-full"
             />
           </div>
+
+          <div className="sm:col-span-2">
+            <label className="block text-sm mb-1">Modo de tarifa</label>
+            <div className="flex gap-6">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="rate_mode"
+                  checked={form.rate_mode === "flat"}
+                  onChange={() => setForm((f) => ({ ...f, rate_mode: "flat" }))}
+                />
+                <span>Único (valor/hora fixo)</span>
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="rate_mode"
+                  checked={form.rate_mode === "by_size"}
+                  onChange={() => setForm((f) => ({ ...f, rate_mode: "by_size" }))}
+                />
+                <span>Por tamanho da turma</span>
+              </label>
+            </div>
+          </div>
+
+          {form.rate_mode === "flat" ? (
+            <div className="sm:col-span-2">
+              <label className="block text-sm mb-1">Valor hora (R$)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.hourly_rate}
+                onChange={(e) => setForm((f) => ({ ...f, hourly_rate: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+              />
+            </div>
+          ) : (
+            <div className="sm:col-span-2">
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-semibold">
+                  Regras por tamanho de turma
+                </label>
+                <button
+                  type="button"
+                  onClick={addRule}
+                  className="px-2 py-1 border rounded"
+                >
+                  + Adicionar regra
+                </button>
+              </div>
+              <div className="border rounded overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <Th>Mín</Th>
+                      <Th>Máx</Th>
+                      <Th>R$/hora</Th>
+                      <Th>Ações</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(form.rate_rules || []).length === 0 ? (
+                      <tr>
+                        <Td colSpan={4} className="p-3">
+                          Nenhuma regra. Adicione pelo menos uma.
+                        </Td>
+                      </tr>
+                    ) : (
+                      form.rate_rules.map((r, idx) => (
+                        <tr key={idx} className="border-t">
+                          <Td>
+                            <input
+                              type="number"
+                              min="0"
+                              value={r.min}
+                              onChange={(e) => updateRule(idx, "min", e.target.value)}
+                              className="border rounded px-2 py-1 w-24"
+                            />
+                          </Td>
+                          <Td>
+                            <input
+                              type="number"
+                              min="0"
+                              value={r.max}
+                              onChange={(e) => updateRule(idx, "max", e.target.value)}
+                              className="border rounded px-2 py-1 w-24"
+                            />
+                          </Td>
+                          <Td>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={r.rate}
+                              onChange={(e) => updateRule(idx, "rate", e.target.value)}
+                              className="border rounded px-2 py-1 w-28"
+                            />
+                          </Td>
+                          <Td>
+                            <button
+                              type="button"
+                              onClick={() => removeRule(idx)}
+                              className="px-2 py-1 border rounded"
+                            >
+                              Remover
+                            </button>
+                          </Td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                Ex.: (1–1 → 50), (2–2 → 55), (3–99 → 60). Sessões já registradas
+                não mudam se você alterar as regras (usamos snapshot).
+              </p>
+            </div>
+          )}
         </form>
+      </Modal>
+
+      {/* Modal DETALHES do mês (NOVO) */}
+      <Modal
+        open={openDetails}
+        onClose={closeDetails}
+        title={
+          detailsTeacher
+            ? `Detalhes de ${detailsTeacher.name} — ${ym}`
+            : "Detalhes do mês"
+        }
+        footer={
+          <button onClick={closeDetails} className="px-3 py-2 border rounded">
+            Fechar
+          </button>
+        }
+      >
+        {detailsLoading ? (
+          <div className="p-4">Carregando…</div>
+        ) : !detailsTeacher ? (
+          <div className="p-4">Selecione um professor.</div>
+        ) : (
+          <div className="space-y-3">
+            <div className="text-sm">
+              <b>Resumo do mês:</b>{" "}
+              {(() => {
+                const p = payouts[detailsTeacher.id] || {
+                  hours: 0,
+                  sessions: 0,
+                  amount: 0,
+                };
+                return `Sessões: ${p.sessions} • Horas: ${p.hours} • A pagar: ${fmtBRL(
+                  p.amount
+                )}`;
+              })()}
+            </div>
+
+            <div className="border rounded overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <Th>Data</Th>
+                    <Th>Turma</Th>
+                    <Th>Duração (h)</Th>
+                    <Th>Observação</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detailsSessions.length === 0 ? (
+                    <tr>
+                      <Td colSpan={4} className="p-3">
+                        Nenhuma sessão encontrada para este mês.
+                      </Td>
+                    </tr>
+                  ) : (
+                    detailsSessions.map((s) => (
+                      <tr key={s.id} className="border-t">
+                        <Td>{fmtDateBR(s.date)}</Td>
+                        <Td>{turmaNameOf.get(s.turma_id) || s.turma_id}</Td>
+                        <Td>{Number(s.duration_hours || 0)}</Td>
+                        <Td>{s.notes || "—"}</Td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </Modal>
     </main>
   );
@@ -374,6 +620,10 @@ export default function ProfessoresPage() {
 function Th({ children }) {
   return <th className="text-left px-3 py-2 font-medium">{children}</th>;
 }
-function Td({ children }) {
-  return <td className="px-3 py-2">{children}</td>;
+function Td({ children, colSpan, className = "" }) {
+  return (
+    <td colSpan={colSpan} className={`px-3 py-2 ${className}`}>
+      {children}
+    </td>
+  );
 }

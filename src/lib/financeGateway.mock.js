@@ -1,3 +1,4 @@
+// src/lib/financeGateway.js
 const STORE_KEY = "__fix_finance_mock__";
 
 function loadStore() {
@@ -9,9 +10,11 @@ function loadStore() {
       teachers: [],
       turmas: [],
       turma_members: [], // {turma_id, student_id}
-      sessions: [], // {id, turma_id, date, notes, duration_hours}
+      sessions: [], // {id, turma_id, date, notes, duration_hours, headcount_snapshot, rate_snapshot}
       attendance: [], // {id, session_id, turma_id, student_id, present, note, snapshots...}
-    };
+      expense_templates: [], // {id, title, category, amount, frequency, due_day, due_month, active}
+      expense_entries: [], // {id, title, category, amount, due_date, status, created_at, updated_at}
+     };
   }
   try {
     const raw = localStorage.getItem(STORE_KEY);
@@ -25,6 +28,8 @@ function loadStore() {
         turma_members: [],
         sessions: [],
         attendance: [],
+        expense_templates: [],
+        expense_entries: [],
       };
     const d = JSON.parse(raw);
     return {
@@ -36,6 +41,8 @@ function loadStore() {
       turma_members: d.turma_members ?? [],
       sessions: d.sessions ?? [],
       attendance: d.attendance ?? [],
+      expense_templates: d.expense_templates ?? [],
+      expense_entries: d.expense_entries ?? [],
     };
   } catch {
     return {
@@ -64,6 +71,8 @@ function saveStore(state) {
       turma_members: state.turma_members ?? [],
       sessions: state.sessions ?? [],
       attendance: state.attendance ?? [],
+      expense_templates: state.expense_templates ?? [],
+      expense_entries: state.expense_entries ?? [],
     })
   );
 }
@@ -78,6 +87,8 @@ let {
   turma_members: _turma_members,
   sessions: _sessions,
   attendance: _attendance,
+  expense_templates: _expense_templates,
+  expense_entries: _expense_entries,
 } = loadStore();
 
 const uid = (p = "id_") => p + Math.random().toString(36).slice(2, 10);
@@ -93,14 +104,28 @@ function persist() {
     turma_members: _turma_members,
     sessions: _sessions,
     attendance: _attendance,
+    expense_templates: _expense_templates,
+    expense_entries: _expense_entries,
   });
+}
+
+function rateForSize(teacher, size) {
+  if (!teacher || teacher.rate_mode !== "by_size") return Number(teacher?.hourly_rate || 0);
+  const n = Math.max(0, Number(size || 0));
+  const rules = Array.isArray(teacher.rate_rules) ? teacher.rate_rules : [];
+  for (const r of rules) {
+    const min = Number(r.min ?? 0);
+    const max = Number(r.max ?? 1e9);
+    const rate = Number(r.rate ?? 0);
+    if (n >= min && n <= max) return rate;
+  }
+  return Number(teacher?.hourly_rate || 0);
 }
 
 // ----------------- Students -----------------
 async function listStudents() {
   return _students.slice();
 }
-
 async function createStudent({ name, monthly_value, due_day, birth_date = null, status = "ativo", payer_id = null }) {
   if (!name || monthly_value == null || due_day == null)
     throw new Error("Obrigatórios: name, monthly_value, due_day");
@@ -110,7 +135,7 @@ async function createStudent({ name, monthly_value, due_day, birth_date = null, 
     name: String(name),
     monthly_value: Number(monthly_value) || 0,
     due_day: Math.min(Math.max(Number(due_day) || 5, 1), 28),
-    status, // "ativo" | "inativo"
+    status,
     payer_id: payer_id || null,
     birth_date: b,
   };
@@ -118,7 +143,6 @@ async function createStudent({ name, monthly_value, due_day, birth_date = null, 
   persist();
   return st;
 }
-
 async function updateStudent(id, changes) {
   const s = _students.find((x) => x.id === id);
   if (!s) throw new Error("Aluno não encontrado");
@@ -135,7 +159,6 @@ async function updateStudent(id, changes) {
   persist();
   return s;
 }
-
 async function setStudentStatus(id, status) {
   const s = _students.find((x) => x.id === id);
   if (!s) throw new Error("Aluno não encontrado");
@@ -143,21 +166,15 @@ async function setStudentStatus(id, status) {
   persist();
   return s;
 }
-
 async function deleteStudent(id) {
-  // mantém pagamentos "paid" (com snapshots),
-  // remove "pending/canceled" do aluno.
   _payments = _payments.filter((p) => !(p.student_id === id && p.status !== "paid"));
-  // não apagar attendance (histórico do aluno)
-  // remove vínculo com turmas
   _turma_members = _turma_members.filter((tm) => tm.student_id !== id);
-  // remove aluno
   _students = _students.filter((x) => x.id !== id);
   persist();
   return true;
 }
 
-// ----------------- Payers (mínimo) -----------------
+// ----------------- Payers -----------------
 async function listPayers() { return _payers.slice(); }
 async function createPayer({ name, email = null }) {
   if (!name) throw new Error("Nome é obrigatório");
@@ -173,16 +190,14 @@ async function listTeachers() {
     ...t,
     hourly_rate: Number(t.hourly_rate ?? 0),
     pay_day: Math.min(Math.max(Number(t.pay_day ?? 5), 1), 28),
+    rate_mode: t.rate_mode || "flat",                            // "flat" | "by_size"
+    rate_rules: Array.isArray(t.rate_rules) ? t.rate_rules : [], // [{min,max,rate}]
   }));
 }
-
 async function createTeacher({
-  name,
-  email = null,
-  phone = null,
-  status = "ativo",
-  hourly_rate = 0,
-  pay_day = 5,
+  name, email=null, phone=null, status="ativo",
+  hourly_rate = 0, pay_day = 5,
+  rate_mode = "flat", rate_rules = []
 }) {
   if (!name) throw new Error("Nome é obrigatório");
   const t = {
@@ -190,33 +205,46 @@ async function createTeacher({
     name: String(name),
     email: email || null,
     phone: phone || null,
-    status, // "ativo" | "inativo"
-    hourly_rate: Number(hourly_rate || 0), // R$/hora
-    pay_day: Math.min(Math.max(Number(pay_day || 5), 1), 28), // 1..28
+    status,
+    hourly_rate: Number(hourly_rate || 0),
+    pay_day: Math.min(Math.max(Number(pay_day || 5), 1), 28),
+    rate_mode: rate_mode === "by_size" ? "by_size" : "flat",
+    rate_rules: Array.isArray(rate_rules) ? rate_rules : [],
     created_at: new Date().toISOString(),
   };
   _teachers.push(t);
   persist();
   return t;
 }
-
 async function updateTeacher(id, changes) {
   const t = _teachers.find((x) => x.id === id);
   if (!t) throw new Error("Professor não encontrado");
   if (changes.name != null) t.name = String(changes.name);
   if (changes.email !== undefined) t.email = changes.email || null;
   if (changes.phone !== undefined) t.phone = changes.phone || null;
-  if (changes.status != null) t.status = changes.status; // "ativo" | "inativo"
+  if (changes.status != null) t.status = changes.status;
   if (changes.hourly_rate !== undefined) t.hourly_rate = Number(changes.hourly_rate || 0);
-  if (changes.pay_day !== undefined)
-    t.pay_day = Math.min(Math.max(Number(changes.pay_day || 5), 1), 28);
+  if (changes.pay_day !== undefined) t.pay_day = Math.min(Math.max(Number(changes.pay_day || 5), 1), 28);
+  if (changes.rate_mode !== undefined) t.rate_mode = changes.rate_mode === "by_size" ? "by_size" : "flat";
+  if (changes.rate_rules !== undefined) t.rate_rules = Array.isArray(changes.rate_rules) ? changes.rate_rules : [];
   persist();
   return t;
+}
+async function setTeacherStatus(id, status) {
+  const t = _teachers.find((x) => x.id === id);
+  if (!t) throw new Error("Professor não encontrado");
+  t.status = status;
+  persist();
+  return t;
+}
+async function deleteTeacher(id) {
+  _teachers = _teachers.filter((x) => x.id !== id);
+  persist();
+  return true;
 }
 
 // ----------------- Turmas -----------------
 async function listTurmas() { return _turmas.slice(); }
-
 async function createTurma({ name, teacher_id = null, capacity = 20 }) {
   if (!name) throw new Error("Nome da turma é obrigatório");
   const t = { id: uid("tur_"), name: String(name), teacher_id: teacher_id || null, capacity: Number(capacity || 20), created_at: new Date().toISOString() };
@@ -224,7 +252,6 @@ async function createTurma({ name, teacher_id = null, capacity = 20 }) {
   persist();
   return t;
 }
-
 async function updateTurma(id, changes) {
   const t = _turmas.find((x) => x.id === id);
   if (!t) throw new Error("Turma não encontrada");
@@ -234,9 +261,7 @@ async function updateTurma(id, changes) {
   persist();
   return t;
 }
-
 async function deleteTurma(id) {
-  // remover membros, sessões e attendance ligados à turma
   const sessIds = _sessions.filter(s => s.turma_id === id).map(s => s.id);
   _attendance = _attendance.filter(a => !sessIds.includes(a.session_id));
   _sessions = _sessions.filter(s => s.turma_id !== id);
@@ -245,22 +270,18 @@ async function deleteTurma(id) {
   persist();
   return true;
 }
-
 async function listTurmaMembers(turma_id) {
   const ids = new Set(_turma_members.filter(tm => tm.turma_id === turma_id).map(tm => tm.student_id));
   return _students.filter(s => ids.has(s.id)).map(s => ({ id: s.id, name: s.name, status: s.status }));
 }
-
 async function addStudentToTurma(turma_id, student_id) {
   const exists = _turma_members.some(tm => tm.turma_id === turma_id && tm.student_id === student_id);
   if (exists) return;
   _turma_members.push({ turma_id, student_id });
   persist();
 }
-
 async function removeStudentFromTurma(turma_id, student_id) {
   _turma_members = _turma_members.filter(tm => !(tm.turma_id === turma_id && tm.student_id === student_id));
-  // NÃO apagar attendance — histórico deve permanecer
   persist();
 }
 
@@ -270,8 +291,7 @@ async function listSessions(turma_id) {
     .filter((s) => s.turma_id === turma_id)
     .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
 }
-
-async function createSession({ turma_id, date, notes = "", duration_hours = 1 }) {
+async function createSession({ turma_id, date, notes = "", duration_hours = 0.5, headcount_snapshot = null }) {
   if (!turma_id) throw new Error("turma_id é obrigatório");
   if (!date) throw new Error("date é obrigatório (yyyy-mm-dd)");
   const s = {
@@ -279,14 +299,28 @@ async function createSession({ turma_id, date, notes = "", duration_hours = 1 })
     turma_id,
     date,
     notes: notes || "",
-    duration_hours: Math.max(0, Number(duration_hours || 0.5)), // default 0.5h
+    duration_hours: Math.max(0, Number(duration_hours || 0.5)),
+    headcount_snapshot: headcount_snapshot != null ? Number(headcount_snapshot) : null,
+    rate_snapshot: null,
     created_at: new Date().toISOString(),
   };
+
+  const turma = _turmas.find((t) => t.id === turma_id) || null;
+  const teacher = turma ? _teachers.find((tt) => tt.id === turma.teacher_id) : null;
+  const sizeNow =
+    s.headcount_snapshot != null
+      ? Number(s.headcount_snapshot)
+      : _turma_members
+          .filter((tm) => tm.turma_id === turma_id)
+          .map((tm) => _students.find((st) => st.id === tm.student_id))
+          .filter((st) => st && st.status === "ativo").length;
+
+  s.rate_snapshot = rateForSize(teacher, sizeNow);
+
   _sessions.push(s);
   persist();
   return s;
 }
-
 async function updateSession(id, changes) {
   const s = _sessions.find((x) => x.id === id);
   if (!s) throw new Error("Sessão não encontrada");
@@ -294,13 +328,30 @@ async function updateSession(id, changes) {
   if (changes.notes != null) s.notes = changes.notes;
   if (changes.duration_hours !== undefined)
     s.duration_hours = Math.max(0, Number(changes.duration_hours || 0));
+
+  let mustRecalcRate = false;
+  if (changes.headcount_snapshot !== undefined) {
+    s.headcount_snapshot = changes.headcount_snapshot != null ? Number(changes.headcount_snapshot) : null;
+    mustRecalcRate = true;
+  }
+  if (mustRecalcRate) {
+    const turma = _turmas.find((t) => t.id === s.turma_id) || null;
+    const teacher = turma ? _teachers.find((tt) => tt.id === turma.teacher_id) : null;
+    const sizeNow =
+      s.headcount_snapshot != null
+        ? Number(s.headcount_snapshot)
+        : _turma_members
+            .filter((tm) => tm.turma_id === s.turma_id)
+            .map((tm) => _students.find((st) => st.id === tm.student_id))
+            .filter((st) => st && st.status === "ativo").length;
+    s.rate_snapshot = rateForSize(teacher, sizeNow);
+  }
+
   persist();
   return s;
 }
-
 async function deleteSession(id) {
   _sessions = _sessions.filter((x) => x.id !== id);
-  // apaga também attendance dessa sessão
   _attendance = _attendance.filter((a) => a.session_id !== id);
   persist();
   return true;
@@ -310,16 +361,9 @@ async function deleteSession(id) {
 async function listTeacherSessionsByMonth(teacher_id, ym) {
   const ymKey = (ym || "").slice(0, 7);
   if (!teacher_id || ymKey.length !== 7) return [];
-
   const myTurmas = _turmas.filter((t) => t.teacher_id === teacher_id).map((t) => t.id);
   if (myTurmas.length === 0) return [];
-
-  const rows = _sessions.filter((s) => {
-    if (!myTurmas.includes(s.turma_id)) return false;
-    const month = (s.date || "").slice(0, 7);
-    return month === ymKey;
-  });
-
+  const rows = _sessions.filter((s) => myTurmas.includes(s.turma_id) && (s.date || "").slice(0, 7) === ymKey);
   return rows.map((s) => ({
     id: s.id,
     turma_id: s.turma_id,
@@ -328,30 +372,37 @@ async function listTeacherSessionsByMonth(teacher_id, ym) {
     duration_hours: Number(s.duration_hours || 0),
   }));
 }
-
 async function sumTeacherPayoutByMonth(teacher_id, ym) {
   const t = _teachers.find((x) => x.id === teacher_id);
   if (!t)
-    return { hours: 0, sessions: 0, amount: 0, hourly_rate: 0, pay_day: 5 };
+    return { hours: 0, sessions: 0, amount: 0, hourly_rate: 0, rate_mode: "flat", pay_day: 5 };
 
-  const hourly_rate = Number(t.hourly_rate || 0);
   const pay_day = Math.min(Math.max(Number(t.pay_day ?? 5), 1), 28);
-
   const sessions = await listTeacherSessionsByMonth(teacher_id, ym);
-  const hours = sessions.reduce(
-    (acc, s) => acc + Number(s.duration_hours || 0),
-    0
-  );
-  const amount = hours * hourly_rate;
 
-  return { hours, sessions: sessions.length, amount, hourly_rate, pay_day };
+  let hours = 0;
+  let amount = 0;
+  for (const s of sessions) {
+    const sess = _sessions.find((x) => x.id === s.id);
+    const h = Number(sess?.duration_hours || 0);
+    hours += h;
+    const size = Number(sess?.headcount_snapshot ?? 0);
+    const rate = (sess && sess.rate_snapshot != null) ? Number(sess.rate_snapshot) : rateForSize(t, size);
+    amount += h * rate;
+  }
+
+  return {
+    hours,
+    sessions: sessions.length,
+    amount,
+    hourly_rate: Number(t.hourly_rate || 0),
+    rate_mode: t.rate_mode || "flat",
+    pay_day,
+  };
 }
 
-// ----------------- Attendance (snapshots) -----------------
-async function listAttendance(session_id) {
-  return _attendance.filter(a => a.session_id === session_id);
-}
-
+// ----------------- Attendance -----------------
+async function listAttendance(session_id) { return _attendance.filter(a => a.session_id === session_id); }
 async function upsertAttendance(session_id, student_id, { present, note }) {
   const s = _sessions.find(x => x.id === session_id);
   if (!s) throw new Error("Sessão não encontrada");
@@ -365,10 +416,9 @@ async function upsertAttendance(session_id, student_id, { present, note }) {
       session_id,
       turma_id: s.turma_id,
       student_id,
-      // snapshots:
       student_name_snapshot: stu?.name || "(Aluno removido)",
       turma_name_snapshot: turma?.name || "(Turma removida)",
-      session_date_snapshot: s.date, // yyyy-mm-dd
+      session_date_snapshot: s.date,
       created_at: new Date().toISOString(),
     };
     _attendance.push(row);
@@ -376,88 +426,16 @@ async function upsertAttendance(session_id, student_id, { present, note }) {
   row.present = !!present;
   row.note = note || "";
   row.updated_at = new Date().toISOString();
-
   persist();
   return row;
 }
-
 async function listAttendanceByStudent(student_id) {
   return _attendance
     .filter(a => a.student_id === student_id)
     .sort((a,b) => (b.session_date_snapshot||"").localeCompare(a.session_date_snapshot||""));
 }
 
-// ----------------- Attendance Reports -----------------
-function _ymKey(ym) {
-  return (ym || "").slice(0, 7);
-}
-
-async function getAttendanceReportByTurma(turma_id, ym) {
-  const key = _ymKey(ym);
-  if (!turma_id || key.length !== 7) return [];
-
-  const turma = _turmas.find(t => t.id === turma_id) || null;
-  const members = await listTurmaMembers(turma_id); // [{id,name,status}]
-  const stuById = new Map(members.map(m => [m.id, m.name]));
-
-  // filtra attendance por turma e mês
-  const rows = _attendance.filter(a =>
-    a.turma_id === turma_id &&
-    typeof a.session_date_snapshot === "string" &&
-    a.session_date_snapshot.slice(0,7) === key
-  );
-
-  // agrega por aluno
-  const agg = new Map(); // id -> { presents, absents }
-  for (const a of rows) {
-    const id = a.student_id;
-    if (!agg.has(id)) agg.set(id, { presents: 0, absents: 0 });
-    const cur = agg.get(id);
-    if (a.present) cur.presents += 1;
-    else cur.absents += 1;
-  }
-
-  // garante todos os membros com 0/0 mesmo sem registros
-  for (const m of members) {
-    if (!agg.has(m.id)) agg.set(m.id, { presents: 0, absents: 0 });
-  }
-
-  const out = [];
-  for (const [student_id, { presents, absents }] of agg.entries()) {
-    const total = presents + absents;
-    out.push({
-      turma_id,
-      turma_name: turma?.name || "(Turma)",
-      student_id,
-      student_name: stuById.get(student_id) || "(Aluno)",
-      presents,
-      absents,
-      total,
-      rate: total > 0 ? presents / total : 0,
-    });
-  }
-
-  out.sort((a,b) => a.student_name.localeCompare(b.student_name));
-  return out;
-}
-
-async function getAttendanceReportAllTurmas(ym) {
-  const key = _ymKey(ym);
-  if (key.length !== 7) return [];
-
-  const out = [];
-  for (const t of _turmas) {
-    const rows = await getAttendanceReportByTurma(t.id, key);
-    out.push(...rows);
-  }
-  out.sort((a,b) =>
-    (a.turma_name||"").localeCompare(b.turma_name||"") ||
-    a.student_name.localeCompare(b.student_name)
-  );
-  return out;
-}
-
-// ----------------- Financeiro -----------------
+// ----------------- Financeiro (mínimo) -----------------
 const isoMonthStart = (ym) => (ym.length === 7 ? ym + "-01" : ym).slice(0, 10);
 const calcDueDate = (ym) => {
   const d = new Date(ym.length === 7 ? ym + "-01" : ym);
@@ -468,7 +446,6 @@ const calcDueDate = (ym) => {
     return `${yyyy}-${String(mm).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   };
 };
-
 function ensurePayerForStudent(s) {
   if (s.payer_id) return s.payer_id;
   const id = uid("pay_");
@@ -477,7 +454,6 @@ function ensurePayerForStudent(s) {
   persist();
   return id;
 }
-
 async function previewGenerateMonth({ ym }) {
   const monthStart = isoMonthStart(ym);
   const due = calcDueDate(ym);
@@ -498,7 +474,6 @@ async function previewGenerateMonth({ ym }) {
     })
     .filter(Boolean);
 }
-
 async function generateMonth({ ym }) {
   const monthStart = isoMonthStart(ym);
   const due = calcDueDate(ym);
@@ -533,11 +508,9 @@ async function generateMonth({ ym }) {
   persist();
   return inserted;
 }
-
 async function listPayments({ ym, status }) {
   const monthStart = ym ? isoMonthStart(ym) : null;
   const today = new Date().toISOString().slice(0, 10);
-
   const rows = _payments
     .map((p) => {
       const s = _students.find((x) => x.id === p.student_id);
@@ -580,7 +553,6 @@ async function listPayments({ ym, status }) {
     },
   };
 }
-
 async function markPaid(id) {
   const p = _payments.find((x) => x.id === id);
   if (!p) throw new Error("Pagamento não encontrado");
@@ -590,7 +562,6 @@ async function markPaid(id) {
   p.cancel_note = null;
   persist();
 }
-
 async function cancelPayment(id, note) {
   const p = _payments.find((x) => x.id === id);
   if (!p) throw new Error("Pagamento não encontrado");
@@ -600,7 +571,6 @@ async function cancelPayment(id, note) {
   p.paid_at = null;
   persist();
 }
-
 async function reopenPayment(id) {
   const p = _payments.find((x) => x.id === id);
   if (!p) throw new Error("Pagamento não encontrado");
@@ -609,6 +579,226 @@ async function reopenPayment(id) {
   p.canceled_at = null;
   p.cancel_note = null;
   persist();
+}
+// ----------------- DESPESAS (Gastos) -----------------
+
+// ===== Templates (recorrentes) =====
+async function listExpenseTemplates() {
+  return _expense_templates.slice().sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+}
+
+/**
+ * frequency: "monthly" | "annual"
+ * due_day: 1..28 (para monthly ou annual)
+ * due_month: 1..12 (apenas para annual)
+ */
+async function createExpenseTemplate({
+  title,
+  category = null,
+  amount,
+  frequency = "monthly",
+  due_day = 5,
+  due_month = null,
+  active = true,
+  cost_center = "PJ"
+}) {
+  if (!title) throw new Error("Título é obrigatório");
+  const row = {
+    id: uid("ext_"),
+    title: String(title),
+    category: category || null,
+    amount: Number(amount || 0),
+    frequency, // "monthly" | "annual"
+    due_day: Math.min(Math.max(Number(due_day || 5), 1), 28),
+    due_month: frequency === "annual" ? Math.min(Math.max(Number(due_month || 1), 1), 12) : null,
+    active: !!active,
+    cost_center: (cost_center === "PF" ? "PF" : "PJ"),
+    created_at: new Date().toISOString(),
+  };
+  _expense_templates.push(row);
+  persist();
+  return row;
+}
+
+async function updateExpenseTemplate(id, changes) {
+  const e = _expense_templates.find((x) => x.id === id);
+  if (!e) throw new Error("Despesa recorrente não encontrada");
+
+  if (changes.title != null) e.title = String(changes.title);
+  if (changes.category !== undefined) e.category = changes.category || null;
+  if (changes.amount !== undefined) e.amount = Number(changes.amount || 0);
+  if (changes.frequency) e.frequency = changes.frequency;
+  if (changes.due_day !== undefined)
+    e.due_day = Math.min(Math.max(Number(changes.due_day || 5), 1), 28);
+  if (changes.due_month !== undefined)
+    e.due_month = Math.min(Math.max(Number(changes.due_month || 1), 1), 12);
+  if (changes.active !== undefined) e.active = !!changes.active;
+  if (changes.cost_center !== undefined) e.cost_center = (changes.cost_center === "PF" ? "PF" : "PJ");
+
+  persist();
+  return e;
+}
+
+async function deleteExpenseTemplate(id) {
+  _expense_templates = _expense_templates.filter((x) => x.id !== id);
+  persist();
+  return true;
+}
+
+// ===== Lançamentos (mês) =====
+
+/** Cria lançamento avulso (variável) já no mês da data informada */
+async function createOneOffExpense({ date, title, category = null, amount, cost_center = "PJ" }) {
+  if (!date) throw new Error("Data é obrigatória (yyyy-mm-dd)");
+  const ym = String(date).slice(0, 7);
+  const row = {
+    id: uid("exn_"),
+    template_id: null,
+    title_snapshot: String(title || "Despesa"),
+    category: category || null,
+    cost_center: (cost_center === "PF" ? "PF" : "PJ"),
+    competence_month: isoMonthStart(ym),
+    due_date: date,
+    amount: Number(amount || 0),
+    status: "pending", // "pending" | "paid" | "canceled"
+    paid_at: null,
+    canceled_at: null,
+    cancel_note: null,
+    created_at: new Date().toISOString(),
+  };
+  _expense_entries.push(row);
+  persist();
+  return row;
+}
+
+/** Prévia do que seria gerado para o mês a partir dos templates ativos */
+async function previewGenerateExpenses({ ym }) {
+  const monthStart = isoMonthStart(ym);
+  const due = calcDueDate(ym);
+  const [, mm] = monthStart.split("-").map((n) => Number(n));
+
+  return _expense_templates
+    .filter((t) => t.active)
+    .map((t) => {
+      if (t.frequency === "annual" && t.due_month && t.due_month !== mm) return null;
+
+      const already = _expense_entries.some(
+        (e) => e.template_id === t.id && e.competence_month === monthStart
+      );
+      if (already) return null;
+
+      const dueDate =
+        t.frequency === "monthly"
+          ? due(t.due_day)
+          : `${monthStart.slice(0, 7)}-${String(
+              Math.min(Math.max(Number(t.due_day || 5), 1), 28)
+            ).padStart(2, "0")}`;
+
+      return {
+        template_id: t.id,
+        title_snapshot: t.title,
+        category: t.category,
+        cost_center: t.cost_center === "PF" ? "PF" : "PJ",
+        competence_month: monthStart,
+        due_date: dueDate,
+        amount: Number(t.amount || 0),
+        status: "pending",
+      };
+    })
+    .filter(Boolean);
+}
+
+/** Gera efetivamente os lançamentos do mês (a partir da prévia) */
+async function generateExpenses({ ym }) {
+  const monthStart = isoMonthStart(ym);
+  const list = await previewGenerateExpenses({ ym });
+  const inserted = [];
+
+  for (const v of list) {
+    const row = {
+      id: uid("exn_"),
+      ...v,
+      paid_at: null,
+      canceled_at: null,
+      cancel_note: null,
+      created_at: new Date().toISOString(),
+    };
+    _expense_entries.push(row);
+    inserted.push(row);
+  }
+  persist();
+  return inserted;
+}
+
+/** Lista lançamentos do mês + KPIs */
+async function listExpenseEntries({ ym, status, cost_center }) {
+  const monthStart = ym ? isoMonthStart(ym) : null;
+  const today = new Date().toISOString().slice(0, 10);
+
+  const rows = _expense_entries
+    .filter((r) => (monthStart ? r.competence_month === monthStart : true))
+    .filter((r) => (status && status !== "all" ? r.status === status : true))
+    .filter((r) => 
+        cost_center && (cost_center === "PJ" || cost_center === "PF") 
+          ? (r.cost_center || "PJ") === cost_center 
+          : true
+        )   
+    .map((r) => ({
+      ...r,
+      days_overdue:
+        r.status === "pending" && r.due_date < today
+          ? Math.max(0, Math.floor((new Date(today) - new Date(r.due_date)) / 86400000))
+          : 0,
+    }))
+    .sort((a, b) => (a.due_date || "").localeCompare(b.due_date || ""));
+
+  const sum = (arr) => arr.reduce((acc, it) => acc + Number(it.amount || 0), 0);
+  return {
+    rows,
+    kpis: {
+      total: sum(rows),
+      paid: sum(rows.filter((r) => r.status === "paid")),
+      pending: sum(rows.filter((r) => r.status === "pending")),
+      overdue: sum(rows.filter((r) => r.status === "pending" && r.days_overdue > 0)),
+    },
+  };
+}
+
+// ações nos lançamentos
+async function markExpensePaid(id) {
+  const r = _expense_entries.find((x) => x.id === id);
+  if (!r) throw new Error("Lançamento não encontrado");
+  r.status = "paid";
+  r.paid_at = new Date().toISOString();
+  r.canceled_at = null;
+  r.cancel_note = null;
+  persist();
+}
+
+async function reopenExpense(id) {
+  const r = _expense_entries.find((x) => x.id === id);
+  if (!r) throw new Error("Lançamento não encontrado");
+  r.status = "pending";
+  r.paid_at = null;
+  r.canceled_at = null;
+  r.cancel_note = null;
+  persist();
+}
+
+async function cancelExpense(id, note) {
+  const r = _expense_entries.find((x) => x.id === id);
+  if (!r) throw new Error("Lançamento não encontrado");
+  r.status = "canceled";
+  r.canceled_at = new Date().toISOString();
+  r.cancel_note = note || null;
+  r.paid_at = null;
+  persist();
+}
+
+async function deleteExpenseEntry(id) {
+  _expense_entries = _expense_entries.filter((x) => x.id !== id);
+  persist();
+  return true;
 }
 
 // ----------------- Export -----------------
@@ -628,6 +818,10 @@ export const financeGateway = {
   listTeachers,
   createTeacher,
   updateTeacher,
+  setTeacherStatus,
+  deleteTeacher,
+  listTeacherSessionsByMonth,
+  sumTeacherPayoutByMonth,
 
   // turmas
   listTurmas,
@@ -649,10 +843,6 @@ export const financeGateway = {
   upsertAttendance,
   listAttendanceByStudent,
 
-  // attendance reports
-  getAttendanceReportByTurma,
-  getAttendanceReportAllTurmas,
-
   // financeiro
   previewGenerateMonth,
   generateMonth,
@@ -661,9 +851,21 @@ export const financeGateway = {
   cancelPayment,
   reopenPayment,
 
-  // payout professor
-  listTeacherSessionsByMonth,
-  sumTeacherPayoutByMonth,
+  // DESPESAS – templates
+  listExpenseTemplates,
+  createExpenseTemplate,
+  updateExpenseTemplate,
+  deleteExpenseTemplate,
+
+  // DESPESAS – lançamentos
+  previewGenerateExpenses,
+  generateExpenses,
+  listExpenseEntries,
+  createOneOffExpense,
+  markExpensePaid,
+  reopenExpense,
+  cancelExpense,
+  deleteExpenseEntry,
 
   // util
   isAdmin: async () => true,
@@ -681,3 +883,4 @@ export const financeGateway = {
 };
 
 export const FINANCE_ADAPTER = "mock";
+

@@ -38,6 +38,9 @@ export default function Tabs() {
       <Tab href="/financeiro" active={isActive("/financeiro")}>
         Financeiro
       </Tab>
+      
+      <Tab href="/gastos" active={isActive("/gastos")}
+      >Gastos</Tab>
 
       <Tab href="/turmas" active={isActive("/turmas")}>
         Turmas
