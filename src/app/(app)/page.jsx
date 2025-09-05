@@ -23,6 +23,7 @@ export default function HomePage() {
   const [openMail, setOpenMail] = useState(false);
   const [sending, setSending] = useState(false);
   const [mailForm, setMailForm] = useState({ to: "", subject: "", message: "" });
+  const [openEmail, setOpenEmail] = useState(false);
 
   function maskMoney(n) { return showValues ? fmtBRL(n) : "•••"; }
   function maskCount(n) { return showValues ? String(n) : "••"; }
@@ -122,10 +123,7 @@ export default function HomePage() {
             {showValues ? "Ocultar valores" : "Mostrar valores"}
           </button>
 
-          <button
-            onClick={() => setOpenMail(true)}
-            className="border rounded px-3 py-2"
-          >
+          <button onClick={() => setOpenEmail(true)} className="border rounded px-3 py-2">
             Enviar e-mail
           </button>
         </div>

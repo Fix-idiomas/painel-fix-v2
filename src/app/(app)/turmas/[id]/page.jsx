@@ -6,11 +6,43 @@ import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
 import Link from "next/link";
 
+const WEEKDAYS = [
+  { value: "1", label: "Segunda" },
+  { value: "2", label: "Terça" },
+  { value: "3", label: "Quarta" },
+  { value: "4", label: "Quinta" },
+  { value: "5", label: "Sexta" },
+  { value: "6", label: "Sábado" },
+  { value: "0", label: "Domingo" },
+];
+const labelWeekday = (n) => {
+  const found = WEEKDAYS.find(w => Number(w.value) === Number(n));
+  return found ? found.label : "—";
+  
+};
+
+
 const fmtBR = (s) => (s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-");
 const fmtNum = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
 // mês atual no formato yyyy-mm para o link do relatório
 const ym = new Date().toISOString().slice(0, 7);
+const weekdayOf = (isoDate) => {
+  // 0..6 (Dom..Sáb)
+  const d = new Date(isoDate + "T00:00:00");
+  return d.getDay();
+};
+
+const fmtDuration = (h) =>
+  Number(h || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+const describeRule = (r) => {
+  const w = (r.weekday === 0 || r.weekday) ? labelWeekday(r.weekday) : "—";
+  const hhmm = r.time ? `às ${r.time}` : "";
+  const dur = r.duration_hours ? ` • ${fmtDuration(r.duration_hours)}h` : "";
+  return `${w} ${hhmm}${dur}`.trim();
+};
+
 
 export default function TurmaDetailPage() {
   const params = useParams();
@@ -27,7 +59,7 @@ export default function TurmaDetailPage() {
   // ---- turma
   const [openEdit, setOpenEdit] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
-  const [formTurma, setFormTurma] = useState({ name: "", teacher_id: "", capacity: 20 });
+  const [formTurma, setFormTurma] = useState({ name: "", teacher_id: "", capacity: 20, meeting_rules: [],});
 
   // ---- sessão (unificado)
   const [openSess, setOpenSess] = useState(false);
@@ -88,7 +120,12 @@ export default function TurmaDetailPage() {
       name: turma?.name || "",
       teacher_id: turma?.teacher_id || "",
       capacity: turma?.capacity || 20,
-    });
+      meeting_rules: Array.isArray(turma?.meeting_rules) ? turma.meeting_rules.map(r => ({
+    weekday: (r.weekday === 0 || r.weekday) ? String(r.weekday) : "",
+    time: r.time || "",
+    duration_hours: String(r.duration_hours ?? "0.5"),
+  })) : [],
+});
     setOpenEdit(true);
   }
   function closeEditTurma() {
@@ -100,10 +137,15 @@ export default function TurmaDetailPage() {
     try {
       setSavingEdit(true);
       await financeGateway.updateTurma(turma.id, {
-        name: (formTurma.name || "").trim(),
-        teacher_id: formTurma.teacher_id || null,
-        capacity: Number(formTurma.capacity || 20),
-      });
+  name: (formTurma.name || "").trim(),
+  teacher_id: formTurma.teacher_id || null,
+  capacity: Number(formTurma.capacity || 20),
+  meeting_rules: (formTurma.meeting_rules || []).map(r => ({
+    weekday: r.weekday === "" ? null : Number(r.weekday),
+    time: r.time || null,
+    duration_hours: Number(r.duration_hours || 0.5),
+  })),
+});
       setOpenEdit(false);
       await loadAll();
     } catch (e) {
@@ -125,7 +167,7 @@ export default function TurmaDetailPage() {
 
   function openCreateSession() {
     setEditingSessId(null);
-    setFormSess({ date: "", notes: "", duration_hours: "0.5" }); // default 30 min
+    setFormSess({ date: "", notes: "", duration_hours: String(turma?.meeting_duration_default ?? "0.5") }); // default 30 min
     const draft = members.map((m) => ({
       student_id: m.id,
       name: m.name,
@@ -241,9 +283,16 @@ export default function TurmaDetailPage() {
         <div>
           <h1 className="text-2xl font-bold">{turma.name}</h1>
           <div className="text-slate-600 mt-1">
-            Professor: <b>{teacherName}</b> • Capacidade: <b>{turma.capacity}</b> • Alunos:{" "}
-            <b>{members.length}</b>
-          </div>
+  Professor: <b>{teacherName}</b> • Capacidade: <b>{turma.capacity}</b> • Alunos: <b>{members.length}</b>
+  <br className="hidden sm:block" />
+  Encontros:{" "}
+  <b>
+    {Array.isArray(turma.meeting_rules) && turma.meeting_rules.length > 0
+      ? turma.meeting_rules.map(describeRule).join("; ")
+      : "—"}
+  </b>
+</div>
+
         </div>
         <div className="flex gap-2">
           <button onClick={() => router.push("/turmas")} className="border rounded px-3 py-2">
@@ -418,6 +467,113 @@ export default function TurmaDetailPage() {
               className="border rounded px-3 py-2 w-full"
             />
           </div>
+          <div>
+  {/* Encontros (vários) */}
+<div className="sm:col-span-2">
+  <div className="flex items-center justify-between mb-1">
+    <label className="block text-sm font-medium">Encontros na semana</label>
+    <button
+      type="button"
+      onClick={() =>
+        setFormTurma(f => ({
+          ...f,
+          meeting_rules: [...(f.meeting_rules || []), { weekday: "", time: "", duration_hours: "0.5" }],
+        }))
+      }
+      className="px-2 py-1 border rounded text-sm"
+    >
+      + Adicionar encontro
+    </button>
+  </div>
+
+  {(formTurma.meeting_rules || []).length === 0 ? (
+    <div className="text-slate-500 text-sm">Nenhum encontro definido.</div>
+  ) : (
+    <div className="space-y-4">
+      {(formTurma.meeting_rules || []).map((r, idx) => (
+        <div key={idx} className="grid sm:grid-cols-4 gap-3 items-end border rounded p-3">
+          {/* Dia */}
+          <div>
+            <label className="block text-xs mb-1">Dia da semana</label>
+            <select
+              value={r.weekday}
+              onChange={(e) =>
+                setFormTurma(f => {
+                  const next = [...(f.meeting_rules || [])];
+                  next[idx] = { ...next[idx], weekday: e.target.value };
+                  return { ...f, meeting_rules: next };
+                })
+              }
+              className="border rounded px-3 py-2 w-full"
+            >
+              <option value="">—</option>
+              {WEEKDAYS.map((w) => (
+                <option key={w.value} value={w.value}>{w.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Hora */}
+          <div>
+            <label className="block text-xs mb-3">Hora</label>
+            <input
+              type="time"
+              value={r.time}
+              onChange={(e) =>
+                setFormTurma(f => {
+                  const next = [...(f.meeting_rules || [])];
+                  next[idx] = { ...next[idx], time: e.target.value };
+                  return { ...f, meeting_rules: next };
+                })
+              }
+              className="border rounded px-3 py-2 w-full"
+            />
+          </div>
+
+          {/* Duração */}
+          <div>
+            <label className="block text-xs mb-1">Duração (h)</label>
+            <select
+              value={r.duration_hours}
+              onChange={(e) =>
+                setFormTurma(f => {
+                  const next = [...(f.meeting_rules || [])];
+                  next[idx] = { ...next[idx], duration_hours: e.target.value };
+                  return { ...f, meeting_rules: next };
+                })
+              }
+              className="border rounded px-3 py-2 w-full"
+            >
+              <option value="0.5">0,5</option>
+              <option value="1">1,0</option>
+              <option value="1.5">1,5</option>
+              <option value="2">2,0</option>
+            </select>
+          </div>
+
+          {/* Remover */}
+          <div className="justify-end">
+            <button
+              type="button"
+              onClick={() =>
+                setFormTurma(f => {
+                  const next = [...(f.meeting_rules || [])];
+                  next.splice(idx, 1);
+                  return { ...f, meeting_rules: next };
+                })
+              }
+              className="px-3 py-2 border rounded"
+              title="Remover"
+            >
+              Remover
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
+</div>
         </form>
       </Modal>
 

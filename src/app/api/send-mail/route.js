@@ -9,7 +9,7 @@ export async function POST(req) {
 
     const API_KEY = process.env.MAILGUN_API_KEY;
     const DOMAIN  = process.env.MAILGUN_DOMAIN;   // ex: "mg.seudominio.com"
-    const FROM    = process.env.MAILGUN_FROM || `Painel FIX <no-reply@${DOMAIN}>`;
+    const FROM    = process.env.MAILGUN_FROM || `Fix Idiomas <no-reply@${DOMAIN}>`;
 
     if (!API_KEY || !DOMAIN) {
       return new Response(JSON.stringify({ error: "Config de Mailgun ausente (env vars)" }), { status: 500 });
