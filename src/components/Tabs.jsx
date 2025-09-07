@@ -49,6 +49,10 @@ export default function Tabs() {
       <Tab href="/relatorios" active={isActive("/relatorios")}>
         Relatórios
       </Tab>
+      
+      <Tab href="/agenda" active={isActive("/agenda")}>
+        Agenda
+      </Tab>
     </nav>
   );
 }

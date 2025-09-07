@@ -14,6 +14,7 @@ function loadStore() {
       attendance: [], // {id, session_id, turma_id, student_id, present, note, snapshots...}
       expense_templates: [], // {id, title, category, amount, frequency, due_day, due_month, active, cost_center}
       expense_entries: [], // {id, template_id|null, title_snapshot, category, amount, competence_month, due_date, status, cost_center,...}
+      turma_schedules: [], // {id, turma_id, weekday, start_time, duration_hours, room, active}
     };
   }
   try {
@@ -30,6 +31,7 @@ function loadStore() {
         attendance: [],
         expense_templates: [],
         expense_entries: [],
+        turma_schedules: [],
       };
     const d = JSON.parse(raw);
     return {
@@ -43,6 +45,7 @@ function loadStore() {
       attendance: d.attendance ?? [],
       expense_templates: d.expense_templates ?? [],
       expense_entries: d.expense_entries ?? [],
+      turma_schedules: d.turma_schedules ?? [],
     };
   } catch {
     // fallback completo
@@ -76,6 +79,7 @@ function saveStore(state) {
       attendance: state.attendance ?? [],
       expense_templates: state.expense_templates ?? [],
       expense_entries: state.expense_entries ?? [],
+      turma_schedules: state.turma_schedules ?? [],
     })
   );
 }
@@ -92,6 +96,7 @@ let {
   attendance: _attendance,
   expense_templates: _expense_templates,
   expense_entries: _expense_entries,
+  turma_schedules: _turma_schedules,
 } = loadStore();
 
 const uid = (p = "id_") => p + Math.random().toString(36).slice(2, 10);
@@ -109,6 +114,7 @@ function persist() {
     attendance: _attendance,
     expense_templates: _expense_templates,
     expense_entries: _expense_entries,
+    turma_schedules: _turma_schedules,
   });
 }
 
@@ -461,6 +467,167 @@ async function removeStudentFromTurma(turma_id, student_id) {
   );
   persist();
 }
+// ----------------- Horários semanais da Turma (Agenda) -----------------
+/*
+  TurmaSchedule:
+  {
+    id: "sch_*",
+    turma_id: string,
+    weekday: 0..6,         // 0=Dom … 6=Sáb
+    start_time: "HH:MM",   // 24h
+    duration_hours: number,
+    room: string | null,
+    active: boolean,
+    created_at: ISO string,
+    updated_at: ISO string | null
+  }
+*/
+
+async function listSchedules(turma_id) {
+  return _turma_schedules
+    .filter(s => s.turma_id === turma_id)
+    .sort((a,b) => (a.weekday - b.weekday) || (a.start_time || "").localeCompare(b.start_time || ""));
+}
+
+function _validTimeHHMM(s) {
+  return typeof s === "string" && /^\d{2}:\d{2}$/.test(s);
+}
+
+async function createSchedule({ turma_id, weekday, start_time, duration_hours, room = null, active = true }) {
+  if (!turma_id) throw new Error("turma_id é obrigatório");
+  const wd = Number(weekday);
+  if (!(wd >= 0 && wd <= 6)) throw new Error("weekday inválido (0..6)");
+  if (!_validTimeHHMM(start_time)) throw new Error("start_time deve ser HH:MM");
+  const dur = Math.max(0.25, Number(duration_hours || 0)); // mínimo 15m se quiser
+  const row = {
+    id: uid("sch_"),
+    turma_id,
+    weekday: wd,
+    start_time,
+    duration_hours: dur,
+    room: room || null,
+    active: !!active,
+    created_at: new Date().toISOString(),
+    updated_at: null,
+  };
+  _turma_schedules.push(row);
+  persist();
+  return row;
+}
+
+async function updateSchedule(id, changes) {
+  const s = _turma_schedules.find(x => x.id === id);
+  if (!s) throw new Error("Horário não encontrado");
+  if (changes.weekday != null) {
+    const wd = Number(changes.weekday);
+    if (!(wd >= 0 && wd <= 6)) throw new Error("weekday inválido (0..6)");
+    s.weekday = wd;
+  }
+  if (changes.start_time != null) {
+    if (!_validTimeHHMM(changes.start_time)) throw new Error("start_time deve ser HH:MM");
+    s.start_time = changes.start_time;
+  }
+  if (changes.duration_hours != null) s.duration_hours = Math.max(0.25, Number(changes.duration_hours || 0));
+  if (changes.room !== undefined) s.room = changes.room || null;
+  if (changes.active !== undefined) s.active = !!changes.active;
+  s.updated_at = new Date().toISOString();
+  persist();
+  return s;
+}
+
+async function deleteSchedule(id) {
+  _turma_schedules = _turma_schedules.filter(x => x.id !== id);
+  persist();
+  return true;
+}
+
+// util datas
+function _dateStrToDate(s) { return new Date(s + "T00:00:00"); }
+function _addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+function _ymd(d) { return d.toISOString().slice(0,10); }
+
+// Prévia de sessões a partir dos horários no intervalo
+async function previewGenerateSessionsFromSchedules({ turma_id, start_date, end_date }) {
+  if (!turma_id) throw new Error("turma_id é obrigatório");
+  if (!start_date || !end_date) throw new Error("Período inválido");
+
+  const sch = (await listSchedules(turma_id)).filter(s => s.active);
+  if (sch.length === 0) return [];
+
+  const d0 = _dateStrToDate(start_date);
+  const d1 = _dateStrToDate(end_date);
+  const out = [];
+
+  for (let d = new Date(d0); d <= d1; d = _addDays(d, 1)) {
+    const weekday = d.getDay(); // 0..6
+    const dayStr = _ymd(d);
+
+    for (const s of sch) {
+      if (Number(s.weekday) !== weekday) continue;
+
+      // checar duplicidade
+      const already = _sessions.some(sess => {
+        if (sess.turma_id !== turma_id) return false;
+        if ((sess.date || "") !== dayStr) return false;
+        // Se você já adotou start_time nas sessões:
+        if (sess.start_time && s.start_time) return (sess.start_time === s.start_time);
+        // fallback: considerar duplicado pela data
+        return true;
+      });
+
+      out.push({
+        date: dayStr,
+        start_time: s.start_time,
+        duration_hours: s.duration_hours,
+        schedule_id: s.id,
+        exists: !!already,
+      });
+    }
+  }
+  return out.sort((a,b) => (a.date || "").localeCompare(b.date || "") || (a.start_time || "").localeCompare(b.start_time || ""));
+}
+
+// Geração efetiva (idempotente)
+async function generateSessionsFromSchedules({ turma_id, start_date, end_date }) {
+  const preview = await previewGenerateSessionsFromSchedules({ turma_id, start_date, end_date });
+  const turma = _turmas.find(t => t.id === turma_id) || null;
+  const teacher = turma ? _teachers.find(tt => tt.id === turma.teacher_id) : null;
+
+  const created = [];
+
+  for (const p of preview) {
+    if (p.exists) {
+      created.push({ session_id: null, date: p.date, start_time: p.start_time, duration_hours: p.duration_hours, schedule_id: p.schedule_id, created: false });
+      continue;
+    }
+
+    // tamanho atual (alunos ativos) no momento da geração
+    const sizeNow = _turma_members
+      .filter(tm => tm.turma_id === turma_id)
+      .map(tm => _students.find(st => st.id === tm.student_id))
+      .filter(st => st && st.status === "ativo").length;
+
+    const s = {
+      id: uid("ses_"),
+      turma_id,
+      date: p.date,
+      notes: "",
+      duration_hours: Number(p.duration_hours || 0.5),
+      headcount_snapshot: sizeNow,
+      rate_snapshot: rateForSize(teacher, sizeNow),
+      start_time: p.start_time || null,
+      generated_by: `schedule:${p.schedule_id}`,
+      reminders_sent: [],
+      created_at: new Date().toISOString(),
+    };
+
+    _sessions.push(s);
+    created.push({ session_id: s.id, date: p.date, start_time: p.start_time, duration_hours: p.duration_hours, schedule_id: p.schedule_id, created: true });
+  }
+  persist();
+  return created;
+}
+
 
 // ----------------- Sessões -----------------
 async function listSessions(turma_id) {
@@ -1140,6 +1307,16 @@ export const financeGateway = {
   listAttendance,
   upsertAttendance,
   listAttendanceByStudent,
+    // horários (agenda)
+  listSchedules,
+  createSchedule,
+  updateSchedule,
+  deleteSchedule,
+
+  // geração por horários
+  previewGenerateSessionsFromSchedules,
+  generateSessionsFromSchedules,
+
 
   // mensalidades (receitas)
   previewGenerateMonth,

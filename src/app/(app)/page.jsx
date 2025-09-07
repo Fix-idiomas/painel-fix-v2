@@ -123,7 +123,7 @@ export default function HomePage() {
             {showValues ? "Ocultar valores" : "Mostrar valores"}
           </button>
 
-          <button onClick={() => setOpenEmail(true)} className="border rounded px-3 py-2">
+          <button onClick={() => setOpenMail(true)} className="border rounded px-3 py-2">
             Enviar e-mail
           </button>
         </div>
@@ -159,7 +159,7 @@ export default function HomePage() {
         footer={
           <>
             <button
-              onClick={() => setOpenMail(false)}
+              onClick={() => setOpenMail(true)}
               className="px-3 py-2 border rounded"
               disabled={sending}
             >
