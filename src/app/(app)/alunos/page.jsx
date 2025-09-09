@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { financeGateway, FINANCE_ADAPTER } from "@/lib/financeGateway";
+import { financeGateway, ADAPTER_NAME } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
 import Link from "next/link";
 
@@ -204,7 +204,7 @@ export default function AlunosPage() {
     <main className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div className="text-xs text-slate-500">
-          Adapter: <b>{FINANCE_ADAPTER}</b>
+          Adapter: <b>{ADAPTER_NAME}</b>
         </div>
         <button onClick={() => setOpenCreate(true)} className="border rounded px-3 py-2">
           + Cadastrar aluno

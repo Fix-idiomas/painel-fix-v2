@@ -1,6 +1,7 @@
 // src/lib/financeGateway.js
 const STORE_KEY = "__fix_finance_mock__";
 
+
 function loadStore() {
   if (typeof window === "undefined") {
     return {
@@ -1263,7 +1264,7 @@ async function getDashboardKPIs({ ym }) {
 }
 
 // ----------------- Export -----------------
-export const financeGateway = {
+export const mockGateway = {
   // alunos
   listStudents,
   createStudent,
@@ -1360,4 +1361,3 @@ export const financeGateway = {
   },
 };
 
-export const FINANCE_ADAPTER = "mock";

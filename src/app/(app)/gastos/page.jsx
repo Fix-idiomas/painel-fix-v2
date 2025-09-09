@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";            // ⬅️ NEW
+import Guard from "@/components/Guard";                  // ⬅️ NEW
+import { useSession } from "@/contexts/SessionContext";  // ⬅️ NEW
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
 
@@ -9,6 +12,18 @@ const fmtBRL = (n) =>
 const fmtBR = (s) => (s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-");
 
 export default function GastosPage() {
+  const router = useRouter();                 // ⬅️ NEW
+  const { session } = useSession();           // ⬅️ NEW
+
+  // 🚫 professor não acessa Gastos → manda para Agenda
+  useEffect(() => {
+    if (session?.role === "professor") {
+      router.replace("/agenda");
+    }
+  }, [session?.role, router]);
+
+  if (session?.role === "professor") return null;
+
   const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
   const [status, setStatus] = useState("all");      // all | pending | paid | canceled
   const [costCenter, setCostCenter] = useState("all"); // all | PJ | PF
@@ -214,278 +229,292 @@ export default function GastosPage() {
   }
 
   return (
-    <main className="p-6 space-y-8">
-      {/* Header / Filtros */}
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-bold">Gastos</h1>
+    <Guard roles={["admin", "financeiro"]}>
+      <main className="p-6 space-y-8">
+        {/* Header / Filtros */}
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-bold">Gastos</h1>
 
-        <input
-          type="month"
-          value={ym}
-          onChange={(e) => setYm(e.target.value.slice(0, 7))}
-          className="border rounded px-2 py-1"
-        />
+          <input
+            type="month"
+            value={ym}
+            onChange={(e) => setYm(e.target.value.slice(0, 7))}
+            className="border rounded px-2 py-1"
+          />
 
-        <select
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-          className="border rounded px-2 py-1"
-        >
-          <option value="all">Todos</option>
-          <option value="pending">Pendentes</option>
-          <option value="paid">Pagos</option>
-          <option value="canceled">Cancelados</option>
-        </select>
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            className="border rounded px-2 py-1"
+          >
+            <option value="all">Todos</option>
+            <option value="pending">Pendentes</option>
+            <option value="paid">Pagos</option>
+            <option value="canceled">Cancelados</option>
+          </select>
 
-        <select
-          value={costCenter}
-          onChange={(e) => setCostCenter(e.target.value)}
-          className="border rounded px-2 py-1"
-        >
-          <option value="all">Todos os centros</option>
-          <option value="PJ">PJ (Empresa)</option>
-          <option value="PF">PF (Pessoal)</option>
-        </select>
+          <select
+            value={costCenter}
+            onChange={(e) => setCostCenter(e.target.value)}
+            className="border rounded px-2 py-1"
+          >
+            <option value="all">Todos os centros</option>
+            <option value="PJ">PJ (Empresa)</option>
+            <option value="PF">PF (Pessoal)</option>
+          </select>
 
-        <button onClick={onPreview} className="border rounded px-3 py-2">
-          Prévia / Gerar
-        </button>
-        <button onClick={openAvulsoModal} className="border rounded px-3 py-2">
-          + Avulso
-        </button>
-      </div>
-
-      {/* KPIs */}
-      <section className="grid sm:grid-cols-4 gap-3">
-        <KpiCard title="Total do mês" value={fmtBRL(kpis.total)} />
-        <KpiCard title="Pagos" value={fmtBRL(kpis.paid)} />
-        <KpiCard title="Pendentes" value={fmtBRL(kpis.pending)} />
-        <KpiCard title="Em atraso" value={fmtBRL(kpis.overdue)} />
-      </section>
-
-      {/* Lançamentos do mês */}
-      <section className="border rounded overflow-auto">
-        <div className="p-3 border-b font-semibold">Lançamentos do mês</div>
-        {loading ? (
-          <div className="p-4">Carregando…</div>
-        ) : rows.length === 0 ? (
-          <div className="p-4">Sem lançamentos para este filtro.</div>
-        ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <Th>Vencimento</Th>
-                <Th>Título</Th>
-                <Th>Categoria</Th>
-                <Th>Centro</Th>
-                <Th>Valor</Th>
-                <Th>Status</Th>
-                <Th>Ações</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className="border-t">
-                  <Td>{fmtBR(r.due_date)}</Td>
-                  <Td>{r.title_snapshot}</Td>
-                  <Td>{r.category || "-"}</Td>
-                  <Td>{r.cost_center || "-"}</Td>
-                  <Td>{fmtBRL(r.amount)}</Td>
-                  <Td>{r.status}</Td>
-                  <Td className="py-2">
-                    <div className="flex gap-2">
-                      {r.status !== "paid" && (
-                        <button
-                          onClick={() => markPaid(r.id)}
-                          className="px-2 py-1 border rounded"
-                        >
-                          Marcar pago
-                        </button>
-                      )}
-                      {r.status === "paid" && (
-                        <button
-                          onClick={() => reopen(r.id)}
-                          className="px-2 py-1 border rounded"
-                        >
-                          Reabrir
-                        </button>
-                      )}
-                      {r.status !== "canceled" && (
-                        <button
-                          onClick={() => cancel(r.id)}
-                          className="px-2 py-1 border rounded"
-                        >
-                          Cancelar
-                        </button>
-                      )}
-                      <button
-                        onClick={() => delEntry(r.id)}
-                        className="px-2 py-1 border rounded"
-                      >
-                        Excluir
-                      </button>
-                    </div>
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-
-      {/* Recorrentes */}
-      <section className="border rounded overflow-auto">
-        <div className="flex items-center justify-between p-3 border-b">
-          <div className="font-semibold">Despesas recorrentes</div>
-          <button onClick={openCreateTpl} className="border rounded px-3 py-2">
-            + Nova recorrente
+          <button onClick={onPreview} className="border rounded px-3 py-2">
+            Prévia / Gerar
+          </button>
+          <button onClick={openAvulsoModal} className="border rounded px-3 py-2">
+            + Avulso
           </button>
         </div>
-        {templates.length === 0 ? (
-          <div className="p-4">Nenhuma recorrente cadastrada.</div>
-        ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <Th>Título</Th>
-                <Th>Categoria</Th>
-                <Th>Centro</Th>
-                <Th>Frequência</Th>
-                <Th>Vencimento</Th>
-                <Th>Valor</Th>
-                <Th>Status</Th>
-                <Th>Ações</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {templates.map((t) => (
-                <tr key={t.id} className="border-t">
-                  <Td>{t.title}</Td>
-                  <Td>{t.category || "-"}</Td>
-                  <Td>{t.cost_center || "-"}</Td>
-                  <Td>{t.frequency === "annual" ? "Anual" : "Mensal"}</Td>
-                  <Td>
-                    {t.frequency === "annual"
-                      ? `Mês ${t.due_month} • Dia ${t.due_day}`
-                      : `Dia ${t.due_day}`}
-                  </Td>
-                  <Td>{fmtBRL(t.amount)}</Td>
-                  <Td>{t.active ? "ativo" : "inativo"}</Td>
-                  <Td className="py-2">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => openEditTplModal(t)}
-                        className="px-2 py-1 border rounded"
-                      >
-                        Editar
-                      </button>
-                      <button
-                        onClick={() => onDeleteTpl(t)}
-                        className="px-2 py-1 border rounded"
-                      >
-                        Excluir
-                      </button>
-                    </div>
-                  </Td>
+
+        {/* KPIs */}
+        <section className="grid sm:grid-cols-4 gap-3">
+          <KpiCard title="Total do mês" value={fmtBRL(kpis.total)} />
+          <KpiCard title="Pagos" value={fmtBRL(kpis.paid)} />
+          <KpiCard title="Pendentes" value={fmtBRL(kpis.pending)} />
+          <KpiCard title="Em atraso" value={fmtBRL(kpis.overdue)} />
+        </section>
+
+        {/* Lançamentos do mês */}
+        <section className="border rounded overflow-auto">
+          <div className="p-3 border-b font-semibold">Lançamentos do mês</div>
+          {loading ? (
+            <div className="p-4">Carregando…</div>
+          ) : rows.length === 0 ? (
+            <div className="p-4">Sem lançamentos para este filtro.</div>
+          ) : (
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <Th>Vencimento</Th>
+                  <Th>Título</Th>
+                  <Th>Categoria</Th>
+                  <Th>Centro</Th>
+                  <Th>Valor</Th>
+                  <Th>Status</Th>
+                  <Th>Ações</Th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className="border-t">
+                    <Td>{fmtBR(r.due_date)}</Td>
+                    <Td>{r.title_snapshot}</Td>
+                    <Td>{r.category || "-"}</Td>
+                    <Td>{r.cost_center || "-"}</Td>
+                    <Td>{fmtBRL(r.amount)}</Td>
+                    <Td>{r.status}</Td>
+                    <Td className="py-2">
+                      <div className="flex gap-2">
+                        {r.status !== "paid" && (
+                          <button
+                            onClick={() => markPaid(r.id)}
+                            className="px-2 py-1 border rounded"
+                          >
+                            Marcar pago
+                          </button>
+                        )}
+                        {r.status === "paid" && (
+                          <button
+                            onClick={() => reopen(r.id)}
+                            className="px-2 py-1 border rounded"
+                          >
+                            Reabrir
+                          </button>
+                        )}
+                        {r.status !== "canceled" && (
+                          <button
+                            onClick={() => cancel(r.id)}
+                            className="px-2 py-1 border rounded"
+                          >
+                            Cancelar
+                          </button>
+                        )}
+                        <button
+                          onClick={() => delEntry(r.id)}
+                          className="px-2 py-1 border rounded"
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
 
-      {/* Modal: recorrente */}
-      <Modal
-        open={openEditTpl}
-        onClose={() => setOpenEditTpl(false)}
-        title={tplId ? "Editar recorrente" : "Nova recorrente"}
-        footer={
-          <>
-            <button onClick={() => setOpenEditTpl(false)} className="px-3 py-2 border rounded">
-              Cancelar
+        {/* Recorrentes */}
+        <section className="border rounded overflow-auto">
+          <div className="flex items-center justify-between p-3 border-b">
+            <div className="font-semibold">Despesas recorrentes</div>
+            <button onClick={openCreateTpl} className="border rounded px-3 py-2">
+              + Nova recorrente
             </button>
-            <button
-              onClick={onSubmitTpl}
-              disabled={savingTpl}
-              className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
-            >
-              {savingTpl ? "Salvando…" : "Salvar"}
-            </button>
-          </>
-        }
-      >
-        <form onSubmit={onSubmitTpl} className="grid gap-3 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <label className="block text-sm mb-1">Título*</label>
-            <input
-              value={formTpl.title}
-              onChange={(e) => setFormTpl((f) => ({ ...f, title: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
-            />
           </div>
+          {templates.length === 0 ? (
+            <div className="p-4">Nenhuma recorrente cadastrada.</div>
+          ) : (
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <Th>Título</Th>
+                  <Th>Categoria</Th>
+                  <Th>Centro</Th>
+                  <Th>Frequência</Th>
+                  <Th>Vencimento</Th>
+                  <Th>Valor</Th>
+                  <Th>Status</Th>
+                  <Th>Ações</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {templates.map((t) => (
+                  <tr key={t.id} className="border-t">
+                    <Td>{t.title}</Td>
+                    <Td>{t.category || "-"}</Td>
+                    <Td>{t.cost_center || "-"}</Td>
+                    <Td>{t.frequency === "annual" ? "Anual" : "Mensal"}</Td>
+                    <Td>
+                      {t.frequency === "annual"
+                        ? `Mês ${t.due_month} • Dia ${t.due_day}`
+                        : `Dia ${t.due_day}`}
+                    </Td>
+                    <Td>{fmtBRL(t.amount)}</Td>
+                    <Td>{t.active ? "ativo" : "inativo"}</Td>
+                    <Td className="py-2">
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => openEditTplModal(t)}
+                          className="px-2 py-1 border rounded"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          onClick={() => onDeleteTpl(t)}
+                          className="px-2 py-1 border rounded"
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
 
-          <div>
-            <label className="block text-sm mb-1">Categoria</label>
-            <input
-              value={formTpl.category}
-              onChange={(e) => setFormTpl((f) => ({ ...f, category: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1">Valor (R$)*</label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={formTpl.amount}
-              onChange={(e) => setFormTpl((f) => ({ ...f, amount: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1">Centro de custos*</label>
-            <select
-              value={formTpl.cost_center}
-              onChange={(e) => setFormTpl((f) => ({ ...f, cost_center: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-            >
-              <option value="PJ">PJ</option>
-              <option value="PF">PF</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1">Frequência*</label>
-            <select
-              value={formTpl.frequency}
-              onChange={(e) => setFormTpl((f) => ({ ...f, frequency: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-            >
-              <option value="monthly">Mensal</option>
-              <option value="annual">Anual</option>
-            </select>
-          </div>
-
-          {formTpl.frequency === "annual" ? (
+        {/* Modal: recorrente */}
+        <Modal
+          open={openEditTpl}
+          onClose={() => setOpenEditTpl(false)}
+          title={tplId ? "Editar recorrente" : "Nova recorrente"}
+          footer={
             <>
+              <button onClick={() => setOpenEditTpl(false)} className="px-3 py-2 border rounded">
+                Cancelar
+              </button>
+              <button
+                onClick={onSubmitTpl}
+                disabled={savingTpl}
+                className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
+              >
+                {savingTpl ? "Salvando…" : "Salvar"}
+              </button>
+            </>
+          }
+        >
+          <form onSubmit={onSubmitTpl} className="grid gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="block text-sm mb-1">Título*</label>
+              <input
+                value={formTpl.title}
+                onChange={(e) => setFormTpl((f) => ({ ...f, title: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm mb-1">Categoria</label>
+              <input
+                value={formTpl.category}
+                onChange={(e) => setFormTpl((f) => ({ ...f, category: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm mb-1">Valor (R$)*</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={formTpl.amount}
+                onChange={(e) => setFormTpl((f) => ({ ...f, amount: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm mb-1">Centro de custos*</label>
+              <select
+                value={formTpl.cost_center}
+                onChange={(e) => setFormTpl((f) => ({ ...f, cost_center: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+              >
+                <option value="PJ">PJ</option>
+                <option value="PF">PF</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm mb-1">Frequência*</label>
+              <select
+                value={formTpl.frequency}
+                onChange={(e) => setFormTpl((f) => ({ ...f, frequency: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+              >
+                <option value="monthly">Mensal</option>
+                <option value="annual">Anual</option>
+              </select>
+            </div>
+
+            {formTpl.frequency === "annual" ? (
+              <>
+                <div>
+                  <label className="block text-sm mb-1">Mês</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="12"
+                    value={formTpl.due_month}
+                    onChange={(e) => setFormTpl((f) => ({ ...f, due_month: e.target.value }))}
+                    className="border rounded px-3 py-2 w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Dia</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="28"
+                    value={formTpl.due_day}
+                    onChange={(e) => setFormTpl((f) => ({ ...f, due_day: e.target.value }))}
+                    className="border rounded px-3 py-2 w-full"
+                  />
+                </div>
+              </>
+            ) : (
               <div>
-                <label className="block text-sm mb-1">Mês</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="12"
-                  value={formTpl.due_month}
-                  onChange={(e) => setFormTpl((f) => ({ ...f, due_month: e.target.value }))}
-                  className="border rounded px-3 py-2 w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-sm mb-1">Dia</label>
+                <label className="block text-sm mb-1">Dia de vencimento</label>
                 <input
                   type="number"
                   min="1"
@@ -495,112 +524,100 @@ export default function GastosPage() {
                   className="border rounded px-3 py-2 w-full"
                 />
               </div>
+            )}
+
+            <div className="sm:col-span-2">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={formTpl.active}
+                  onChange={(e) => setFormTpl((f) => ({ ...f, active: e.target.checked }))}
+                />
+                <span>Ativo</span>
+              </label>
+            </div>
+          </form>
+        </Modal>
+
+        {/* Modal: lançamento avulso */}
+        <Modal
+          open={openAvulso}
+          onClose={() => setOpenAvulso(false)}
+          title="Lançamento avulso"
+          footer={
+            <>
+              <button onClick={() => setOpenAvulso(false)} className="px-3 py-2 border rounded">
+                Cancelar
+              </button>
+              <button
+                onClick={onSubmitAvulso}
+                disabled={savingAvulso}
+                className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
+              >
+                {savingAvulso ? "Salvando…" : "Salvar"}
+              </button>
             </>
-          ) : (
+          }
+        >
+          <form onSubmit={onSubmitAvulso} className="grid gap-3 sm:grid-cols-2">
             <div>
-              <label className="block text-sm mb-1">Dia de vencimento</label>
+              <label className="block text-sm mb-1">Data*</label>
+              <input
+                type="date"
+                value={formAvulso.date}
+                onChange={(e) => setFormAvulso((f) => ({ ...f, date: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm mb-1">Valor (R$)*</label>
               <input
                 type="number"
-                min="1"
-                max="28"
-                value={formTpl.due_day}
-                onChange={(e) => setFormTpl((f) => ({ ...f, due_day: e.target.value }))}
+                min="0"
+                step="0.01"
+                value={formAvulso.amount}
+                onChange={(e) => setFormAvulso((f) => ({ ...f, amount: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+                required
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-sm mb-1">Título*</label>
+              <input
+                value={formAvulso.title}
+                onChange={(e) => setFormAvulso((f) => ({ ...f, title: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+                required
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-sm mb-1">Categoria</label>
+              <input
+                value={formAvulso.category}
+                onChange={(e) => setFormAvulso((f) => ({ ...f, category: e.target.value }))}
                 className="border rounded px-3 py-2 w-full"
               />
             </div>
-          )}
 
-          <div className="sm:col-span-2">
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={formTpl.active}
-                onChange={(e) => setFormTpl((f) => ({ ...f, active: e.target.checked }))}
-              />
-              <span>Ativo</span>
-            </label>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Modal: lançamento avulso */}
-      <Modal
-        open={openAvulso}
-        onClose={() => setOpenAvulso(false)}
-        title="Lançamento avulso"
-        footer={
-          <>
-            <button onClick={() => setOpenAvulso(false)} className="px-3 py-2 border rounded">
-              Cancelar
-            </button>
-            <button
-              onClick={onSubmitAvulso}
-              disabled={savingAvulso}
-              className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
-            >
-              {savingAvulso ? "Salvando…" : "Salvar"}
-            </button>
-          </>
-        }
-      >
-        <form onSubmit={onSubmitAvulso} className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="block text-sm mb-1">Data*</label>
-            <input
-              type="date"
-              value={formAvulso.date}
-              onChange={(e) => setFormAvulso((f) => ({ ...f, date: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1">Valor (R$)*</label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={formAvulso.amount}
-              onChange={(e) => setFormAvulso((f) => ({ ...f, amount: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
-            />
-          </div>
-
-          <div className="sm:col-span-2">
-            <label className="block text-sm mb-1">Título*</label>
-            <input
-              value={formAvulso.title}
-              onChange={(e) => setFormAvulso((f) => ({ ...f, title: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
-            />
-          </div>
-
-          <div className="sm:col-span-2">
-            <label className="block text-sm mb-1">Categoria</label>
-            <input
-              value={formAvulso.category}
-              onChange={(e) => setFormAvulso((f) => ({ ...f, category: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1">Centro de custos*</label>
-            <select
-              value={formAvulso.cost_center}
-              onChange={(e) => setFormAvulso((f) => ({ ...f, cost_center: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-            >
-              <option value="PJ">PJ</option>
-              <option value="PF">PF</option>
-            </select>
-          </div>
-        </form>
-      </Modal>
-    </main>
+            <div>
+              <label className="block text-sm mb-1">Centro de custos*</label>
+              <select
+                value={formAvulso.cost_center}
+                onChange={(e) => setFormAvulso((f) => ({ ...f, cost_center: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+              >
+                <option value="PJ">PJ</option>
+                <option value="PF">PF</option>
+              </select>
+            </div>
+          </form>
+        </Modal>
+      </main>
+    </Guard>
   );
 }
 

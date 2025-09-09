@@ -57,8 +57,8 @@ export default function AlunoEvolucaoPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className="border-t">
+              {rows.map((r, idx) => (
+                <tr key={r.id ?? (r.session_id && r.student_id ? `${r.session_id}:${r.student_id}` : `row-${idx}`)} className="border-t">
                   <Td>{fmtBR(r.session_date_snapshot)}</Td>
                   <Td>{r.turma_name_snapshot || "—"}</Td>
                   <Td>{r.present ? "Presente" : "Ausente"}</Td>

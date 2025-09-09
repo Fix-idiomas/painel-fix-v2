@@ -1,9 +1,11 @@
-// src/app/agenda/page.jsx
+// src/app/(app)/agenda/page.jsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { financeGateway } from "@/lib/financeGateway";
+import { useSession } from "@/contexts/SessionContext";
+import { plannedSlotsForRange } from "@/lib/agendaUtils";
 
 // Segunda como início de semana
 const startOfWeek = (d) => {
@@ -54,7 +56,7 @@ function buildPlannedOccurrencesForWeek(turma, weekStartISO) {
     });
   };
 
-  // Nova grade com múltiplos horários
+  // Nova grade com múltiplos horários (schedule[])
   if (Array.isArray(turma.schedule) && turma.schedule.length > 0) {
     for (const item of turma.schedule) {
       const weekday = item?.weekday;
@@ -80,15 +82,26 @@ function buildPlannedOccurrencesForWeek(turma, weekStartISO) {
 }
 
 export default function AgendaPage() {
+  const { session } = useSession();
+  const isProfessor = session?.role === "professor";
+  const myTeacherId = session?.teacherId ?? null;
+
   const [view, setView] = useState("today"); // "today" | "week"
   const [weekStart, setWeekStart] = useState(() => fmtDateISO(startOfWeek(new Date())));
-  const [teacherFilter, setTeacherFilter] = useState("all"); // "all" | teacher_id
+  const [teacherFilter, setTeacherFilter] = useState("all"); // "all" | teacher_id (forçado p/ professor)
   const [includeSessions, setIncludeSessions] = useState(false); // por padrão só previstas
 
   const [loading, setLoading] = useState(true);
   const [turmas, setTurmas] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [sessionsByTurma, setSessionsByTurma] = useState({});
+
+  // quando o usuário é professor, fixe o filtro no teacherId dele
+  useEffect(() => {
+    if (isProfessor && myTeacherId) {
+      setTeacherFilter(myTeacherId);
+    }
+  }, [isProfessor, myTeacherId]);
 
   const weekDays = useMemo(() => {
     const base = new Date(weekStart + "T00:00:00");
@@ -108,71 +121,85 @@ export default function AgendaPage() {
         financeGateway.listTeachers(),
       ]);
 
-      // pega sessões reais da semana (se quiser incluir depois)
+      // 🔐 RBAC: se professor, limita turmas e professores aos do próprio professor
+      const tsScoped = isProfessor && myTeacherId ? ts.filter(t => t.teacher_id === myTeacherId) : ts;
+      const thsScoped = isProfessor && myTeacherId ? ths.filter(t => t.id === myTeacherId) : ths;
+
+      // sessões reais da semana (para "incluir sessões registradas")
       const monday = new Date(weekStart + "T00:00:00");
       const sundayISO = fmtDateISO(addDays(monday, 6));
 
       const perTurma = {};
-      for (const t of ts) {
-        const sess = await financeGateway.listSessions(t.id);
-        perTurma[t.id] = sess.filter((s) => s.date >= weekStart && s.date <= sundayISO);
+      for (const t of tsScoped) {
+        // ✅ Espera { id,date,duration_hours,notes,has_attendance }
+        const sess = await financeGateway.listSessionsWithAttendance?.({
+          turmaId: t.id,
+          start: weekStart,
+          end: sundayISO,
+        });
+        perTurma[t.id] = Array.isArray(sess) ? sess : [];
       }
 
-      setTurmas(ts);
-      setTeachers(ths);
+      setTurmas(tsScoped);
+      setTeachers(thsScoped);
       setSessionsByTurma(perTurma);
       setLoading(false);
     })();
-  }, [weekStart]);
+  }, [weekStart, isProfessor, myTeacherId]);
 
   const teacherName = (id) => teachers.find((t) => t.id === id)?.name || "—";
 
   // Monta agenda da semana (previstas +, opcionalmente, registradas)
   const agendaByDay = useMemo(() => {
-    // Planejadas (sempre)
-    let planned = turmas.flatMap((t) => buildPlannedOccurrencesForWeek(t, weekStart));
+    const effectiveTeacher = isProfessor ? myTeacherId : teacherFilter;
 
-    // Filtra por professor (se escolhido)
-    if (teacherFilter !== "all") {
-      planned = planned.filter((ev) => ev.teacher_id === teacherFilter);
+    const monday = new Date(weekStart + "T00:00:00");
+    const sundayISO = fmtDateISO(addDays(monday, 6));
+
+    // (A) PLANEJADAS a partir das regras no intervalo da semana
+    let planned = turmas.flatMap((t) => plannedSlotsForRange(t, weekStart, sundayISO));
+    if (effectiveTeacher && effectiveTeacher !== "all") {
+      planned = planned.filter(ev => ev.teacher_id === effectiveTeacher);
     }
 
-    let combined = planned;
-
-    // Se marcar "incluir sessões", acrescenta
+    // (B) REAIS (registradas) — só entra se marcar o toggle
+    let real = [];
     if (includeSessions) {
-      let real = turmas.flatMap((t) =>
-        (sessionsByTurma[t.id] || []).map((s) => ({
-          type: "session",
-          turma_id: t.id,
-          turma_name: t.name,
-          teacher_id: t.teacher_id || null,
-          date: s.date,
-          time: null,
-          duration_hours: Number(s.duration_hours || 0),
-          notes: s.notes || "",
-        }))
+      real = turmas.flatMap((t) =>
+        (sessionsByTurma[t.id] || [])
+          .filter((s) => s.has_attendance) // ✅ somente realizadas
+          .map((s) => ({
+            type: "session",
+            turma_id: t.id,
+            turma_name: t.name,
+            teacher_id: t.teacher_id || null,
+            date: String(s.date).slice(0,10),
+            time: null,
+            duration_hours: Number(s.duration_hours || 0),
+            notes: s.notes || "",
+          }))
       );
-      if (teacherFilter !== "all") {
-        real = real.filter((ev) => ev.teacher_id === teacherFilter);
+      if (effectiveTeacher && effectiveTeacher !== "all") {
+        real = real.filter(ev => ev.teacher_id === effectiveTeacher);
       }
-      combined = [...planned, ...real];
     }
 
-    combined.sort((a, b) => {
-      const aKey = `${a.date}T${a.time || "00:00"}`;
-      const bKey = `${b.date}T${b.time || "00:00"}`;
-      return aKey.localeCompare(bKey);
-    });
+    // (C) Dedupe: se há real no mesmo dia/turma, remove a planejada correspondente
+    const realKeys = new Set(real.map(r => `${r.turma_id}|${r.date}`));
+    planned = planned.filter(p => !realKeys.has(`${p.turma_id}|${p.date}`));
+
+    // (D) Junta e agrupa por dia
+    const combined = includeSessions ? [...planned, ...real] : planned;
+    combined.sort((a, b) => `${a.date}T${a.time||"00:00"}`.localeCompare(`${b.date}T${b.time||"00:00"}`));
 
     const byDay = {};
     for (const d of weekDays) byDay[d.iso] = [];
     for (const ev of combined) {
-      if (!byDay[ev.date]) byDay[ev.date] = [];
-      byDay[ev.date].push(ev);
+      (byDay[ev.date] ||= []).push(ev);
     }
     return byDay;
-  }, [turmas, sessionsByTurma, weekStart, weekDays, teacherFilter, includeSessions]);
+  }, [turmas, sessionsByTurma, weekStart, weekDays, teacherFilter, includeSessions, isProfessor, myTeacherId]);
+
 
   const goPrevWeek  = () => setWeekStart(fmtDateISO(addDays(new Date(weekStart + "T00:00:00"), -7)));
   const goNextWeek  = () => setWeekStart(fmtDateISO(addDays(new Date(weekStart + "T00:00:00"),  7)));
@@ -186,23 +213,32 @@ export default function AgendaPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Link href="/" className="border rounded px-3 py-2">Voltar ao início</Link>
+          {/* Professor não tem "Voltar ao início" porque / é bloqueado */}
+          {!isProfessor && (
+            <Link href="/" className="border rounded px-3 py-2">Voltar ao início</Link>
+          )}
           <h1 className="text-2xl font-bold">Agenda</h1>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Filtro por professor */}
-          <select
-            value={teacherFilter}
-            onChange={(e) => setTeacherFilter(e.target.value)}
-            className="border rounded px-2 py-1"
-            title="Filtrar por professor"
-          >
-            <option value="all">Todos os professores</option>
-            {teachers.map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </select>
+          {/* 🔐 Professor: sem dropdown; Admin/Financeiro: filtro normal */}
+          {!isProfessor ? (
+            <select
+              value={teacherFilter}
+              onChange={(e) => setTeacherFilter(e.target.value)}
+              className="border rounded px-2 py-1"
+              title="Filtrar por professor"
+            >
+              <option value="all">Todos os professores</option>
+              {teachers.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          ) : (
+            <span className="text-sm text-slate-600 px-2 py-1 border rounded">
+              Professor: <b>{teacherName(myTeacherId)}</b>
+            </span>
+          )}
 
           {/* Alternância Hoje / Semana */}
           <div className="border rounded overflow-hidden">
@@ -239,8 +275,11 @@ export default function AgendaPage() {
           <div className="flex flex-wrap items-center justify-between gap-2 text-slate-700">
             <div>
               Semana de <b>{weekDays[0]?.label}</b> a <b>{weekDays[6]?.label}</b>
-              {teacherFilter !== "all" && (
+              {(!isProfessor && teacherFilter !== "all") && (
                 <span className="ml-2 text-slate-500">• Prof.: <b>{teacherName(teacherFilter)}</b></span>
+              )}
+              {isProfessor && myTeacherId && (
+                <span className="ml-2 text-slate-500">• Prof.: <b>{teacherName(myTeacherId)}</b></span>
               )}
             </div>
             <div className="flex items-center gap-2">
@@ -299,8 +338,11 @@ export default function AgendaPage() {
             <div className="p-3 border-b bg-gray-50 font-semibold flex items-center justify-between">
               <div>
                 Hoje — {new Date().toLocaleDateString("pt-BR")}
-                {teacherFilter !== "all" && (
+                {(!isProfessor && teacherFilter !== "all") && (
                   <span className="ml-2 text-slate-500">• Prof.: <b>{teacherName(teacherFilter)}</b></span>
+                )}
+                {isProfessor && myTeacherId && (
+                  <span className="ml-2 text-slate-500">• Prof.: <b>{teacherName(myTeacherId)}</b></span>
                 )}
               </div>
               <div className="text-slate-700 text-sm">

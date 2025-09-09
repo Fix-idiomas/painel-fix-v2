@@ -2,9 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { financeGateway } from "@/lib/financeGateway";
-import Modal from "@/components/Modal";
 import Link from "next/link";
+import Modal from "@/components/Modal";
+import { financeGateway } from "@/lib/financeGateway";
+// ⚠️ Ajuste esta importação conforme seu SessionContext exporta:
+// Se você tiver um hook `useSession()`, use assim. Se exporta o próprio contexto,
+// troque para useContext(SessionContext).
+import { useSession } from "@/contexts/SessionContext";
 
 const WEEKDAYS = [
   { value: "1", label: "Segunda" },
@@ -16,38 +20,41 @@ const WEEKDAYS = [
   { value: "0", label: "Domingo" },
 ];
 const labelWeekday = (n) => {
-  const found = WEEKDAYS.find(w => Number(w.value) === Number(n));
+  const found = WEEKDAYS.find((w) => Number(w.value) === Number(n));
   return found ? found.label : "—";
-  
 };
-
 
 const fmtBR = (s) => (s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-");
 const fmtNum = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
 // mês atual no formato yyyy-mm para o link do relatório
 const ym = new Date().toISOString().slice(0, 7);
-const weekdayOf = (isoDate) => {
-  // 0..6 (Dom..Sáb)
-  const d = new Date(isoDate + "T00:00:00");
-  return d.getDay();
-};
 
 const fmtDuration = (h) =>
   Number(h || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 const describeRule = (r) => {
-  const w = (r.weekday === 0 || r.weekday) ? labelWeekday(r.weekday) : "—";
+  const w = r.weekday === 0 || r.weekday ? labelWeekday(r.weekday) : "—";
   const hhmm = r.time ? `às ${r.time}` : "";
   const dur = r.duration_hours ? ` • ${fmtDuration(r.duration_hours)}h` : "";
   return `${w} ${hhmm}${dur}`.trim();
 };
 
+// Helpers RBAC
+const norm = (v) => (v === undefined || v === null ? "" : String(v));
 
 export default function TurmaDetailPage() {
   const params = useParams();
   const router = useRouter();
   const turmaId = Array.isArray(params?.id) ? params.id[0] : params?.id;
+
+  // --- Sessão / RBAC ---
+  const sessionCtx = useSession?.() ?? {};
+  const session = sessionCtx.session ?? sessionCtx;
+  const ready = sessionCtx.ready ?? true;
+  const role = session?.role ?? "admin";
+  const teacherId = session?.teacherId ?? null;
+  const isProfessor = role === "professor";
 
   const [turma, setTurma] = useState(null);
   const [teachers, setTeachers] = useState([]);
@@ -56,21 +63,41 @@ export default function TurmaDetailPage() {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // ---- turma
+  // ---- turma (somente admin/financeiro)
   const [openEdit, setOpenEdit] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
-  const [formTurma, setFormTurma] = useState({ name: "", teacher_id: "", capacity: 20, meeting_rules: [],});
+  const [formTurma, setFormTurma] = useState({
+    name: "",
+    teacher_id: "",
+    capacity: 20,
+    meeting_rules: [],
+  });
 
-  // ---- sessão (unificado)
+  // ---- sessão (professor pode criar/editar)
   const [openSess, setOpenSess] = useState(false);
   const [savingSess, setSavingSess] = useState(false);
   const [editingSessId, setEditingSessId] = useState(null);
-  const [formSess, setFormSess] = useState({ date: "", notes: "", duration_hours: "0.5" }); // default 0.5
+  const [formSess, setFormSess] = useState({ date: "", notes: "", duration_hours: "0.5" });
   const [attendanceDraft, setAttendanceDraft] = useState([]); // [{student_id, name, present, note}]
   const [allPresent, setAllPresent] = useState(false);
 
-  // ---- membros
+  // ---- membros (somente admin/financeiro)
   const [addStudentId, setAddStudentId] = useState("");
+
+  // Tenta obter um teacherId efetivo para professor
+  const effectiveTeacherId = useMemo(() => {
+    if (!isProfessor) return null;
+    if (teacherId) return norm(teacherId);
+    // inferir por user_id
+    const byUser = teachers.find((t) => norm(t.user_id ?? t.userId) === norm(session?.userId));
+    if (byUser?.id) return norm(byUser.id);
+    // fallback por nome
+    const byName = teachers.find(
+      (t) => (t.name || "").trim() === (session?.name || "").trim()
+    );
+    if (byName?.id) return norm(byName.id);
+    return null;
+  }, [isProfessor, teacherId, teachers, session?.userId, session?.name]);
 
   async function loadAll() {
     setLoading(true);
@@ -99,8 +126,20 @@ export default function TurmaDetailPage() {
   }
 
   useEffect(() => {
-    if (turmaId) loadAll();
-  }, [turmaId]);
+    if (!ready || !turmaId) return;
+    loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, turmaId]);
+
+  // Se professor tentar abrir turma que não é dele, bloqueia
+  useEffect(() => {
+    if (!ready || !isProfessor || !turma) return;
+    if (!effectiveTeacherId) return; // Mostramos aviso na UI; sem teacherId efetivo, não dá para validar
+    if (norm(turma.teacher_id ?? turma.teacherId) !== effectiveTeacherId) {
+      alert("Você não tem acesso a esta turma.");
+      router.replace("/turmas");
+    }
+  }, [ready, isProfessor, turma, effectiveTeacherId, router]);
 
   const teacherName = useMemo(() => {
     if (!turma?.teacher_id) return "—";
@@ -114,18 +153,21 @@ export default function TurmaDetailPage() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [allStudents, members]);
 
-  // turma
+  // turma (somente admin/financeiro)
   function openEditTurma() {
+    if (isProfessor) return; // RBAC
     setFormTurma({
       name: turma?.name || "",
       teacher_id: turma?.teacher_id || "",
       capacity: turma?.capacity || 20,
-      meeting_rules: Array.isArray(turma?.meeting_rules) ? turma.meeting_rules.map(r => ({
-    weekday: (r.weekday === 0 || r.weekday) ? String(r.weekday) : "",
-    time: r.time || "",
-    duration_hours: String(r.duration_hours ?? "0.5"),
-  })) : [],
-});
+      meeting_rules: Array.isArray(turma?.meeting_rules)
+        ? turma.meeting_rules.map((r) => ({
+            weekday: r.weekday === 0 || r.weekday ? String(r.weekday) : "",
+            time: r.time || "",
+            duration_hours: String(r.duration_hours ?? "0.5"),
+          }))
+        : [],
+    });
     setOpenEdit(true);
   }
   function closeEditTurma() {
@@ -134,18 +176,19 @@ export default function TurmaDetailPage() {
   }
   async function onSubmitTurma(e) {
     e?.preventDefault?.();
+    if (isProfessor) return; // RBAC
     try {
       setSavingEdit(true);
       await financeGateway.updateTurma(turma.id, {
-  name: (formTurma.name || "").trim(),
-  teacher_id: formTurma.teacher_id || null,
-  capacity: Number(formTurma.capacity || 20),
-  meeting_rules: (formTurma.meeting_rules || []).map(r => ({
-    weekday: r.weekday === "" ? null : Number(r.weekday),
-    time: r.time || null,
-    duration_hours: Number(r.duration_hours || 0.5),
-  })),
-});
+        name: (formTurma.name || "").trim(),
+        teacher_id: formTurma.teacher_id || null,
+        capacity: Number(formTurma.capacity || 20),
+        meeting_rules: (formTurma.meeting_rules || []).map((r) => ({
+          weekday: r.weekday === "" ? null : Number(r.weekday),
+          time: r.time || null,
+          duration_hours: Number(r.duration_hours || 0.5),
+        })),
+      });
       setOpenEdit(false);
       await loadAll();
     } catch (e) {
@@ -155,30 +198,31 @@ export default function TurmaDetailPage() {
     }
   }
 
-  // sessão (unificado)
+  // sessão (professor pode criar/editar)
   function computeAllPresent(arr) {
     if (!arr || arr.length === 0) return false;
     return arr.every((r) => !!r.present);
   }
-
   function recomputeAllPresentFromDraft(nextDraft) {
     setAllPresent(nextDraft.length > 0 && nextDraft.every((r) => !!r.present));
   }
-
   function openCreateSession() {
     setEditingSessId(null);
-    setFormSess({ date: "", notes: "", duration_hours: String(turma?.meeting_duration_default ?? "0.5") }); // default 30 min
+    setFormSess({
+      date: "",
+      notes: "",
+      duration_hours: String(turma?.meeting_duration_default ?? "0.5"),
+    });
     const draft = members.map((m) => ({
       student_id: m.id,
       name: m.name,
-      present: false, // por padrão AUSENTE (explícito)
+      present: false, // por padrão AUSENTE
       note: "",
     }));
     setAttendanceDraft(draft);
     setAllPresent(computeAllPresent(draft));
     setOpenSess(true);
   }
-
   async function openEditSession(s) {
     setEditingSessId(s.id);
     setFormSess({
@@ -191,39 +235,36 @@ export default function TurmaDetailPage() {
     const draft = members.map((m) => ({
       student_id: m.id,
       name: m.name,
-      present: byStu.get(m.id)?.present ?? false, // explicitamente ausente se não marcado
+      present: byStu.get(m.id)?.present ?? false,
       note: byStu.get(m.id)?.note ?? "",
     }));
     setAttendanceDraft(draft);
     setAllPresent(computeAllPresent(draft));
     setOpenSess(true);
   }
-
   function closeSess() {
     if (savingSess) return;
     setOpenSess(false);
   }
-
   function setAllPresentValue(value) {
     const next = !!value;
     setAllPresent(next);
     const draft = attendanceDraft.map((r) => ({ ...r, present: next }));
     setAttendanceDraft(draft);
   }
-
   async function onSubmitSess(e) {
     e?.preventDefault?.();
     try {
       setSavingSess(true);
       if (!formSess.date) throw new Error("Data é obrigatória.");
 
-      const enrolledNow = members.filter(m => m.status === "ativo").length;
-      
+      const enrolledNow = members.filter((m) => m.status === "ativo").length;
+
       const payload = {
         date: formSess.date,
         notes: formSess.notes,
         duration_hours: Number(formSess.duration_hours || 0.5),
-        headcount_snapshot: enrolledNow
+        headcount_snapshot: enrolledNow,
       };
 
       let sessionId = editingSessId;
@@ -240,7 +281,7 @@ export default function TurmaDetailPage() {
       if (!sessionId) throw new Error("Falha ao obter o ID da sessão.");
       for (const row of attendanceDraft) {
         await financeGateway.upsertAttendance(sessionId, row.student_id, {
-          present: !!row.present, // true = presente; false = ausente
+          present: !!row.present,
           note: row.note || "",
         });
       }
@@ -253,28 +294,33 @@ export default function TurmaDetailPage() {
       setSavingSess(false);
     }
   }
-
   async function onDeleteSess(s) {
     if (!confirm(`Excluir sessão de ${fmtBR(s.date)}?`)) return;
     await financeGateway.deleteSession(s.id);
     await loadAll();
   }
 
-  // membros
+  // membros (somente admin/financeiro)
   async function onAddMember() {
+    if (isProfessor) return; // RBAC
     if (!addStudentId) return;
     await financeGateway.addStudentToTurma(turma.id, addStudentId);
     setAddStudentId("");
     await loadAll();
   }
   async function onRemoveMember(student_id) {
+    if (isProfessor) return; // RBAC
     if (!confirm("Remover aluno desta turma?")) return;
     await financeGateway.removeStudentFromTurma(turma.id, student_id);
     await loadAll();
   }
 
+  if (!ready) return <main className="p-6">Preparando sessão…</main>;
   if (loading) return <main className="p-6">Carregando…</main>;
   if (!turma) return null;
+
+  const professorSemVinculo =
+    isProfessor && !effectiveTeacherId && (teachers?.length ?? 0) > 0;
 
   return (
     <main className="p-6 space-y-8">
@@ -282,26 +328,40 @@ export default function TurmaDetailPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">{turma.name}</h1>
-          <div className="text-slate-600 mt-1">
-  Professor: <b>{teacherName}</b> • Capacidade: <b>{turma.capacity}</b> • Alunos: <b>{members.length}</b>
-  <br className="hidden sm:block" />
-  Encontros:{" "}
-  <b>
-    {Array.isArray(turma.meeting_rules) && turma.meeting_rules.length > 0
-      ? turma.meeting_rules.map(describeRule).join("; ")
-      : "—"}
-  </b>
-</div>
 
+          {professorSemVinculo && (
+            <div className="mt-2 text-xs px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-200">
+              Professor sem vínculo detectado. Defina <code>session.teacherId</code> ou crie um
+              professor com <code>user_id</code> = <code>{session?.userId || "?"}</code> no mock.
+            </div>
+          )}
+
+          <div className="text-slate-600 mt-2">
+            Professor: <b>{teacherName}</b> • Capacidade: <b>{turma.capacity}</b> • Alunos:{" "}
+            <b>{members.length}</b>
+            <br className="hidden sm:block" />
+            Encontros:{" "}
+            <b>
+              {Array.isArray(turma.meeting_rules) && turma.meeting_rules.length > 0
+                ? turma.meeting_rules.map(describeRule).join("; ")
+                : "—"}
+            </b>
+          </div>
         </div>
+
         <div className="flex gap-2">
           <button onClick={() => router.push("/turmas")} className="border rounded px-3 py-2">
             Voltar
           </button>
-          <button onClick={openEditTurma} className="border rounded px-3 py-2">
-            Editar turma
-          </button>
-          {/* NOVO: botão Relatório (mês atual + turma atual) */}
+
+          {/* 🔒 Editar turma: apenas não-professor */}
+          {!isProfessor && (
+            <button onClick={openEditTurma} className="border rounded px-3 py-2">
+              Editar turma
+            </button>
+          )}
+
+          {/* Relatório liberado para todos (se quiser restringir, mova para !isProfessor) */}
           <Link
             href={`/relatorios/assiduidade?turma=${turma.id}&ym=${ym}`}
             className="border rounded px-3 py-2"
@@ -311,27 +371,30 @@ export default function TurmaDetailPage() {
         </div>
       </div>
 
-      {/* Alunos */}
+      {/* Alunos (somente não-professor enxerga controles) */}
       <section className="border rounded overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b">
           <h2 className="font-semibold">Alunos da turma</h2>
-          <div className="flex gap-2">
-            <select
-              value={addStudentId}
-              onChange={(e) => setAddStudentId(e.target.value)}
-              className="border rounded px-3 py-2 min-w-[260px]"
-            >
-              <option value="">— adicionar aluno (somente ativos) —</option>
-              {candidates.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-            <button onClick={onAddMember} className="border rounded px-3 py-2">
-              Adicionar
-            </button>
-          </div>
+
+          {!isProfessor && (
+            <div className="flex gap-2">
+              <select
+                value={addStudentId}
+                onChange={(e) => setAddStudentId(e.target.value)}
+                className="border rounded px-3 py-2 min-w-[260px]"
+              >
+                <option value="">— adicionar aluno (somente ativos) —</option>
+                {candidates.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+              <button onClick={onAddMember} className="border rounded px-3 py-2">
+                Adicionar
+              </button>
+            </div>
+          )}
         </div>
 
         {members.length === 0 ? (
@@ -342,7 +405,7 @@ export default function TurmaDetailPage() {
               <tr>
                 <Th>Aluno</Th>
                 <Th>Status</Th>
-                <Th>Ações</Th>
+                {!isProfessor && <Th>Ações</Th>}
               </tr>
             </thead>
             <tbody>
@@ -350,13 +413,18 @@ export default function TurmaDetailPage() {
                 <tr key={m.id} className="border-t">
                   <Td>{m.name}</Td>
                   <Td>{m.status}</Td>
-                  <Td className="py-2">
-                    <div className="flex gap-2">
-                      <button onClick={() => onRemoveMember(m.id)} className="px-2 py-1 border rounded">
-                        Remover
-                      </button>
-                    </div>
-                  </Td>
+                  {!isProfessor && (
+                    <Td className="py-2">
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => onRemoveMember(m.id)}
+                          className="px-2 py-1 border rounded"
+                        >
+                          Remover
+                        </button>
+                      </div>
+                    </Td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -408,174 +476,180 @@ export default function TurmaDetailPage() {
         )}
       </section>
 
-      {/* MODAL: Editar Turma */}
-      <Modal
-        open={openEdit}
-        onClose={closeEditTurma}
-        title="Editar turma"
-        footer={
-          <>
-            <button
-              onClick={closeEditTurma}
-              className="px-3 py-2 border rounded disabled:opacity-50"
-              disabled={savingEdit}
-            >
-              Cancelar
-            </button>
-            <button
-              onClick={onSubmitTurma}
-              className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
-              disabled={savingEdit}
-            >
-              {savingEdit ? "Salvando…" : "Salvar"}
-            </button>
-          </>
-        }
-      >
-        <form onSubmit={onSubmitTurma} className="grid gap-3 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <label className="block text-sm mb-1">Nome*</label>
-            <input
-              value={formTurma.name}
-              onChange={(e) => setFormTurma((f) => ({ ...f, name: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1">Professor</label>
-            <select
-              value={formTurma.teacher_id}
-              onChange={(e) => setFormTurma((f) => ({ ...f, teacher_id: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-            >
-              <option value="">— sem professor —</option>
-              {teachers.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm mb-1">Capacidade</label>
-            <input
-              type="number"
-              min="1"
-              value={formTurma.capacity}
-              onChange={(e) => setFormTurma((f) => ({ ...f, capacity: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-            />
-          </div>
-          <div>
-  {/* Encontros (vários) */}
-<div className="sm:col-span-2">
-  <div className="flex items-center justify-between mb-1">
-    <label className="block text-sm font-medium">Encontros na semana</label>
-    <button
-      type="button"
-      onClick={() =>
-        setFormTurma(f => ({
-          ...f,
-          meeting_rules: [...(f.meeting_rules || []), { weekday: "", time: "", duration_hours: "0.5" }],
-        }))
-      }
-      className="px-2 py-1 border rounded text-sm"
-    >
-      + Adicionar encontro
-    </button>
-  </div>
+      {/* MODAL: Editar Turma (somente não-professor) */}
+      {!isProfessor && (
+        <Modal
+          open={openEdit}
+          onClose={closeEditTurma}
+          title="Editar turma"
+          footer={
+            <>
+              <button
+                onClick={closeEditTurma}
+                className="px-3 py-2 border rounded disabled:opacity-50"
+                disabled={savingEdit}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={onSubmitTurma}
+                className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
+                disabled={savingEdit}
+              >
+                {savingEdit ? "Salvando…" : "Salvar"}
+              </button>
+            </>
+          }
+        >
+          <form onSubmit={onSubmitTurma} className="grid gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="block text-sm mb-1">Nome*</label>
+              <input
+                value={formTurma.name}
+                onChange={(e) => setFormTurma((f) => ({ ...f, name: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm mb-1">Professor</label>
+              <select
+                value={formTurma.teacher_id}
+                onChange={(e) => setFormTurma((f) => ({ ...f, teacher_id: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+              >
+                <option value="">— sem professor —</option>
+                {teachers.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm mb-1">Capacidade</label>
+              <input
+                type="number"
+                min="1"
+                value={formTurma.capacity}
+                onChange={(e) => setFormTurma((f) => ({ ...f, capacity: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+              />
+            </div>
 
-  {(formTurma.meeting_rules || []).length === 0 ? (
-    <div className="text-slate-500 text-sm">Nenhum encontro definido.</div>
-  ) : (
-    <div className="space-y-4">
-      {(formTurma.meeting_rules || []).map((r, idx) => (
-        <div key={idx} className="grid sm:grid-cols-4 gap-3 items-end border rounded p-3">
-          {/* Dia */}
-          <div>
-            <label className="block text-xs mb-1">Dia da semana</label>
-            <select
-              value={r.weekday}
-              onChange={(e) =>
-                setFormTurma(f => {
-                  const next = [...(f.meeting_rules || [])];
-                  next[idx] = { ...next[idx], weekday: e.target.value };
-                  return { ...f, meeting_rules: next };
-                })
-              }
-              className="border rounded px-3 py-2 w-full"
-            >
-              <option value="">—</option>
-              {WEEKDAYS.map((w) => (
-                <option key={w.value} value={w.value}>{w.label}</option>
-              ))}
-            </select>
-          </div>
+            {/* Encontros (vários) */}
+            <div className="sm:col-span-2">
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium">Encontros na semana</label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setFormTurma((f) => ({
+                      ...f,
+                      meeting_rules: [
+                        ...(f.meeting_rules || []),
+                        { weekday: "", time: "", duration_hours: "0.5" },
+                      ],
+                    }))
+                  }
+                  className="px-2 py-1 border rounded text-sm"
+                >
+                  + Adicionar encontro
+                </button>
+              </div>
 
-          {/* Hora */}
-          <div>
-            <label className="block text-xs mb-3">Hora</label>
-            <input
-              type="time"
-              value={r.time}
-              onChange={(e) =>
-                setFormTurma(f => {
-                  const next = [...(f.meeting_rules || [])];
-                  next[idx] = { ...next[idx], time: e.target.value };
-                  return { ...f, meeting_rules: next };
-                })
-              }
-              className="border rounded px-3 py-2 w-full"
-            />
-          </div>
+              {(formTurma.meeting_rules || []).length === 0 ? (
+                <div className="text-slate-500 text-sm">Nenhum encontro definido.</div>
+              ) : (
+                <div className="space-y-4">
+                  {(formTurma.meeting_rules || []).map((r, idx) => (
+                    <div key={idx} className="grid sm:grid-cols-4 gap-3 items-end border rounded p-3">
+                      {/* Dia */}
+                      <div>
+                        <label className="block text-xs mb-1">Dia da semana</label>
+                        <select
+                          value={r.weekday}
+                          onChange={(e) =>
+                            setFormTurma((f) => {
+                              const next = [...(f.meeting_rules || [])];
+                              next[idx] = { ...next[idx], weekday: e.target.value };
+                              return { ...f, meeting_rules: next };
+                            })
+                          }
+                          className="border rounded px-3 py-2 w-full"
+                        >
+                          <option value="">—</option>
+                          {WEEKDAYS.map((w) => (
+                            <option key={w.value} value={w.value}>
+                              {w.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
 
-          {/* Duração */}
-          <div>
-            <label className="block text-xs mb-1">Duração (h)</label>
-            <select
-              value={r.duration_hours}
-              onChange={(e) =>
-                setFormTurma(f => {
-                  const next = [...(f.meeting_rules || [])];
-                  next[idx] = { ...next[idx], duration_hours: e.target.value };
-                  return { ...f, meeting_rules: next };
-                })
-              }
-              className="border rounded px-3 py-2 w-full"
-            >
-              <option value="0.5">0,5</option>
-              <option value="1">1,0</option>
-              <option value="1.5">1,5</option>
-              <option value="2">2,0</option>
-            </select>
-          </div>
+                      {/* Hora */}
+                      <div>
+                        <label className="block text-xs mb-1">Hora</label>
+                        <input
+                          type="time"
+                          value={r.time}
+                          onChange={(e) =>
+                            setFormTurma((f) => {
+                              const next = [...(f.meeting_rules || [])];
+                              next[idx] = { ...next[idx], time: e.target.value };
+                              return { ...f, meeting_rules: next };
+                            })
+                          }
+                          className="border rounded px-3 py-2 w-full"
+                        />
+                      </div>
 
-          {/* Remover */}
-          <div className="justify-end">
-            <button
-              type="button"
-              onClick={() =>
-                setFormTurma(f => {
-                  const next = [...(f.meeting_rules || [])];
-                  next.splice(idx, 1);
-                  return { ...f, meeting_rules: next };
-                })
-              }
-              className="px-3 py-2 border rounded"
-              title="Remover"
-            >
-              Remover
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  )}
-</div>
-</div>
-        </form>
-      </Modal>
+                      {/* Duração */}
+                      <div>
+                        <label className="block text-xs mb-1">Duração (h)</label>
+                        <select
+                          value={r.duration_hours}
+                          onChange={(e) =>
+                            setFormTurma((f) => {
+                              const next = [...(f.meeting_rules || [])];
+                              next[idx] = { ...next[idx], duration_hours: e.target.value };
+                              return { ...f, meeting_rules: next };
+                            })
+                          }
+                          className="border rounded px-3 py-2 w-full"
+                        >
+                          <option value="0.5">0,5</option>
+                          <option value="1">1,0</option>
+                          <option value="1.5">1,5</option>
+                          <option value="2">2,0</option>
+                        </select>
+                      </div>
+
+                      {/* Remover */}
+                      <div className="justify-end">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFormTurma((f) => {
+                              const next = [...(f.meeting_rules || [])];
+                              next.splice(idx, 1);
+                              return { ...f, meeting_rules: next };
+                            })
+                          }
+                          className="px-3 py-2 border rounded"
+                          title="Remover"
+                        >
+                          Remover
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {/* MODAL: Criar/Editar Sessão (UNIFICADO) */}
       <Modal

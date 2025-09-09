@@ -2,149 +2,74 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useSession } from "@/contexts/SessionContext";
+
+// Visibilidade por papel
+const ROLE_TABS = {
+  admin:      ["home", "cadastro", "turmas", "agenda", "gastos", "relatorios", "financeiro"],
+  professor:  [          "turmas", "agenda",            "relatorios"],
+  financeiro: ["home", "cadastro",            "gastos", "relatorios", "financeiro"]
+};
+
+// Mapa de abas → rotas
+const TABS = [
+  { key: "home",       label: "Início",      href: "/" },
+  { key: "cadastro",   label: "Cadastro",    href: "/cadastro" },
+  { key: "turmas",     label: "Turmas",      href: "/turmas" },
+  { key: "agenda",     label: "Agenda",      href: "/agenda" },
+  { key: "gastos",     label: "Gastos",      href: "/gastos" },
+  { key: "relatorios", label: "Relatórios",  href: "/relatorios" },
+  { key: "financeiro", label: "Financeiro",  href: "/financeiro" },
+  
+];
 
 export default function Tabs() {
   const pathname = usePathname();
+  const { session, switchRole } = useSession();
 
-  // rotas agrupadas dentro de "Cadastros" (hub)
-  const cadastrosPaths = [
-    "/cadastros", // hub
-    "/alunos",
-    "/professores",
-    "/pagadores",
-  ];
+  // Evita crash caso session ainda não esteja pronta no primeiro render
+  const role = session?.role ?? "admin";
 
-  const isActive = (href) => {
-    // para o hub: fica ativo se qualquer subrota estiver ativa
-    if (href === "/cadastros") {
-      return cadastrosPaths.some(
-        (p) => pathname === p || pathname.startsWith(p + "/")
-      );
-    }
-    return pathname === href || pathname.startsWith(href + "/");
-  };
+  const visibleKeys = ROLE_TABS[role] ?? [];
+  const visibleTabs = TABS.filter(t => visibleKeys.includes(t.key));
 
   return (
-    <nav
-      aria-label="principal"
-      className="mt-4 flex flex-wrap items-center gap-4 border-b border-slate-200"
-    >
-      <Tab href="/" active={isActive("/")}>Início</Tab>
+    <div className="w-full border-b bg-white">
+      <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-2">
+        <nav className="flex flex-wrap gap-2">
+          {visibleTabs.map(tab => {
+            const active = pathname === tab.href || pathname.startsWith(tab.href + "/");
+            return (
+              <Link
+                key={tab.key}
+                href={tab.href}
+                className={`rounded-md px-3 py-1.5 text-sm ${
+                  active ? "bg-gray-900 text-white" : "text-gray-700 hover:bg-gray-100"
+                }`}
+              >
+                {tab.label}
+              </Link>
+            );
+          })}
+        </nav>
 
-      {/* Cadastros com dropdown (hub) */}
-      <CadastrosMenu active={isActive("/cadastros")} />
-
-      <Tab href="/financeiro" active={isActive("/financeiro")}>
-        Financeiro
-      </Tab>
-      
-      <Tab href="/gastos" active={isActive("/gastos")}
-      >Gastos</Tab>
-
-      <Tab href="/turmas" active={isActive("/turmas")}>
-        Turmas
-      </Tab>
-
-      <Tab href="/relatorios" active={isActive("/relatorios")}>
-        Relatórios
-      </Tab>
-      
-      <Tab href="/agenda" active={isActive("/agenda")}>
-        Agenda
-      </Tab>
-    </nav>
-  );
-}
-
-function Tab({ href, active, children }) {
-  return (
-    <Link
-      href={href}
-      className={`whitespace-nowrap px-3 py-2 border-b-2 transition
-        ${
-          active
-            ? "border-rose-600 text-rose-700 font-semibold"
-            : "border-transparent text-slate-700 hover:text-rose-700"
-        }`}
-    >
-      {children}
-    </Link>
-  );
-}
-
-function CadastrosMenu({ active }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-  const pathname = usePathname();
-
-  // fecha ao clicar fora
-  useEffect(() => {
-    const onClickOutside = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
-  }, []);
-
-  // fecha ao trocar de rota
-  useEffect(() => {
-    setOpen(false);
-  }, [pathname]);
-
-  // fecha com ESC
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
-
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className={`px-3 py-2 border-b-2 transition inline-flex items-center gap-1
-          ${
-            active
-              ? "border-rose-600 text-rose-700 font-semibold"
-              : "border-transparent text-slate-700 hover:text-rose-700"
-          }`}
-        aria-haspopup="menu"
-        aria-expanded={open ? "true" : "false"}
-      >
-        Cadastros
-        <svg width="12" height="12" viewBox="0 0 20 20" className="opacity-70">
-          <path d="M5 7l5 6 5-6" fill="none" stroke="currentColor" strokeWidth="2" />
-        </svg>
-      </button>
-
-      {open && (
-        <div
-          role="menu"
-          className="absolute left-0 mt-2 w-64 rounded-lg border bg-white shadow z-20"
-        >
-          {/* Hub */}
-          <MenuItem href="/cadastros">Hub de Cadastros</MenuItem>
-
-          <div className="h-px bg-slate-100 my-1" />
-
-          {/* Subitens */}
-          <MenuItem href="/alunos">Alunos</MenuItem>
-          <MenuItem href="/professores">Professores</MenuItem>
-          <MenuItem href="/pagadores">Pagadores</MenuItem>
+        {/* ⚠️ MOCK ONLY — mantenha visível no desenvolvimento; remova em produção */}
+        <div className="flex items-center gap-2">
+          <span className="hidden text-xs text-gray-500 sm:inline">
+            {session?.name ?? "Dev"} • {role}
+          </span>
+          <select
+            aria-label="Selecionar papel (mock)"
+            className="rounded border px-2 py-1 text-sm"
+            value={role}
+            onChange={(e) => switchRole(e.target.value)}
+          >
+            <option value="admin">admin</option>
+            <option value="professor">professor</option>
+            <option value="financeiro">financeiro</option>
+          </select>
         </div>
-      )}
+      </div>
     </div>
-  );
-}
-
-function MenuItem({ href, children }) {
-  return (
-    <Link href={href} className="block px-3 py-2 hover:bg-slate-50" role="menuitem">
-      {children}
-    </Link>
   );
 }

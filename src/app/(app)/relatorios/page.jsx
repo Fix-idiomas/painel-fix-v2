@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+
 export default function RelatoriosHubPage() {
   return (
     <main className="p-6 space-y-6">
