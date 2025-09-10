@@ -10,8 +10,16 @@ const fmtBRL = (n) =>
     currency: "BRL",
   });
 
-const fmtDateBR = (s) =>
-  s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-";
+function fmtDateBR(d) {
+  if (!d) return "—";
+  const s = String(d);
+  const isoLike = s.length > 10 ? s : `${s}T00:00:00`;
+  const dt = new Date(isoLike);
+  if (isNaN(dt)) {
+    return s.slice(0, 10);
+  }
+  return dt.toLocaleDateString("pt-BR");
+}
 
 const monthNow = () => new Date().toISOString().slice(0, 7); // "YYYY-MM"
 

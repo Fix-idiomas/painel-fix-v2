@@ -449,45 +449,53 @@ return { ...data, meeting_rules: normalizeRules(data.meeting_rules) };
   }));
 },
 // Lista sessões de uma turma num intervalo [start, end] e indica se têm presença
-async listSessionsWithAttendance({ turmaId, start, end }) {
-  if (!turmaId) throw new Error("listSessionsWithAttendance: 'turmaId' é obrigatório");
+  async listSessionsWithAttendance({ turmaId, start, end }) {
+    if (!turmaId) throw new Error("listSessionsWithAttendance: 'turmaId' é obrigatório");
 
-  const s = String(start || "").slice(0, 10); // "YYYY-MM-DD"
-  const e = String(end   || "").slice(0, 10); // "YYYY-MM-DD"
-  if (!s || !e) throw new Error("listSessionsWithAttendance: 'start' e 'end' são obrigatórios (YYYY-MM-DD)");
+    const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID || "11111111-1111-4111-8111-111111111111";
+    const s = String(start || "").slice(0, 10); // "YYYY-MM-DD"
+    const e = String(end   || "").slice(0, 10); // "YYYY-MM-DD"
+    if (!s || !e) throw new Error("listSessionsWithAttendance: 'start' e 'end' são obrigatórios (YYYY-MM-DD)");
 
-  // 1) Busca as sessões do período
-  const { data: sessRows, error: eS } = await supabase
-    .from("sessions")
-    .select("id,turma_id,date,duration_hours,notes")
-    .eq("turma_id", turmaId)
-    .gte("date", s)
-    .lte("date", e)
-    .order("date", { ascending: true });
-  if (eS) mapErr("listSessionsWithAttendance.sessions", eS);
+    // janela do dia inteiro (UTC)
+    const startISO = `${s}T00:00:00Z`;
+    const endISO   = `${e}T23:59:59Z`;
 
-  if (!sessRows || sessRows.length === 0) return [];
+    // 1) sessões do período (tenant + turma)
+    const { data: sessRows, error: eS } = await supabase
+      .from("sessions")
+      .select("id, turma_id, date, duration_hours, notes")
+      .eq("tenant_id", TENANT_ID)
+      .eq("turma_id", turmaId)
+      .gte("date", startISO)
+      .lte("date", endISO)
+      .order("date", { ascending: true });
+    if (eS) throw new Error(eS.message);
+    if (!sessRows || sessRows.length === 0) return [];
 
-  // 2) Busca presenças para essas sessões
-  const ids = sessRows.map((x) => x.id);
-  const { data: att, error: eA } = await supabase
-    .from("attendance")
-    .select("session_id")
-    .in("session_id", ids);
-  if (eA) mapErr("listSessionsWithAttendance.attendance", eA);
+    // 2) presenças (só para flag visual)
+    const ids = sessRows.map(x => x.id);
+    const { data: att, error: eA } = await supabase
+      .from("attendance")
+      .select("session_id")
+      .eq("tenant_id", TENANT_ID)
+      .in("session_id", ids);
+    if (eA) throw new Error(eA.message);
 
-  const has = new Set((att || []).map((a) => a.session_id));
+    const has = new Set((att || []).map(a => a.session_id));
 
-  // 3) Normaliza saída e marca `has_attendance`
-  return sessRows.map((s) => ({
-    id: s.id,
-    turma_id: s.turma_id,
-    date: s.date, // no front você já faz slice(0,10)
-    duration_hours: Number(s.duration_hours || 0),
-    notes: s.notes || "",
-    has_attendance: has.has(s.id),
-  }));
-},
+    // normaliza data p/ ISO (evita "Invalid Date" no front)
+    const toIso = (d) => (d ? new Date(d).toISOString() : null);
+
+    return sessRows.map(row => ({
+      id: row.id,
+      turma_id: row.turma_id,
+      date: toIso(row.date),                   // sempre ISO válido
+      duration_hours: Number(row.duration_hours || 0),
+      notes: row.notes || "",
+      has_attendance: has.has(row.id),         // só indicador visual
+    }));
+  },
 
   async createSession(payload) {
     // payload: { turma_id, date ("YYYY-MM-DD" ou ISO), notes?, duration_hours?, headcount_snapshot? }
@@ -1640,9 +1648,10 @@ async listSessionsWithAttendance({ turmaId, start, end }) {
       const h = Number(s.duration_hours || 0);
       const hourly = rateMode === "by_size" ? hourlyBySize(s.headcount_snapshot) : baseHourly;
       const amount = h * Number(hourly || 0);
+      const toIso = (d) => (d ? new Date(d).toISOString() : null);
       return {
         id: s.id,
-        date: s.date,
+        date: toIso(s.date),              // <- evita "Invalid Date" no modal
         turma_id: s.turma_id,
         turma_name: s.turmas?.name || "",
         duration_hours: h,

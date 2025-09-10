@@ -1,391 +1,261 @@
-// src/app/(app)/agenda/page.jsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { financeGateway } from "@/lib/financeGateway";
-import { useSession } from "@/contexts/SessionContext";
-import { plannedSlotsForRange } from "@/lib/agendaUtils";
+import React, { useEffect, useMemo, useState } from "react";
+import { supabaseGateway as gw } from "@/lib/supabaseGateway";
 
-// Segunda como início de semana
-const startOfWeek = (d) => {
-  const date = new Date(d);
-  const day = date.getDay(); // 0..6 (0=domingo)
-  const diff = (day === 0 ? -6 : 1) - day; // move para segunda
-  date.setDate(date.getDate() + diff);
-  date.setHours(0, 0, 0, 0);
-  return date;
-};
-const addDays = (d, n) => {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-};
-const fmtDateISO = (d) => d.toISOString().slice(0, 10);
-const fmtBRDateTime = (isoDate, time) => {
-  if (!isoDate) return "-";
-  try {
-    const [h = "00", m = "00"] = (time || "00:00").split(":");
-    const dt = new Date(`${isoDate}T${h.padStart(2, "0")}:${m.padStart(2, "0")}:00`);
-    const dia = dt.toLocaleDateString("pt-BR");
-    const hora = dt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-    return `${dia} às ${hora}`;
-  } catch {
-    return new Date(isoDate + "T00:00:00").toLocaleDateString("pt-BR");
-  }
-};
+/** ===== Helpers de data (sem depender de libs externas) ===== */
+const TZ = "America/Sao_Paulo";
 
-// Constrói ocorrências planejadas da semana a partir da turma
-function buildPlannedOccurrencesForWeek(turma, weekStartISO) {
-  const weekStart = new Date(weekStartISO + "T00:00:00");
-  const occurrences = [];
+// YYYY-MM-DD (fuso São Paulo)
+function todayISO() {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
+  });
+  const parts = fmt.formatToParts(new Date());
+  const y = parts.find(p => p.type === "year")?.value;
+  const m = parts.find(p => p.type === "month")?.value;
+  const d = parts.find(p => p.type === "day")?.value;
+  return `${y}-${m}-${d}`;
+}
+function addDaysISO(ymd, n=0) {
+  const d = new Date(`${ymd}T00:00:00-03:00`); // fuso SP aproximado
+  d.setDate(d.getDate() + Number(n||0));
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,"0");
+  const dd= String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${dd}`;
+}
+function startOfWeekISO(ymd) {
+  const d = new Date(`${ymd}T00:00:00-03:00`);
+  const dow = d.getDay(); // 0..6 (0=Dom)
+  const diff = dow === 0 ? 0 : dow; // começando Domingo
+  return addDaysISO(ymd, -diff);
+}
+function toIsoLocal(dateYMD, hhmm="00:00") {
+  const [H="00", M="00"] = String(hhmm||"00:00").split(":");
+  const d = new Date(`${dateYMD}T${H.padStart(2,"0")}:${M.padStart(2,"0")}:00`);
+  return d.toISOString();
+}
 
-  const pushOcc = (weekday, time, duration) => {
-    if (weekday == null || time == null || time === "") return;
-    const wd = Number(weekday); // 0..6 (0=domingo)
-    const jsWeekDayMon0 = (wd === 0 ? 6 : wd - 1); // seg=0,...,dom=6
-    const occDate = fmtDateISO(addDays(weekStart, jsWeekDayMon0));
-    occurrences.push({
+/** Dado um item (sessão real), injeta horário vindo da regra, se o horário estiver 00:00 */
+function withDisplayTimeFromRules(ev, turma) {
+  if (!ev?.date) return ev;
+  // Se já veio com hora diferente de 00:00, mantém
+  const hasTime = ev.date.length > 10;
+  if (hasTime) return ev;
+
+  // Puxa horário da rule correspondente ao weekday
+  const d = new Date(`${ev.date}T00:00:00-03:00`);
+  const wd = d.getDay(); // 0..6
+  const rule = (turma?.meeting_rules || []).find(r => Number(r.weekday) === wd);
+  const time = rule?.time || "08:00";
+  return { ...ev, time_from_rule: time };
+}
+
+/** Gera slots planejados para uma turma na semana [monday..sunday] */
+function plannedSlotsForWeek(turma, weekStartYMD) {
+  const rules = Array.isArray(turma?.meeting_rules) ? turma.meeting_rules : [];
+  if (!rules.length) return [];
+  const out = [];
+  for (let i=0;i<7;i++) {
+    const ymd = addDaysISO(weekStartYMD, i);
+    const d = new Date(`${ymd}T00:00:00-03:00`);
+    const wd = d.getDay();
+    const r = rules.find(rr => Number(rr.weekday) === wd);
+    if (!r) continue;
+    out.push({
       type: "planned",
       turma_id: turma.id,
       turma_name: turma.name,
-      teacher_id: turma.teacher_id || null,
-      date: occDate,
-      time,
-      duration_hours: Number(duration || 0.5),
+      date: ymd,
+      time: r.time || "08:00",
+      duration_hours: Number(r.duration_hours ?? 0.5),
     });
-  };
-
-  // Nova grade com múltiplos horários (schedule[])
-  if (Array.isArray(turma.schedule) && turma.schedule.length > 0) {
-    for (const item of turma.schedule) {
-      const weekday = item?.weekday;
-      const time = item?.time;
-      const dur = item?.duration_hours ?? turma.meeting_duration_default ?? 0.5;
-
-      const activeFrom = item?.active_from || null;
-      const activeTo = item?.active_to || null;
-
-      const weekEndISO = fmtDateISO(addDays(weekStart, 6));
-      const afterStart = !activeFrom || weekEndISO >= activeFrom;
-      const beforeEnd = !activeTo || weekStartISO <= activeTo;
-      if (afterStart && beforeEnd) pushOcc(weekday, time, dur);
-    }
-    return occurrences;
   }
-
-  // Legado (um dia/hora)
-  if (turma.meeting_day != null && turma.meeting_time) {
-    pushOcc(turma.meeting_day, turma.meeting_time, turma.meeting_duration_default ?? 0.5);
-  }
-  return occurrences;
+  return out;
 }
 
 export default function AgendaPage() {
-  const { session } = useSession();
-  const isProfessor = session?.role === "professor";
-  const myTeacherId = session?.teacherId ?? null;
-
-  const [view, setView] = useState("today"); // "today" | "week"
-  const [weekStart, setWeekStart] = useState(() => fmtDateISO(startOfWeek(new Date())));
-  const [teacherFilter, setTeacherFilter] = useState("all"); // "all" | teacher_id (forçado p/ professor)
-  const [includeSessions, setIncludeSessions] = useState(false); // por padrão só previstas
-
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [turmas, setTurmas] = useState([]);
-  const [teachers, setTeachers] = useState([]);
   const [sessionsByTurma, setSessionsByTurma] = useState({});
+  const [weekStart, setWeekStart] = useState(() => startOfWeekISO(todayISO()));
 
-  // quando o usuário é professor, fixe o filtro no teacherId dele
+  // Carrega turmas + sessões reais da semana
   useEffect(() => {
-    if (isProfessor && myTeacherId) {
-      setTeacherFilter(myTeacherId);
-    }
-  }, [isProfessor, myTeacherId]);
+    let mounted = true;
+    (async () => {
+      try {
+        setLoading(true);
+        const ts = await gw.listTurmas();
+        if (!mounted) return;
 
-  const weekDays = useMemo(() => {
-    const base = new Date(weekStart + "T00:00:00");
-    return Array.from({ length: 7 }).map((_, i) => {
-      const d = addDays(base, i);
-      return { iso: fmtDateISO(d), label: d.toLocaleDateString("pt-BR") };
-    });
+        // Para cada turma, buscar sessões reais no intervalo da semana
+        const end = addDaysISO(weekStart, 6);
+        const byTurma = {};
+        for (const t of ts) {
+          const sess = await gw.listSessionsWithAttendance({ turmaId: t.id, start: weekStart, end });
+          byTurma[t.id] = sess;
+        }
+
+        setTurmas(ts);
+        setSessionsByTurma(byTurma);
+      } catch (e) {
+        setError(e?.message || String(e));
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
   }, [weekStart]);
 
-  const todayISO = useMemo(() => fmtDateISO(new Date()), []);
+  // Constrói a lista de itens (planned + real), com dedupe
+  const items = useMemo(() => {
+    const end = addDaysISO(weekStart, 6);
+    const map = [];
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const [ts, ths] = await Promise.all([
-        financeGateway.listTurmas(),
-        financeGateway.listTeachers(),
-      ]);
+    for (const t of turmas) {
+      // planned
+      const planned = plannedSlotsForWeek(t, weekStart);
 
-      // 🔐 RBAC: se professor, limita turmas e professores aos do próprio professor
-      const tsScoped = isProfessor && myTeacherId ? ts.filter(t => t.teacher_id === myTeacherId) : ts;
-      const thsScoped = isProfessor && myTeacherId ? ths.filter(t => t.id === myTeacherId) : ths;
+      // reais
+      const sess = sessionsByTurma[t.id] || [];
 
-      // sessões reais da semana (para "incluir sessões registradas")
-      const monday = new Date(weekStart + "T00:00:00");
-      const sundayISO = fmtDateISO(addDays(monday, 6));
+      // dedupe: se existe sessão real no mesmo YMD da turma, não mostra o planejado daquele dia
+      const realKey = new Set(sess.map(s => `${t.id}|${String(s.date).slice(0,10)}`));
 
-      const perTurma = {};
-      for (const t of tsScoped) {
-        // ✅ Espera { id,date,duration_hours,notes,has_attendance }
-        const sess = await financeGateway.listSessionsWithAttendance?.({
-          turmaId: t.id,
-          start: weekStart,
-          end: sundayISO,
-        });
-        perTurma[t.id] = Array.isArray(sess) ? sess : [];
-      }
-
-      setTurmas(tsScoped);
-      setTeachers(thsScoped);
-      setSessionsByTurma(perTurma);
-      setLoading(false);
-    })();
-  }, [weekStart, isProfessor, myTeacherId]);
-
-  const teacherName = (id) => teachers.find((t) => t.id === id)?.name || "—";
-
-  // Monta agenda da semana (previstas +, opcionalmente, registradas)
-  const agendaByDay = useMemo(() => {
-    const effectiveTeacher = isProfessor ? myTeacherId : teacherFilter;
-
-    const monday = new Date(weekStart + "T00:00:00");
-    const sundayISO = fmtDateISO(addDays(monday, 6));
-
-    // (A) PLANEJADAS a partir das regras no intervalo da semana
-    let planned = turmas.flatMap((t) => plannedSlotsForRange(t, weekStart, sundayISO));
-    if (effectiveTeacher && effectiveTeacher !== "all") {
-      planned = planned.filter(ev => ev.teacher_id === effectiveTeacher);
-    }
-
-    // (B) REAIS (registradas) — só entra se marcar o toggle
-    let real = [];
-    if (includeSessions) {
-      real = turmas.flatMap((t) =>
-        (sessionsByTurma[t.id] || [])
-          .filter((s) => s.has_attendance) // ✅ somente realizadas
-          .map((s) => ({
-            type: "session",
-            turma_id: t.id,
+      for (const p of planned) {
+        const key = `${t.id}|${p.date}`;
+        if (!realKey.has(key)) {
+          map.push({
+            ...p,
             turma_name: t.name,
-            teacher_id: t.teacher_id || null,
-            date: String(s.date).slice(0,10),
-            time: null,
-            duration_hours: Number(s.duration_hours || 0),
-            notes: s.notes || "",
-          }))
-      );
-      if (effectiveTeacher && effectiveTeacher !== "all") {
-        real = real.filter(ev => ev.teacher_id === effectiveTeacher);
+            label: "Planejada",
+          });
+        }
+      }
+      for (const s of sess) {
+        const normalized = {
+          type: "session",
+          id: s.id,
+          turma_id: t.id,
+          turma_name: t.name,
+          date: s.date, // pode ser ISO com hora
+          duration_hours: s.duration_hours,
+          has_attendance: s.has_attendance,
+          label: s.has_attendance ? "Sessão (com presença)" : "Sessão (registrada)",
+        };
+        // injeta horário da rule quando o date vier sem hora (00:00)
+        map.push(withDisplayTimeFromRules(normalized, t));
       }
     }
 
-    // (C) Dedupe: se há real no mesmo dia/turma, remove a planejada correspondente
-    const realKeys = new Set(real.map(r => `${r.turma_id}|${r.date}`));
-    planned = planned.filter(p => !realKeys.has(`${p.turma_id}|${p.date}`));
+    // Ordena por data/hora
+    return map.sort((a,b) => {
+      const ad = a.date.length > 10 ? a.date : `${a.date}T${a.time_from_rule || a.time || "00:00"}:00`;
+      const bd = b.date.length > 10 ? b.date : `${b.date}T${b.time_from_rule || b.time || "00:00"}:00`;
+      return ad.localeCompare(bd);
+    });
+  }, [turmas, sessionsByTurma, weekStart]);
 
-    // (D) Junta e agrupa por dia
-    const combined = includeSessions ? [...planned, ...real] : planned;
-    combined.sort((a, b) => `${a.date}T${a.time||"00:00"}`.localeCompare(`${b.date}T${b.time||"00:00"}`));
+  async function onRegisterPlanned(ev) {
+    // ev: { type:"planned", turma_id, date:"YYYY-MM-DD", time:"HH:mm", duration_hours }
+    if (!ev?.turma_id || !ev?.date) return alert("Dados insuficientes do slot.");
+    try {
+      setSaving(true);
+      await gw.createSession({
+        turma_id: ev.turma_id,
+        date: toIsoLocal(ev.date, ev.time), // salva timestamptz com hora
+        notes: "Aula registrada a partir da agenda",
+        duration_hours: ev.duration_hours ?? 0.5,
+        headcount_snapshot: null,
+      });
 
-    const byDay = {};
-    for (const d of weekDays) byDay[d.iso] = [];
-    for (const ev of combined) {
-      (byDay[ev.date] ||= []).push(ev);
+      // Recarrega só a turma afetada (na mesma semana)
+      const end = addDaysISO(weekStart, 6);
+      const sess = await gw.listSessionsWithAttendance({
+        turmaId: ev.turma_id, start: weekStart, end
+      });
+      setSessionsByTurma(old => ({ ...old, [ev.turma_id]: sess }));
+      alert("Aula registrada ✅");
+    } catch (err) {
+      alert(err?.message || String(err));
+    } finally {
+      setSaving(false);
     }
-    return byDay;
-  }, [turmas, sessionsByTurma, weekStart, weekDays, teacherFilter, includeSessions, isProfessor, myTeacherId]);
+  }
 
+  const weekLabel = useMemo(() => {
+    const end = addDaysISO(weekStart, 6);
+    return `${weekStart} → ${end}`;
+  }, [weekStart]);
 
-  const goPrevWeek  = () => setWeekStart(fmtDateISO(addDays(new Date(weekStart + "T00:00:00"), -7)));
-  const goNextWeek  = () => setWeekStart(fmtDateISO(addDays(new Date(weekStart + "T00:00:00"),  7)));
-  const goTodayWeek = () => setWeekStart(fmtDateISO(startOfWeek(new Date())));
+  function goPrevWeek() { setWeekStart(prev => addDaysISO(prev, -7)); }
+  function goNextWeek() { setWeekStart(prev => addDaysISO(prev, 7)); }
+  function goThisWeek() { setWeekStart(startOfWeekISO(todayISO())); }
 
-  const todayItems = agendaByDay[todayISO] || [];
-  const plannedTodayCount = todayItems.filter((ev) => ev.type === "planned").length;
+  if (error) {
+    return (
+      <div className="p-4">
+        <h1 className="font-semibold text-lg">Agenda</h1>
+        <p className="text-red-600 mt-2">Erro: {error}</p>
+      </div>
+    );
+  }
 
   return (
-    <main className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="font-semibold text-lg">Agenda</h1>
         <div className="flex items-center gap-2">
-          {/* Professor não tem "Voltar ao início" porque / é bloqueado */}
-          {!isProfessor && (
-            <Link href="/" className="border rounded px-3 py-2">Voltar ao início</Link>
-          )}
-          <h1 className="text-2xl font-bold">Agenda</h1>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {/* 🔐 Professor: sem dropdown; Admin/Financeiro: filtro normal */}
-          {!isProfessor ? (
-            <select
-              value={teacherFilter}
-              onChange={(e) => setTeacherFilter(e.target.value)}
-              className="border rounded px-2 py-1"
-              title="Filtrar por professor"
-            >
-              <option value="all">Todos os professores</option>
-              {teachers.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-          ) : (
-            <span className="text-sm text-slate-600 px-2 py-1 border rounded">
-              Professor: <b>{teacherName(myTeacherId)}</b>
-            </span>
-          )}
-
-          {/* Alternância Hoje / Semana */}
-          <div className="border rounded overflow-hidden">
-            <button
-              className={`px-3 py-2 ${view === "today" ? "bg-rose-600 text-white" : ""}`}
-              onClick={() => setView("today")}
-              title="Mostrar somente os compromissos de hoje"
-            >
-              Hoje
-            </button>
-            <button
-              className={`px-3 py-2 ${view === "week" ? "bg-rose-600 text-white" : ""}`}
-              onClick={() => setView("week")}
-              title="Mostrar toda a semana"
-            >
-              Semana
-            </button>
-          </div>
-
-          {/* Incluir sessões (opcional) */}
-          <label className="inline-flex items-center gap-2 text-sm border rounded px-2 py-1">
-            <input
-              type="checkbox"
-              checked={includeSessions}
-              onChange={(e) => setIncludeSessions(e.target.checked)}
-            />
-            Incluir sessões registradas
-          </label>
+          <button onClick={goPrevWeek} className="px-2 py-1 border rounded">◀ Semana</button>
+          <span className="text-sm text-gray-600">{weekLabel}</span>
+          <button onClick={goNextWeek} className="px-2 py-1 border rounded">Semana ▶</button>
+          <button onClick={goThisWeek} className="px-2 py-1 border rounded ml-2">Hoje</button>
         </div>
       </div>
 
-      {view === "week" ? (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-2 text-slate-700">
-            <div>
-              Semana de <b>{weekDays[0]?.label}</b> a <b>{weekDays[6]?.label}</b>
-              {(!isProfessor && teacherFilter !== "all") && (
-                <span className="ml-2 text-slate-500">• Prof.: <b>{teacherName(teacherFilter)}</b></span>
-              )}
-              {isProfessor && myTeacherId && (
-                <span className="ml-2 text-slate-500">• Prof.: <b>{teacherName(myTeacherId)}</b></span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={goPrevWeek} className="border rounded px-3 py-2">◀ Semana anterior</button>
-              <button onClick={goTodayWeek} className="border rounded px-3 py-2">Hoje</button>
-              <button onClick={goNextWeek} className="border rounded px-3 py-2">Próxima semana ▶</button>
-            </div>
-          </div>
-
-          {loading ? (
-            <div className="p-4">Carregando…</div>
-          ) : (
-            <section className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {weekDays.map((d) => {
-                const items = agendaByDay[d.iso] || [];
-                return (
-                  <div key={d.iso} className="border rounded">
-                    <div className="p-3 border-b bg-gray-50 font-semibold">{d.label}</div>
-                    {items.length === 0 ? (
-                      <div className="p-3 text-slate-500">Sem aulas.</div>
-                    ) : (
-                      <ul className="divide-y">
-                        {items.map((ev, idx) => (
-                          <li key={idx} className="p-3">
-                            <div className="text-sm">
-                              <span className={`inline-block px-2 py-0.5 rounded text-xs mr-2 ${
-                                ev.type === "planned" ? "bg-blue-100 text-blue-700" : "bg-emerald-100 text-emerald-700"
-                              }`}>
-                                {ev.type === "planned" ? "Planejada" : "Sessão"}
-                              </span>
-                              <b>{ev.turma_name}</b>
-                              <span className="text-slate-500"> • Prof.: {teacherName(ev.teacher_id)}</span>
-                            </div>
-                            <div className="text-slate-700 mt-1">
-                              {ev.type === "planned"
-                                ? fmtBRDateTime(ev.date, ev.time)
-                                : `${fmtBRDateTime(ev.date)} • duração ${ev.duration_hours.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}h`}
-                            </div>
-                            {ev.type === "session" && ev.notes && (
-                              <div className="text-xs text-slate-500 mt-1">Obs: {ev.notes}</div>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                );
-              })}
-            </section>
-          )}
-        </>
+      {loading ? (
+        <p className="text-sm text-gray-500">Carregando…</p>
       ) : (
-        // ======= HOJE (layout limpo, focado em PREVISTAS) =======
-        <section className="max-w-3xl">
-          <div className="border rounded">
-            <div className="p-3 border-b bg-gray-50 font-semibold flex items-center justify-between">
-              <div>
-                Hoje — {new Date().toLocaleDateString("pt-BR")}
-                {(!isProfessor && teacherFilter !== "all") && (
-                  <span className="ml-2 text-slate-500">• Prof.: <b>{teacherName(teacherFilter)}</b></span>
-                )}
-                {isProfessor && myTeacherId && (
-                  <span className="ml-2 text-slate-500">• Prof.: <b>{teacherName(myTeacherId)}</b></span>
-                )}
-              </div>
-              <div className="text-slate-700 text-sm">
-                Aulas previstas hoje: <b>{plannedTodayCount}</b>
-              </div>
-            </div>
-
-            {loading ? (
-              <div className="p-4">Carregando…</div>
-            ) : todayItems.length === 0 ? (
-              <div className="p-4 text-slate-500">Sem aulas para hoje.</div>
-            ) : (
-              <ul className="divide-y">
-                {todayItems.map((ev, idx) => (
-                  <li key={idx} className="p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm">
-                          <span className={`inline-block px-2 py-0.5 rounded text-xs mr-2 ${
-                            ev.type === "planned" ? "bg-blue-100 text-blue-700" : "bg-emerald-100 text-emerald-700"
-                          }`}>
-                            {ev.type === "planned" ? "Planejada" : "Sessão"}
-                          </span>
-                          <b>{ev.turma_name}</b>
-                          <span className="text-slate-500"> • Prof.: {teacherName(ev.teacher_id)}</span>
-                        </div>
-                        <div className="text-slate-700 mt-1">
-                          {ev.type === "planned"
-                            ? `Às ${(ev.time || "00:00").slice(0,5)} • duração ${ev.duration_hours.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}h`
-                            : `Duração ${ev.duration_hours.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}h`}
-                        </div>
-                        {ev.type === "session" && ev.notes && (
-                          <div className="text-xs text-slate-500 mt-1">Obs: {ev.notes}</div>
-                        )}
-                      </div>
+        <ul className="space-y-2">
+          {items.map((ev, idx) => {
+            const ymd = String(ev.date).slice(0,10);
+            const hhmm =
+              (ev.date.length > 10 ? new Date(ev.date).toISOString().slice(11,16)
+               : (ev.time_from_rule || ev.time || "00:00"));
+            return (
+              <li key={`${ymd}-${idx}`} className="p-3 border rounded">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium">{ev.turma_name}</div>
+                    <div className="text-sm text-gray-600">
+                      {ymd} • {hhmm} — {ev.label}
                     </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </section>
+                  </div>
+                  {ev.type === "planned" && (
+                    <div>
+                      <button
+                        onClick={() => onRegisterPlanned(ev)}
+                        disabled={saving}
+                        className="text-xs px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-50"
+                        title="Transformar este horário em aula realizada"
+                      >
+                        {saving ? "Registrando..." : "Registrar aula"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+          {items.length === 0 && (
+            <li className="text-sm text-gray-500">Nenhum item nesta semana.</li>
+          )}
+        </ul>
       )}
-    </main>
+    </div>
   );
 }
