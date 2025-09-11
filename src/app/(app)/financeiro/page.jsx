@@ -12,6 +12,9 @@ const fmtBRL = (n) =>
     currency: "BRL",
   });
 
+const fmtDateBR = (s) =>
+  s ? new Date(s.length > 10 ? s : s + "T00:00:00").toLocaleDateString("pt-BR") : "—";
+
 // Mapa para exibir status em PT-BR (mantendo enum interno em EN)
 const STATUS_LABELS = {
   pending: "Pendente",
@@ -56,23 +59,38 @@ export default function FinanceiroPage() {
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState([]);
   const [error, setError] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [selectedCostCenter, setSelectedCostCenter] = useState("all");
+
 
   async function load() {
-    try {
-      setLoading(true);
-      const { rows, kpis } = await financeGateway.listPayments({
-        ym,
-        status: status === "all" ? null : status, // passa EN internamente
-      });
-      setRows(rows);
-      setKpis(kpis);
-      setError(null);
-    } catch (e) {
-      setError(e.message || String(e));
-    } finally {
-      setLoading(false);
-    }
+  try {
+    setLoading(true);
+
+    const paymentsPromise = financeGateway.listPayments({
+      ym,
+      status: status === "all" ? null : status, // passa EN internamente
+    });
+
+    const summaryPromise = financeGateway.getMonthlySummary({ ym });
+
+    const [{ rows, kpis }, summaryData] = await Promise.all([
+      paymentsPromise,
+      summaryPromise,
+    ]);
+
+    setRows(rows);
+    setKpis(kpis);
+    setSummary(summaryData); // { receita, despesas, professores, saldo, saldo_operacional }
+    setError(null);
+  } catch (e) {
+    setError(e.message || String(e));
+    setSummary(null);
+  } finally {
+    setLoading(false);
   }
+}
 
   useEffect(() => {
     load();
@@ -126,6 +144,18 @@ export default function FinanceiroPage() {
       alert(e.message || e);
     }
   }
+async function loadSummaryFor(ym) {
+  try {
+    setLoadingSummary(true);
+    const res = await financeGateway.getMonthlySummary({ ym });
+    setSummary(res); // { receita, despesas, professores, saldo, saldo_operacional }
+  } catch (e) {
+    console.error("[getMonthlySummary]", e?.message || e);
+    setSummary(null);
+  } finally {
+    setLoadingSummary(false);
+  }
+}
 
   return (
     <Guard roles={["admin", "financeiro"]}>
@@ -178,28 +208,165 @@ export default function FinanceiroPage() {
           <KpiCard title="Pendentes" value={fmtBRL(kpis.total_pending)} />
           <KpiCard title="Em atraso" value={fmtBRL(kpis.total_overdue)} />
         </section>
+        {summary && (
+  <section className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-5">
+    <div className="rounded border p-3">
+      <div className="text-xs text-gray-500">Receita (faturado)</div>
+      <div className="text-lg font-semibold">{fmtBRL(summary.receita)}</div>
+    </div>
+    <div className="rounded border p-3">
+      <div className="text-xs text-gray-500">Despesas (todas)</div>
+      <div className="text-lg font-semibold">{fmtBRL(summary.despesas)}</div>
+    </div>
+    <div className="rounded border p-3">
+      <div className="text-xs text-gray-500">Professores</div>
+      <div className="text-lg font-semibold">{fmtBRL(summary.professores)}</div>
+    </div>
+    <div className="rounded border p-3">
+      <div className="text-xs text-gray-500">Saldo</div>
+      <div className="text-lg font-semibold">{fmtBRL(summary.saldo)}</div>
+    </div>
+    <div className="rounded border p-3">
+      <div className="text-xs text-gray-500">Saldo operacional</div>
+      <div className="text-lg font-semibold">
+        {fmtBRL(summary.saldo_operacional)}
+      </div>
+    </div>
+  </section>
+)}
+{/* Filtro por centro de custo */}
+{summary?.by_cost_center?.length > 0 && (
+  <div className="mt-6 mb-2 flex flex-wrap items-center gap-2">
+    <label className="text-sm text-gray-600">Centro de custo:</label>
+
+    {/* Opções derivadas do summary */}
+    {(() => {
+      const allCenters = [
+        ...new Set(
+          (summary.by_cost_center || []).map((cc) => cc.cost_center || "N/A")
+        ),
+      ];
+      return (
+        <select
+          value={selectedCostCenter}
+          onChange={(e) => setSelectedCostCenter(e.target.value)}
+          className="rounded border px-2 py-1 text-sm"
+        >
+          <option value="all">Todos</option>
+          {allCenters.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      );
+    })()}
+
+    {selectedCostCenter !== "all" && (
+      <button
+        type="button"
+        onClick={() => setSelectedCostCenter("all")}
+        className="text-xs underline"
+        title="Limpar filtro"
+      >
+        limpar
+      </button>
+    )}
+  </div>
+)}
+    {/* Despesas por centro de custo */}
+{summary?.by_cost_center?.length > 0 && (
+  <section>
+    <div className="mb-2 text-sm font-semibold">Despesas por centro de custo</div>
+
+    {(() => {
+      const rowsAll = summary.by_cost_center || [];
+      const rows =
+        selectedCostCenter === "all"
+          ? rowsAll
+          : rowsAll.filter(
+              (cc) => (cc.cost_center || "N/A") === selectedCostCenter
+            );
+
+      const sum = (key) =>
+        rows.reduce((a, c) => a + Number(c?.[key] || 0), 0);
+
+      return rows.length === 0 ? (
+        <div className="rounded border p-3 text-sm text-gray-600">
+          Nenhum lançamento para o filtro selecionado.
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded border">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-3 py-2 text-left">Centro de custo</th>
+                <th className="px-3 py-2 text-right">Total</th>
+                <th className="px-3 py-2 text-right">Pago</th>
+                <th className="px-3 py-2 text-right">Pendente</th>
+                <th className="px-3 py-2 text-right">Em atraso</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...rows]
+                .sort(
+                  (a, b) => Number(b.total || 0) - Number(a.total || 0)
+                )
+                .map((cc) => {
+                  const total = Number(cc.total || 0);
+                  const paid = Number(cc.paid || 0);
+                  const pending = Number(cc.pending || 0);
+                  const overdue = Number(cc.overdue || 0);
+                  return (
+                    <tr key={cc.cost_center} className="border-t">
+                      <td className="px-3 py-2">{cc.cost_center || "N/A"}</td>
+                      <td className="px-3 py-2 text-right">{fmtBRL(total)}</td>
+                      <td className="px-3 py-2 text-right">{fmtBRL(paid)}</td>
+                      <td className="px-3 py-2 text-right">{fmtBRL(pending)}</td>
+                      <td className="px-3 py-2 text-right">{fmtBRL(overdue)}</td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t bg-gray-50 font-medium">
+                <td className="px-3 py-2 text-right">
+                  Totais{selectedCostCenter !== "all" ? " (filtro)" : ""}
+                </td>
+                <td className="px-3 py-2 text-right">{fmtBRL(sum("total"))}</td>
+                <td className="px-3 py-2 text-right">{fmtBRL(sum("paid"))}</td>
+                <td className="px-3 py-2 text-right">{fmtBRL(sum("pending"))}</td>
+                <td className="px-3 py-2 text-right">{fmtBRL(sum("overdue"))}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      );
+    })()}
+  </section>
+)}
+
 
         {/* Prévia */}
         {preview.length > 0 && (
-          <section className="rounded border p-4">
-            <div className="mb-2 font-semibold">
-              Prévia de geração ({preview.length})
-            </div>
-            <ul className="ml-5 list-disc">
-              {preview.map((p, i) => (
-                <li key={i}>
-                  aluno={p.student_id} | pagador={p.payer_id} |{" "}
-                  {new Date(p.competence_month).toLocaleDateString("pt-BR", {
-                    month: "2-digit",
-                    year: "numeric",
-                  })}{" "}
-                  → vence em {new Date(p.due_date).toLocaleDateString("pt-BR")} —{" "}
-                  {fmtBRL(p.amount)}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
+  <section className="rounded border p-4">
+    <div className="mb-2 font-semibold">
+      Prévia de geração ({preview.length})
+    </div>
+    <ul className="ml-5 list-disc">
+      {preview.map((p) => (
+        <li key={`${p.student_id}-${p.due_date}`}>
+          <strong>{p._student_name_snapshot || p.student_id}</strong>
+          {" "}
+          | {p.competence_month?.slice(0, 7) /* YYYY-MM */}
+          {" "}→ vence em {fmtDateBR(p.due_date)} — {fmtBRL(p.amount)}
+          {" "}
+          {p._needs_payer && <em className="text-red-600">(sem pagador)</em>}
+        </li>
+      ))}
+    </ul>
+  </section>
+)}
 
         {/* Tabela */}
         <section className="rounded border overflow-auto">
@@ -251,13 +418,13 @@ export default function FinanceiroPage() {
                       {r.status === "pending" ? (
                         <>
                           <button
-                            onClick={() => onMarkPaid(r.payment_id)}
+                            onClick={() => onMarkPaid(r.id)}
                             className="rounded border px-2 py-1"
                           >
                             Marcar pago
                           </button>
                           <button
-                            onClick={() => onCancel(r.payment_id)}
+                            onClick={() => onCancel(r.id)}
                             className="rounded border px-2 py-1"
                           >
                             Cancelar
@@ -265,7 +432,7 @@ export default function FinanceiroPage() {
                         </>
                       ) : (
                         <button
-                          onClick={() => onReopen(r.payment_id)}
+                          onClick={() => onReopen(r.id)}
                           className="rounded border px-2 py-1"
                         >
                           Reabrir

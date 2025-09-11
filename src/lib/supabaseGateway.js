@@ -866,9 +866,9 @@ return { ...data, meeting_rules: normalizeRules(data.meeting_rules) };
 
     const { data, error } = await supabase
       .from("payments")
-      .insert(toInsert)
+      .upsert(toInsert, { onConflict: "student_id,competence_month", ignoreDuplicates: true })
       .select("*");
-    if (error) mapErr("generateMonth.insertPayments", error);
+    if (error) mapErr("generateMonth.upsertPayments", error);
 
     return data || [];
   },
