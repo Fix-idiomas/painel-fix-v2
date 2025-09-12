@@ -22,9 +22,9 @@ async function reopenPayment(id) {
   return supabaseGateway.reopenPayment(id);
 }
 
-// KPIs + centros de custo (cards + tabela)
+// KPIs no formato da UI (usa o método novo do supabaseGateway)
 async function getMonthlySummary({ ym, tenant_id, cost_center = null }) {
-  return supabaseGateway.getMonthlyFinanceKpis({ ym, tenant_id, cost_center });
+  return supabaseGateway.getMonthlyFinancialSummary({ ym, tenant_id, cost_center });
 }
 
 async function getMonthlyFinanceKpis(args) {
@@ -192,7 +192,7 @@ async function deleteExpenseEntry(id) {
 }
 // alias para compatibilidade com a Home
 async function getMonthlyFinancialSummary(args) {
-  return getMonthlySummary(args);// ok — args já pode carregar tenant_id
+  return supabaseGateway.getMonthlySummary(args);// ok — args já pode carregar tenant_id
 }
 async function listStudents() {
   return supabaseGateway.listStudents();
@@ -246,22 +246,32 @@ async function generateMonth({ ym, tenant_id }) {
 
 // Exporte o objeto compacto usado no app
 export const financeGateway = {
-  // Receitas (mensalidades)
+   // Receitas (mensalidades)
+  // ==============================
   listPayments,
   markPaid,
   cancelPayment,
   reopenPayment,
-  getMonthlySummary,
-  getMonthlyFinancialSummary,
+  previewGenerateMonth,
+  generateMonth,
 
+  // ==============================
+  // KPIs / Sumário
+  // ==============================
+  getMonthlySummary,              // <- wrapper deve chamar supabaseGateway.getMonthlyFinancialSummary
+  getMonthlyFinancialSummary,     // alias
+  getMonthlyFinanceKpis: getMonthlySummary, // compat (alguns pontos ainda chamam por este nome)
+
+  // ==============================
   // Despesas
+  // ==============================
   listExpenseTemplates,
   createExpenseTemplate,
   updateExpenseTemplate,
   deleteExpenseTemplate,
   listExpenseEntries,
   createExpenseEntry,
-  createOneOffExpense, 
+  createOneOffExpense,
   markExpensePaid,
   cancelExpense,
   reopenExpense,
@@ -269,25 +279,31 @@ export const financeGateway = {
   generateExpenses,
   deleteExpenseEntry,
 
+  // ==============================
   // Outras receitas
+  // ==============================
   listOtherRevenues,
   createOtherRevenue,
   markOtherRevenuePaid,
   cancelOtherRevenue,
   reopenOtherRevenue,
 
+  // ==============================
   // Professores
+  // ==============================
   sumTeacherPayoutByMonth,
   listTeacherSessionsByMonth,
-  
+
+  // ==============================
   // Cadastro
+  // ==============================
   listTeachers,
   listTurmas,
   listStudents,
   setStudentStatus,
   listTurmaMembers,
   listAttendanceByStudent,
-  listPayers, 
+  listPayers,
   createPayer,
   updatePayer,
   deletePayer,
@@ -295,30 +311,24 @@ export const financeGateway = {
   createTeacher,
   updateStudent,
 
+  // ==============================
   // Agenda
+  // ==============================
   createSession,
   listSessionsWithAttendance,
-  listSessions, 
+  listSessions,
   listAttendance,
   upsertAttendance,
   deleteAttendance,
   updateSession,
   deleteSession,
 
- // Turmas
+  // ==============================
+  // Turmas
+  // ==============================
   createTurma,
   updateTurma,
   deleteTurma,
   addStudentToTurma,
   removeStudentFromTurma,
-  
-  // Financeiro
-  previewGenerateMonth,
-  generateMonth,
-  reopenPayment,
-  getMonthlyFinanceKpis: getMonthlySummary,
-  getMonthlySummary,
-  getMonthlyFinancialSummary,
-  // alguns pontos ainda chamam por este nome
-  getMonthlyFinanceKpis: getMonthlySummary,
 };

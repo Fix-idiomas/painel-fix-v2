@@ -287,7 +287,7 @@ export default function FinanceiroPage() {
               <div className="text-lg font-semibold">{fmtBRL(summary.receita)}</div>
             </div>
             <div className="rounded border p-3">
-              <div className="text-xs text-gray-500">Despesas (todas)</div>
+              <div className="text-xs text-gray-500">Despesas (gerais)</div>
               <div className="text-lg font-semibold">{fmtBRL(summary.despesas)}</div>
             </div>
             <div className="rounded border p-3">
