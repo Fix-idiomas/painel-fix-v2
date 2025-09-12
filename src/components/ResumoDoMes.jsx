@@ -47,16 +47,15 @@ export function ResumoDoMes({ ym, costCenter = null }) {
   const { receita, despesas, professores, saldo, saldo_operacional } = summary;
 
   return (
-    <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Card title="Receitas do mês" value={loading ? "…" : fmtBRL(receita)} />
-      <Card title="Despesas do mês" value={loading ? "…" : fmtBRL(despesas)} />
-      <Card title="Custo professores" value={loading ? "…" : fmtBRL(professores)} />
-      <Card
-        title="Saldo operacional"
-        value={loading ? "…" : fmtBRL(saldo_operacional)}
-        highlight={saldo_operacional >= 0 ? "text-green-600" : "text-red-600"}
-      />
-    </section>
+   <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+  <Card
+    title="Saldo do mês"
+    value={loading ? "…" : fmtBRL(saldo_operacional)}
+    highlight={saldo_operacional >= 0 ? "text-green-600" : "text-red-600"}
+  />
+  <Card title="Custo professores" value={loading ? "…" : fmtBRL(professores)} />
+</section>
+
   );
 }
 

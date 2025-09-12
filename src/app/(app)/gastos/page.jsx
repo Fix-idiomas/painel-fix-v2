@@ -7,6 +7,14 @@ import { useSession } from "@/contexts/SessionContext";  // ⬅️ NEW
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
 
+// Tradução de status para exibir na tabela
+const statusLabels = {
+  pending: "Pendente",
+  paid: "Pago",
+  canceled: "Cancelado",
+};
+
+
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const fmtBR = (s) => (s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-");
@@ -115,13 +123,13 @@ export default function GastosPage() {
   };
   const reopen = async (id) => {
     await financeGateway.reopenExpense(id);
-    await load();
+    await load();// recarrega lista após Reabrir
   };
-  const cancel = async (id) => {
+  async function cancel(id) {
     const note = prompt("Motivo do cancelamento (opcional):") || "";
     await financeGateway.cancelExpense(id, note);
     await load();
-  };
+  }
   const delEntry = async (id) => {
     if (!confirm("Excluir lançamento?")) return;
     await financeGateway.deleteExpenseEntry(id);
@@ -299,52 +307,60 @@ export default function GastosPage() {
                   <Th>Ações</Th>
                 </tr>
               </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id} className="border-t">
-                    <Td>{fmtBR(r.due_date)}</Td>
-                    <Td>{r.title_snapshot}</Td>
-                    <Td>{r.category || "-"}</Td>
-                    <Td>{r.cost_center || "-"}</Td>
-                    <Td>{fmtBRL(r.amount)}</Td>
-                    <Td>{r.status}</Td>
-                    <Td className="py-2">
-                      <div className="flex gap-2">
-                        {r.status !== "paid" && (
-                          <button
-                            onClick={() => markPaid(r.id)}
-                            className="px-2 py-1 border rounded"
-                          >
-                            Marcar pago
-                          </button>
-                        )}
-                        {r.status === "paid" && (
-                          <button
-                            onClick={() => reopen(r.id)}
-                            className="px-2 py-1 border rounded"
-                          >
-                            Reabrir
-                          </button>
-                        )}
-                        {r.status !== "canceled" && (
-                          <button
-                            onClick={() => cancel(r.id)}
-                            className="px-2 py-1 border rounded"
-                          >
-                            Cancelar
-                          </button>
-                        )}
-                        <button
-                          onClick={() => delEntry(r.id)}
-                          className="px-2 py-1 border rounded"
-                        >
-                          Excluir
-                        </button>
-                      </div>
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
+             <tbody>
+  {rows.map((r) => (
+    <tr key={r.id} className="border-t">
+      <Td>{fmtBR(r.due_date)}</Td>
+      <Td>{r.title_snapshot}</Td>
+      <Td>{r.category || "-"}</Td>
+      <Td>{r.cost_center || "-"}</Td>
+      <Td>{fmtBRL(r.amount)}</Td>
+
+      {/* ✅ Status traduzido */}
+      <Td>{statusLabels[r.status] || r.status}</Td>
+
+      <Td className="py-2">
+        <div className="flex gap-2">
+          {r.status === "pending" && (
+            <>
+              <button
+                onClick={() => markPaid(r.id)}
+                className="px-2 py-1 border rounded"
+              >
+                Marcar pago
+              </button>
+              <button
+                onClick={() => cancel(r.id)}
+                className="px-2 py-1 border rounded"
+              >
+                Cancelar
+              </button>
+            </>
+          )}
+
+          {r.status === "paid" && (
+            <button
+              onClick={() => reopen(r.id)}
+              className="px-2 py-1 border rounded"
+            >
+              Reabrir
+            </button>
+          )}
+
+          {r.status === "canceled" && (
+            <button
+              onClick={() => reopen(r.id)}
+              className="px-2 py-1 border rounded"
+            >
+              Reabrir
+            </button>
+          )}
+        </div>
+      </Td>
+    </tr>
+  ))}
+</tbody>
+
             </table>
           )}
         </section>

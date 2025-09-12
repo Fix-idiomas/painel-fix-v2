@@ -23,8 +23,12 @@ async function reopenPayment(id) {
 }
 
 // KPIs + centros de custo (cards + tabela)
-async function getMonthlySummary({ ym, cost_center = null }) {
-  return supabaseGateway.getMonthlyFinanceKpis({ ym, cost_center });
+async function getMonthlySummary({ ym, tenant_id, cost_center = null }) {
+  return supabaseGateway.getMonthlyFinanceKpis({ ym, tenant_id, cost_center });
+}
+
+async function getMonthlyFinanceKpis(args) {
+  return supabaseGateway.getMonthlyFinanceKpis(args);
 }
 
 // ---------- Financeiro: Despesas (templates + entries) ----------
@@ -40,6 +44,34 @@ async function updateExpenseTemplate(id, changes = {}) {
 async function deleteExpenseTemplate(id) {
   return supabaseGateway.deleteExpenseTemplate(id);
 }
+// ---------- Turmas (CRUD) ----------
+async function createTurma(payload) {
+  return supabaseGateway.createTurma(payload);
+}
+async function updateTurma(id, changes) {
+  return supabaseGateway.updateTurma(id, changes);
+}
+async function deleteTurma(id) {
+  return supabaseGateway.deleteTurma(id);
+}
+// ---------- Turmas: vínculos aluno–turma ----------
+async function addStudentToTurma(turmaId, studentId) {
+  return supabaseGateway.addStudentToTurma(turmaId, studentId);
+}
+async function removeStudentFromTurma(turmaId, studentId) {
+  return supabaseGateway.removeStudentFromTurma(turmaId, studentId);
+}
+async function listAttendance(sessionId) {
+  return supabaseGateway.listAttendance(sessionId);
+}
+
+async function upsertAttendance(sessionId, studentId, payload) {
+  return supabaseGateway.upsertAttendance(sessionId, studentId, payload);
+}
+
+
+
+
 
 async function listExpenseEntries({ ym, status = "all", cost_center = null } = {}) {
   // O supabaseGateway já aplica o filtro por mês e (opcional) status
@@ -61,6 +93,18 @@ async function listExpenseEntries({ ym, status = "all", cost_center = null } = {
     },
   };
 }
+// --- ALIAS p/ compatibilidade com telas antigas ---
+async function createOneOffExpense({ date, amount, title, category = null, cost_center = "PJ" }) {
+  // redireciona para o contrato canônico
+  return createExpenseEntry({
+    due_date: date,
+    amount,
+    description: title,
+    category,
+    cost_center,
+  });
+}
+
 async function createExpenseEntry(payload) {
   return supabaseGateway.createExpenseEntry(payload);
 }
@@ -107,6 +151,27 @@ async function sumTeacherPayoutByMonth(teacherId, ym) {
 }
 async function listTeacherSessionsByMonth(teacherId, ym) {
   return supabaseGateway.listTeacherSessionsByMonth(teacherId, ym);
+
+}
+// --- Professores ---
+async function updateTeacher(id, changes = {}) {
+  return supabaseGateway.updateTeacher(id, changes);
+}
+async function createTeacher(payload = {}) {
+  return supabaseGateway.createTeacher(payload);
+}
+
+
+// --- Turmas (membros) ---
+async function listTurmaMembers(turmaId) {
+  return supabaseGateway.listTurmaMembers(turmaId);
+}
+async function updateSession(id, changes = {}) {
+  return supabaseGateway.updateSession(id, changes);
+}
+// ⬇️ ADICIONE ESTE WRAPPER
+async function listSessions(turmaId) {
+  return supabaseGateway.listSessions(turmaId);
 }
 
 // ---------- Agenda (usados no fluxo da agenda) ----------
@@ -117,6 +182,67 @@ async function createSession(payload) {
 async function listSessionsWithAttendance({ turmaId, start, end }) {
   return supabaseGateway.listSessionsWithAttendance({ turmaId, start, end });
 }
+// --- Sessões (aulas) ---
+async function deleteSession(id) {
+  return supabaseGateway.deleteSession(id);
+}
+
+async function deleteExpenseEntry(id) {
+  return supabaseGateway.cancelExpense(id, "[UI] removido pela tela");
+}
+// alias para compatibilidade com a Home
+async function getMonthlyFinancialSummary(args) {
+  return getMonthlySummary(args);// ok — args já pode carregar tenant_id
+}
+async function listStudents() {
+  return supabaseGateway.listStudents();
+}
+
+  // --- Cadastro (listas básicas) ---
+async function listTeachers() {
+  return supabaseGateway.listTeachers();
+}
+async function listTurmas() {
+  return supabaseGateway.listTurmas();
+}
+
+async function setStudentStatus(id, status) {
+  return supabaseGateway.setStudentStatus(id, status);
+}
+
+// --- Presenças por aluno ---
+async function listAttendanceByStudent(studentId) {
+  return supabaseGateway.listAttendanceByStudent(studentId);
+}
+async function updateStudent(id, changes = {}) {
+  return supabaseGateway.updateStudent(id, changes);
+}
+// --- Pagadores ---
+async function listPayers(opts = {}) {
+  return supabaseGateway.listPayers(opts);
+}
+
+async function createPayer(payload) {
+  return supabaseGateway.createPayer(payload);
+}
+async function updatePayer(id, changes = {}) {
+  return supabaseGateway.updatePayer(id, changes);
+}
+async function deletePayer(id) {
+  return supabaseGateway.deletePayer(id);
+}
+async function deleteAttendance(sessionId, studentId) {
+  return supabaseGateway.deleteAttendance(sessionId, studentId);
+}
+
+//Financeiro
+async function previewGenerateMonth({ ym, tenant_id }) {
+  return supabaseGateway.previewGenerateMonth({ ym, tenant_id });
+  }
+async function generateMonth({ ym, tenant_id }) {
+  return supabaseGateway.generateMonth({ ym, tenant_id });
+}
+
 
 // Exporte o objeto compacto usado no app
 export const financeGateway = {
@@ -126,6 +252,7 @@ export const financeGateway = {
   cancelPayment,
   reopenPayment,
   getMonthlySummary,
+  getMonthlyFinancialSummary,
 
   // Despesas
   listExpenseTemplates,
@@ -134,11 +261,13 @@ export const financeGateway = {
   deleteExpenseTemplate,
   listExpenseEntries,
   createExpenseEntry,
+  createOneOffExpense, 
   markExpensePaid,
   cancelExpense,
   reopenExpense,
   previewGenerateExpenses,
   generateExpenses,
+  deleteExpenseEntry,
 
   // Outras receitas
   listOtherRevenues,
@@ -150,8 +279,46 @@ export const financeGateway = {
   // Professores
   sumTeacherPayoutByMonth,
   listTeacherSessionsByMonth,
+  
+  // Cadastro
+  listTeachers,
+  listTurmas,
+  listStudents,
+  setStudentStatus,
+  listTurmaMembers,
+  listAttendanceByStudent,
+  listPayers, 
+  createPayer,
+  updatePayer,
+  deletePayer,
+  updateTeacher,
+  createTeacher,
+  updateStudent,
 
   // Agenda
   createSession,
   listSessionsWithAttendance,
+  listSessions, 
+  listAttendance,
+  upsertAttendance,
+  deleteAttendance,
+  updateSession,
+  deleteSession,
+
+ // Turmas
+  createTurma,
+  updateTurma,
+  deleteTurma,
+  addStudentToTurma,
+  removeStudentFromTurma,
+  
+  // Financeiro
+  previewGenerateMonth,
+  generateMonth,
+  reopenPayment,
+  getMonthlyFinanceKpis: getMonthlySummary,
+  getMonthlySummary,
+  getMonthlyFinancialSummary,
+  // alguns pontos ainda chamam por este nome
+  getMonthlyFinanceKpis: getMonthlySummary,
 };

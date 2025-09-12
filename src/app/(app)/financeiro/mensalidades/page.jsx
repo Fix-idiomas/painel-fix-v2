@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { financeGateway, ADAPTER_NAME } from "@/lib/financeGateway";
 import Guard from "@/components/Guard";
+import { useSession } from "@/contexts/SessionContext";
 
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -25,6 +26,10 @@ export default function MensalidadesPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [genLoading, setGenLoading] = useState(false);
 
+  const { session, ready = true } = useSession?.() ?? {};
+  // fallback apenas para ambiente de seed/dev
+  const tenant_id = session?.tenantId || "11111111-1111-1111-1111-111111111111";
+
   const canPreview = typeof financeGateway.previewGenerateMonth === "function";
   const canGenerate = typeof financeGateway.generateMonth === "function";
 
@@ -36,7 +41,7 @@ export default function MensalidadesPage() {
   async function load() {
     setLoading(true);
     try {
-      const { rows, kpis } = await financeGateway.listPayments({ ym, status });
+      const { rows, kpis } = await financeGateway.listPayments({ ym, status, tenant_id });
       setRows(rows ?? []);
       setKpis(
         kpis ?? {
@@ -54,8 +59,10 @@ export default function MensalidadesPage() {
   }
 
   useEffect(() => {
+    if (!ready) return;
     load();
-  }, [ym, status]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, ym, status]);
 
   async function openPreview() {
     if (!canPreview) {
@@ -65,7 +72,7 @@ export default function MensalidadesPage() {
     setPreviewOpen(true);
     setPreviewLoading(true);
     try {
-      const prev = await financeGateway.previewGenerateMonth({ ym });
+      const prev = await financeGateway.previewGenerateMonth({ ym, tenant_id });
       setPreview(prev ?? []);
     } catch (e) {
       alert(e.message || String(e));
@@ -82,7 +89,7 @@ export default function MensalidadesPage() {
     if (!confirm("Gerar cobranças do mês para alunos ativos?")) return;
     setGenLoading(true);
     try {
-      await financeGateway.generateMonth({ ym });
+      await financeGateway.generateMonth({ ym, tenant_id });
       setPreviewOpen(false);
       await load();
       alert("Mensalidades geradas com sucesso.");
@@ -163,7 +170,9 @@ export default function MensalidadesPage() {
         </header>
 
         {/* Fonte/adapter (útil p/ debug) */}
-        <div className="text-xs text-slate-500">Adapter: <b>{ADAPTER_NAME}</b></div>
+        <div className="text-xs text-slate-500">
+          Adapter: <b>{ADAPTER_NAME}</b>
+        </div>
 
         {/* KPIs */}
         {!loading && (
@@ -263,7 +272,7 @@ export default function MensalidadesPage() {
                     <tbody>
                       {preview.map((p, i) => (
                         <tr key={`${p.student_id}:${i}`} className="border-t">
-                          <Td>{p._student_name_snapshot || p.student_name_snapshot || p.student_id}</Td>
+                          <Td>{p.student_name || p.student_id}</Td>
                           <Td>{p.due_date}</Td>
                           <Td>{fmtBRL(p.amount)}</Td>
                           <Td>{p._needs_payer ? "Será criado" : "OK"}</Td>

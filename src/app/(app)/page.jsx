@@ -7,7 +7,7 @@ import { useSession } from "@/contexts/SessionContext";
 import { ADAPTER_NAME, financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
 import { sendMail } from "@/lib/sendMailClient";
-import { ResumoDoMes } from "@/components/ResumoDoMes";
+
 
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -18,6 +18,8 @@ export default function HomePage() {
 
   const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
   const [showValues, setShowValues] = useState(true);
+  const [panelGroup, setPanelGroup] = useState("receitas"); // "receitas" | "gastos"
+
 
   // dados
   const [kpisFin, setKpisFin] = useState({ billed: 0, paid: 0, pending: 0, overdueMoney: 0 });
@@ -112,6 +114,9 @@ export default function HomePage() {
     );
   }
 
+  const saldoDoMes = Number(kpisFin.paid || 0) - Number(kpisExp.paid || 0);
+
+
   // ---- envio de email (geral) ----
   async function onSendMail(e) {
     e?.preventDefault?.();
@@ -146,55 +151,77 @@ export default function HomePage() {
   return (
     <Guard roles={["admin", "financeiro"]}>
       <main className="p-6 space-y-6">
-        <ResumoDoMes ym={ym} />
+       
+       {/* Header */}
+<div className="flex flex-wrap items-center justify-between gap-3">
+  <div className="flex items-center gap-3">
+    <h1 className="text-2xl font-bold">Início</h1>
+    <label className="text-sm text-slate-600">Mês:</label>
+    <input
+      type="month"
+      value={ym}
+      onChange={(e) => setYm(e.target.value.slice(0, 7))}
+      className="border rounded px-2 py-1"
+    />
+  </div>
 
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">Início</h1>
-            <label className="text-sm text-slate-600">Mês:</label>
-            <input
-              type="month"
-              value={ym}
-              onChange={(e) => setYm(e.target.value.slice(0, 7))}
-              className="border rounded px-2 py-1"
-            />
-          </div>
+  <div className="flex items-center gap-2">
+    {/* ⬇️ novo seletor de conjunto de cards */}
+    <select
+      value={panelGroup}
+      onChange={(e) => setPanelGroup(e.target.value)}
+      className="border rounded px-2 py-2"
+      title="Escolha o conjunto de cards"
+    >
+      <option value="receitas">Receitas</option>
+      <option value="gastos">Gastos</option>
+      <option value="custos">Custos</option>
+    </select>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowValues((v) => !v)}
-              className="border rounded px-3 py-2"
-            >
-              {showValues ? "Ocultar valores" : "Mostrar valores"}
-            </button>
+    <button
+      onClick={() => setShowValues((v) => !v)}
+      className="border rounded px-3 py-2"
+    >
+      {showValues ? "Ocultar valores" : "Mostrar valores"}
+    </button>
 
-            <button onClick={() => setOpenMail(true)} className="border rounded px-3 py-2">
-              Enviar e-mail
-            </button>
-          </div>
-        </div>
+    <button onClick={() => setOpenMail(true)} className="border rounded px-3 py-2">
+      Enviar e-mail
+    </button>
+  </div>
+</div>
 
         {/* KPIs */}
         {loading ? (
           <div className="p-4">Carregando…</div>
         ) : (
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Kpi title="Receita prevista (mês)" value={maskMoney(kpisFin.billed)} />
-            <Kpi title="Recebido (mês)" value={maskMoney(kpisFin.paid)} />
-            <Kpi title="Em atraso (mensalidades)" value={maskMoney(kpisFin.overdueMoney)} />
-            <Kpi title="Gastos (mês)" value={maskMoney(kpisExp.total)} />
-          </section>
-        )}
+           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+{panelGroup === "receitas" && (
+  <>
+    <Kpi title="Receita total prevista" value={maskMoney(kpisFin.billed)} />
+    <Kpi title="Receita recebida" value={maskMoney(kpisFin.paid)} />
+    <Kpi title="Receita em atraso" value={maskMoney(kpisFin.overdueMoney)} />
+  </>
+)}
 
-        {/* Contagens/chaves rápidas */}
-        {!loading && (
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Kpi title="Alunos ativos" value={maskCount(counts.studentsActive)} />
-            <Kpi title="Pendências (receita)" value={maskMoney(kpisFin.pending)} />
-            <Kpi title="Gastos pendentes" value={maskMoney(kpisExp.pending)} />
-            <Kpi title="Gastos em atraso" value={maskMoney(kpisExp.overdue)} />
-          </section>
+{panelGroup === "gastos" && (
+  <>
+    <Kpi title="Gastos totais" value={maskMoney(kpisExp.total)} />
+    <Kpi title="Gastos pagos" value={maskMoney(kpisExp.paid)} />
+    <Kpi title="Gastos em atraso" value={maskMoney(kpisExp.overdue)} />
+  </>
+)}
+
+{panelGroup === "custos" && (
+  <>
+    <Kpi title="Custo professores" value={maskMoney(kpisExp.teachers || 0)} />
+    {/* futuramente: outros custos filtrados por cost_center */}
+  </>
+)}
+
+    {/* Card fixo */}
+    <Kpi title="Alunos ativos" value={maskCount(counts.studentsActive)} />
+  </section>
         )}
 
         {/* Modal de E-mail Geral */}

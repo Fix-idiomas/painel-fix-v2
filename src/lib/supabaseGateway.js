@@ -125,36 +125,80 @@ export const supabaseGateway = {
     return data;
   },
 
-  async updateStudent(id, changes) {
-    if (!id) throw new Error("ID é obrigatório");
-    const patch = {};
-    if (changes?.name != null)            patch.name = String(changes.name).trim();
-    if (changes?.monthly_value != null)   patch.monthly_value = Number(changes.monthly_value || 0);
-    if (changes?.due_day != null)         patch.due_day = clampDay1to28(changes.due_day);
-    if (changes?.birth_date !== undefined)patch.birth_date = changes.birth_date || null;
-    if (changes?.payer_id !== undefined)  patch.payer_id = changes.payer_id || null;
+async updateStudent(id, changes = {}) {
+  if (!id) throw new Error("updateStudent: 'id' é obrigatório");
 
-    const { data, error } = await supabase
-      .from("students")
-      .update(patch)
-      .eq("id", id)
-      .select("id,name,status,monthly_value,due_day,birth_date,payer_id")
-      .single();
-    if (error) mapErr("updateStudent", error);
-    return data;
-  },
+  const patch = {};
 
-  async setStudentStatus(id, status) {
-    if (!id) throw new Error("ID é obrigatório");
-    const { data, error } = await supabase
-      .from("students")
-      .update({ status })
-      .eq("id", id)
-      .select("id,name,status")
-      .single();
-    if (error) mapErr("setStudentStatus", error);
-    return data;
-  },
+  // name (obrigatório se vier)
+  if (changes.name !== undefined) {
+    const nm = String(changes.name || "").trim();
+    if (!nm) throw new Error("updateStudent: 'name' é obrigatório");
+    patch.name = nm;
+  }
+
+  // monthly_value (numeric)
+  if (changes.monthly_value !== undefined) {
+    patch.monthly_value = Number(changes.monthly_value || 0);
+  }
+
+  // due_day (1..28)
+  if (changes.due_day !== undefined) {
+    const d = Number(changes.due_day);
+    if (!Number.isInteger(d) || d < 1 || d > 28) {
+      throw new Error("updateStudent: 'due_day' deve ser inteiro entre 1 e 28");
+    }
+    patch.due_day = d;
+  }
+
+  // birth_date (date ou null) — “YYYY-MM-DD”
+  if (changes.birth_date !== undefined) {
+    patch.birth_date = changes.birth_date ? String(changes.birth_date).slice(0, 10) : null;
+  }
+
+  // payer_id (uuid ou null)
+  if (changes.payer_id !== undefined) {
+    patch.payer_id = changes.payer_id || null;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    throw new Error("updateStudent: nada para atualizar");
+  }
+
+  const { data, error } = await supabase
+    .from("students")
+    .update(patch)
+    .eq("id", id)
+    .select("id, name, status, monthly_value, due_day, birth_date, payer_id, updated_at")
+    .single();
+
+  if (error) {
+    const msg = String(error.message || "");
+    if (msg.toLowerCase().includes("foreign key")) {
+      throw new Error("Pagador inválido: verifique o pagador selecionado.");
+    }
+    throw new Error(`updateStudent: ${msg}`);
+  }
+  return data;
+},
+
+
+async setStudentStatus(id, status) {
+  if (!id) throw new Error("setStudentStatus: 'id' é obrigatório");
+  if (!["ativo", "inativo"].includes(status)) {
+    throw new Error("setStudentStatus: status inválido (use 'ativo' ou 'inativo')");
+  }
+
+  const { data, error } = await supabase
+    .from("students")
+    .update({ status })
+    .eq("id", id)
+    .select("id, name, status, updated_at")
+    .single();
+
+  if (error) throw new Error(`setStudentStatus: ${error.message}`);
+  return data;
+},
 
   async deleteStudent(id) {
     if (!id) throw new Error("ID é obrigatório");
@@ -164,31 +208,69 @@ export const supabaseGateway = {
   },
 
   // Evolução do aluno (lista presenças com join de sessão e nome da turma)
-  async listAttendanceByStudent(studentId) {
-    if (!studentId) return [];
-    const { data, error } = await supabase
-      .from("attendance")
-      .select("session_id,present,note,sessions!inner(id,date,turma_id,turmas(name))")
-      .eq("student_id", studentId);
-    if (error) mapErr("listAttendanceByStudent", error);
+async listAttendanceByStudent(studentId) {
+  if (!studentId) throw new Error("listAttendanceByStudent: 'studentId' é obrigatório");
 
-    const rows = (data || []).map((r) => ({
-      key: `${r.session_id}:${studentId}`,
-      session_id: r.session_id,
-      present: !!r.present,
-      note: r.note || "",
-      turma_id: r.sessions?.turma_id || null,
-      session_date_snapshot: r.sessions?.date || null,
-      turma_name_snapshot: r.sessions?.turmas?.name || null,
-    }));
+  // 1) Presenças do aluno
+  const { data: atts, error: e1 } = await supabase
+    .from("attendance")
+    .select("session_id, student_id, present, note, created_at, updated_at, tenant_id")
+    .eq("student_id", studentId);
+  if (e1) throw new Error(e1.message);
 
-    rows.sort((a, b) =>
-      String(b.session_date_snapshot || "").localeCompare(
-        String(a.session_date_snapshot || "")
-      )
-    );
-    return rows;
-  },
+  const sessionIds = [...new Set((atts || []).map(a => a.session_id))];
+  if (sessionIds.length === 0) return [];
+
+  // 2) Sessões
+  const { data: sessions, error: e2 } = await supabase
+    .from("sessions")
+    .select("id, date, turma_id")
+    .in("id", sessionIds);
+  if (e2) throw new Error(e2.message);
+  const mapSession = new Map((sessions || []).map(s => [s.id, s]));
+
+  // 3) Turmas (para obter o nome)
+  const turmaIds = [...new Set((sessions || []).map(s => s.turma_id).filter(Boolean))];
+  let mapTurma = new Map();
+  if (turmaIds.length) {
+    const { data: turmas, error: e3 } = await supabase
+      .from("turmas")
+      .select("id, name")
+      .in("id", turmaIds);
+    if (e3) throw new Error(e3.message);
+    mapTurma = new Map((turmas || []).map(t => [t.id, t]));
+  }
+
+  // 4) Monta saída no formato que a UI espera
+  const out = (atts || []).map(a => {
+    const s = mapSession.get(a.session_id);
+    const turmaName = s ? (mapTurma.get(s.turma_id)?.name ?? null) : null;
+    return {
+      key: `${a.session_id}:${a.student_id}`, // útil para .map key
+      session_id: a.session_id,
+      student_id: a.student_id,
+      present: !!a.present,
+      note: a.note,
+      created_at: a.created_at,
+      updated_at: a.updated_at,
+      tenant_id: a.tenant_id,
+      // 👇 campos "snapshot" que a UI consome
+      session_date_snapshot: s?.date ?? null,
+      turma_name_snapshot: turmaName ?? null,
+    };
+  });
+
+  // ordena por data da sessão (fallback created_at)
+  out.sort((a, b) =>
+    String(a.session_date_snapshot || a.created_at || "")
+      .localeCompare(String(b.session_date_snapshot || b.created_at || ""))
+  );
+
+  return out;
+},
+
+
+
 
   // ==============================
   // PROFESSORES (CRUD + list)
@@ -202,58 +284,72 @@ export const supabaseGateway = {
     return data || [];
   },
 
-  async createTeacher({
-    name,
-    email = null,
-    phone = null,
-    status = "ativo",
-    hourly_rate = 0,
-    pay_day = 5,
-    rate_mode = "flat",
-    rate_rules = [],
-  }) {
-    if (!name) throw new Error("Nome é obrigatório");
-    const row = {
-      name: String(name).trim(),
-      email: email || null,
-      phone: phone || null,
-      status: status || "ativo",
-      hourly_rate: Number(hourly_rate || 0),
-      pay_day: clampDay1to28(pay_day),
-      rate_mode: rate_mode === "by_size" ? "by_size" : "flat",
-      rate_rules: Array.isArray(rate_rules) ? rate_rules : [],
-      created_at: new Date().toISOString(),
-    };
-    const { data, error } = await supabase
-      .from("teachers")
-      .insert(row)
-      .select("id,name,email,phone,status,hourly_rate,pay_day,rate_mode,rate_rules")
-      .single();
-    if (error) mapErr("createTeacher", error);
-    return data;
-  },
+// Criar professor
+async createTeacher(payload = {}) {
+  const row = {
+    name: String(payload.name || "").trim(),
+    email: payload.email ? String(payload.email).trim() : null,
+    phone: payload.phone ? String(payload.phone).trim() : null,
+    status: payload.status === "inativo" ? "inativo" : "ativo",
+    hourly_rate: Number(payload.hourly_rate || 0),
+    pay_day: (() => {
+      const d = Number(payload.pay_day || 5);
+      if (!Number.isInteger(d) || d < 1 || d > 28) throw new Error("createTeacher: 'pay_day' deve ser 1..28");
+      return d;
+    })(),
+    rate_mode: payload.rate_mode === "by_size" ? "by_size" : "flat",
+    rate_rules: Array.isArray(payload.rate_rules) ? payload.rate_rules : [],
+  };
 
-  async updateTeacher(id, changes) {
-    if (!id) throw new Error("ID do professor é obrigatório.");
-    const patch = {};
-    if (changes?.name != null)              patch.name = String(changes.name).trim();
-    if (changes?.email !== undefined)       patch.email = changes.email || null;
-    if (changes?.phone !== undefined)       patch.phone = changes.phone || null;
-    if (changes?.status != null)            patch.status = changes.status;
-    if (changes?.hourly_rate !== undefined) patch.hourly_rate = Number(changes.hourly_rate || 0);
-    if (changes?.pay_day !== undefined)     patch.pay_day = clampDay1to28(changes.pay_day);
-    if (changes?.rate_mode !== undefined)   patch.rate_mode = changes.rate_mode === "by_size" ? "by_size" : "flat";
-    if (changes?.rate_rules !== undefined)  patch.rate_rules = Array.isArray(changes.rate_rules) ? changes.rate_rules : [];
+  if (!row.name) throw new Error("createTeacher: 'name' é obrigatório");
 
-    const { data, error } = await supabase
-      .from("teachers")
-      .update(patch)
-      .eq("id", id)
-      .select("id,name,email,phone,status,hourly_rate,pay_day,rate_mode,rate_rules")
-      .single();
-    if (error) mapErr("updateTeacher", error);
-    return data;
-  },
+  const { data, error } = await supabase
+    .from("teachers")
+    .insert([row])
+    .select("id, name, email, phone, status, hourly_rate, pay_day, rate_mode, rate_rules, created_at")
+    .single();
+
+  if (error) throw new Error(`createTeacher: ${error.message}`);
+  return data;
+},
+
+// Atualizar professor
+async updateTeacher(id, changes = {}) {
+  if (!id) throw new Error("updateTeacher: 'id' é obrigatório");
+
+  const patch = {};
+  if (changes.name !== undefined)        patch.name = String(changes.name || "").trim();
+  if (changes.email !== undefined)       patch.email = changes.email ? String(changes.email).trim() : null;
+  if (changes.phone !== undefined)       patch.phone = changes.phone ? String(changes.phone).trim() : null;
+  if (changes.status !== undefined)      patch.status = changes.status === "inativo" ? "inativo" : "ativo";
+  if (changes.hourly_rate !== undefined) patch.hourly_rate = Number(changes.hourly_rate || 0);
+
+  if (changes.pay_day !== undefined) {
+    const d = Number(changes.pay_day);
+    if (!Number.isInteger(d) || d < 1 || d > 28) throw new Error("updateTeacher: 'pay_day' deve ser 1..28");
+    patch.pay_day = d;
+  }
+
+  if (changes.rate_mode !== undefined) {
+    patch.rate_mode = changes.rate_mode === "by_size" ? "by_size" : "flat";
+  }
+
+  if (changes.rate_rules !== undefined) {
+    patch.rate_rules = Array.isArray(changes.rate_rules) ? changes.rate_rules : [];
+  }
+
+  if (Object.keys(patch).length === 0) throw new Error("updateTeacher: nada para atualizar");
+
+  const { data, error } = await supabase
+    .from("teachers")
+    .update(patch)
+    .eq("id", id)
+    .select("id, name, email, phone, status, hourly_rate, pay_day, rate_mode, rate_rules, updated_at")
+    .single();
+
+  if (error) throw new Error(`updateTeacher: ${error.message}`);
+  return data;
+},
 
   async setTeacherStatus(id, status) {
     if (!id) throw new Error("ID do professor é obrigatório.");
@@ -277,49 +373,74 @@ export const supabaseGateway = {
   // ==============================
   // PAYERS (CRUD)
   // ==============================
-  async listPayers() {
-    const { data, error } = await supabase
-      .from("payers")
-      .select("id,name,email,created_at,updated_at")
-      .order("name", { ascending: true });
-    if (error) mapErr("listPayers", error);
-    return data || [];
-  },
+async listPayers({ status = "all" } = {}) {
+  let q = supabase
+    .from("payers") // ajuste se sua tabela tiver outro nome
+    .select("id, name, email, created_at")
+    .order("name", { ascending: true });
 
-  async createPayer({ name, email = null }) {
-    if (!name) throw new Error("Nome é obrigatório");
-    const row = { name: String(name).trim(), email: email || null };
-    const { data, error } = await supabase
-      .from("payers")
-      .insert(row)
-      .select("id,name,email,created_at,updated_at")
-      .single();
-    if (error) mapErr("createPayer", error);
-    return data;
-  },
+  // se você tiver coluna 'status', descomente:
+  // if (status !== "all") q = q.eq("status", status);
 
-  async updatePayer(id, changes) {
-    if (!id) throw new Error("ID é obrigatório");
-    const patch = {};
-    if (changes?.name != null)  patch.name  = String(changes.name).trim();
-    if (changes?.email !== undefined) patch.email = changes.email || null;
+  const { data, error } = await q;
+  if (error) throw new Error(`listPayers: ${error.message}`);
+  return data || [];
+},
 
-    const { data, error } = await supabase
-      .from("payers")
-      .update(patch)
-      .eq("id", id)
-      .select("id,name,email,created_at,updated_at")
-      .single();
-    if (error) mapErr("updatePayer", error);
-    return data;
-  },
 
-  async deletePayer(id) {
-    if (!id) throw new Error("ID é obrigatório");
-    const { error } = await supabase.from("payers").delete().eq("id", id);
-    if (error) mapErr("deletePayer", error);
-    return true;
-  },
+async createPayer({ name, email = null }) {
+  const nm = String(name || "").trim();
+  if (!nm) throw new Error("createPayer: 'name' é obrigatório");
+
+  const { data, error } = await supabase
+    .from("payers")
+    .insert([{ name: nm, email: email || null }])
+    .select("id, name, email, created_at")
+    .single();
+
+  if (error) throw new Error(`createPayer: ${error.message}`);
+  return data;
+},
+
+async updatePayer(id, changes = {}) {
+  if (!id) throw new Error("updatePayer: 'id' é obrigatório");
+
+  const patch = {};
+  if (changes.name !== undefined)  patch.name  = String(changes.name || "").trim();
+  if (changes.email !== undefined) patch.email = changes.email ? String(changes.email).trim() : null;
+
+  if (!patch.name) throw new Error("updatePayer: 'name' é obrigatório");
+
+  const { data, error } = await supabase
+    .from("payers")
+    .update(patch)
+    .eq("id", id)
+    .select("id, name, email, created_at")
+    .single();
+
+  if (error) throw new Error(`updatePayer: ${error.message}`);
+  return data;
+},
+
+async deletePayer(id) {
+  if (!id) throw new Error("deletePayer: 'id' é obrigatório");
+
+  // se existir FK (ex.: payments.payer_id), o Supabase vai bloquear e retornar erro.
+  const { error } = await supabase
+    .from("payers")
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    // mensagem amigável quando houver violação de FK/uso em alunos/lançamentos
+    if (String(error.message).toLowerCase().includes("foreign key")) {
+      throw new Error("Não é possível excluir: pagador em uso por alunos/lançamentos.");
+    }
+    throw new Error(`deletePayer: ${error.message}`);
+  }
+  return { success: true };
+},
+
 
   // ==============================
   // TURMAS & MEMBROS
@@ -346,108 +467,160 @@ export const supabaseGateway = {
   },
 
   async listTurmaMembers(turmaId) {
-    const { data: links, error: e1 } = await supabase
-      .from("turma_members")
-      .select("student_id")
-      .eq("turma_id", turmaId);
-    if (e1) mapErr("listTurmaMembers.links", e1);
+  if (!turmaId) throw new Error("listTurmaMembers: 'turmaId' é obrigatório");
 
-    const ids = (links || []).map((r) => r.student_id);
-    if (ids.length === 0) return [];
+  const { data: links, error: e1 } = await supabase
+    .from("turma_members")
+    .select("student_id")
+    .eq("turma_id", turmaId);
 
-    const { data: students, error: e2 } = await supabase
-      .from("students")
-      .select("id,name,status")
-      .in("id", ids);
-    if (e2) mapErr("listTurmaMembers.students", e2);
+  if (e1) throw new Error(`listTurmaMembers.links: ${e1.message}`);
 
-    return (students || []).sort((a, b) => a.name.localeCompare(b.name));
-  },
+  // IDs únicos
+  const ids = [...new Set((links || []).map((r) => r.student_id))];
+  if (ids.length === 0) return [];
 
-  async createTurma(payload) {
-    const row = {
-      name: String(payload?.name || "").trim(),
-      teacher_id: payload?.teacher_id || null,
-      capacity: Number(payload?.capacity ?? 20),
-      meeting_rules: normalizeRules(payload?.meeting_rules),
-    };
-    if (!row.name) throw new Error("Nome da turma é obrigatório.");
+  const { data: students, error: e2 } = await supabase
+    .from("students")
+    .select("id,name,status")
+    .in("id", ids)
+    .order("name", { ascending: true });
 
-    const { data, error } = await supabase
-      .from("turmas")
-      .insert(row)
-      .select("id,name,teacher_id,capacity,meeting_rules")
-      .single();
-    if (error) mapErr("createTurma", error);
+  if (e2) throw new Error(`listTurmaMembers.students: ${e2.message}`);
 
-return { ...data, meeting_rules: normalizeRules(data.meeting_rules) };
+  return students || [];
 },
 
-  async updateTurma(id, changes) {
-    if (!id) throw new Error("ID da turma é obrigatório.");
 
-    const patch = {};
-    if (changes?.name != null)             patch.name = String(changes.name).trim();
-    if (changes?.teacher_id !== undefined) patch.teacher_id = changes.teacher_id || null;
-    if (changes?.capacity != null)         patch.capacity = Number(changes.capacity ?? 20);
-    if (changes?.meeting_rules !== undefined)
-      patch.meeting_rules = normalizeRules(changes.meeting_rules);
+// ---------- Turmas (CRUD) ----------
+createTurma: async function (payload = {}) {
+  const name = String(payload.name || "").trim();
+  if (!name) throw new Error("createTurma: 'name' é obrigatório");
 
-    const { data, error } = await supabase
-      .from("turmas")
-      .update(patch)
-      .eq("id", id)
-      .select("id,name,teacher_id,capacity,meeting_rules")
-      .single();
-    if (error) mapErr("updateTurma", error);
+  const capacity = Math.max(1, Number(payload.capacity || 20));
+  const teacher_id = payload.teacher_id || null;
 
-  return { ...data, meeting_rules: normalizeRules(data.meeting_rules) };
+  const meeting_rules = Array.isArray(payload.meeting_rules)
+    ? payload.meeting_rules.map((r) => ({
+        weekday: (r.weekday === "" || r.weekday === undefined || r.weekday === null)
+          ? null
+          : Number(r.weekday),
+        time: r.time || null,
+        duration_hours: Number(r.duration_hours || 0.5),
+      }))
+    : [];
+
+  const row = { name, teacher_id, capacity, meeting_rules };
+
+  const { data, error } = await supabase
+    .from("turmas")
+    .insert([row])
+    .select("id, name, teacher_id, capacity, meeting_rules, created_at, updated_at")
+    .single();
+
+  if (error) throw new Error(`createTurma: ${error.message}`);
+  return data;
 },
 
-  async deleteTurma(id) {
-    if (!id) throw new Error("ID da turma é obrigatório.");
-    const { error } = await supabase.from("turmas").delete().eq("id", id);
-    if (error) mapErr("deleteTurma", error);
-    return true;
-  },
+updateTurma: async function (id, changes = {}) {
+  if (!id) throw new Error("updateTurma: 'id' é obrigatório");
 
-  async addStudentToTurma(turmaId, studentId) {
-    if (!turmaId || !studentId) throw new Error("turmaId e studentId são obrigatórios.");
-    const { error } = await supabase
-      .from("turma_members")
-      .insert({ turma_id: turmaId, student_id: studentId, status: "ativo" });
-    if (error && error.code !== "23505") mapErr("addStudentToTurma", error);
-    return true;
-  },
+  const patch = {};
+  if (changes.name !== undefined) {
+    const name = String(changes.name || "").trim();
+    if (!name) throw new Error("updateTurma: 'name' não pode ser vazio");
+    patch.name = name;
+  }
+  if (changes.teacher_id !== undefined) {
+    patch.teacher_id = changes.teacher_id || null;
+  }
+  if (changes.capacity !== undefined) {
+    patch.capacity = Math.max(1, Number(changes.capacity || 20));
+  }
+  if (changes.meeting_rules !== undefined) {
+    patch.meeting_rules = Array.isArray(changes.meeting_rules)
+      ? changes.meeting_rules.map((r) => ({
+          weekday: (r.weekday === "" || r.weekday === undefined || r.weekday === null)
+            ? null
+            : Number(r.weekday),
+          time: r.time || null,
+          duration_hours: Number(r.duration_hours || 0.5),
+        }))
+      : [];
+  }
+  patch.updated_at = new Date().toISOString();
 
-  async removeStudentFromTurma(turmaId, studentId) {
-    if (!turmaId || !studentId) throw new Error("turmaId e studentId são obrigatórios.");
-    const { error } = await supabase
-      .from("turma_members")
-      .delete()
-      .eq("turma_id", turmaId)
-      .eq("student_id", studentId);
-    if (error) mapErr("removeStudentFromTurma", error);
-    return true;
-  },
+  const { data, error } = await supabase
+    .from("turmas")
+    .update(patch)
+    .eq("id", id)
+    .select("id, name, teacher_id, capacity, meeting_rules, created_at, updated_at")
+    .single();
 
+  if (error) throw new Error(`updateTurma: ${error.message}`);
+  return data;
+},
+
+deleteTurma: async function (id) {
+  if (!id) throw new Error("deleteTurma: 'id' é obrigatório");
+
+  // Remove dependências simples antes (sem transação no client)
+  const delMembers = await supabase.from("turma_members").delete().eq("turma_id", id);
+  if (delMembers.error) throw new Error(`deleteTurma (members): ${delMembers.error.message}`);
+
+  const delSessions = await supabase.from("sessions").delete().eq("turma_id", id);
+  if (delSessions.error) throw new Error(`deleteTurma (sessions): ${delSessions.error.message}`);
+
+  const { error: eTurma } = await supabase.from("turmas").delete().eq("id", id);
+  if (eTurma) throw new Error(`deleteTurma: ${eTurma.message}`);
+
+  return true;
+},
+
+// --- Vínculo aluno-turma ---
+async addStudentToTurma(turmaId, studentId) {
+  if (!turmaId || !studentId) throw new Error("addStudentToTurma: turmaId e studentId são obrigatórios");
+  const { data, error } = await supabase
+    .from("turma_members")
+    .upsert(
+      { turma_id: turmaId, student_id: studentId, status: "ativo" }, // tenant_id tem default, pode omitir
+      { onConflict: "turma_id,student_id" }
+    )
+    .select("turma_id, student_id, status, created_at, updated_at")
+    .single();
+  if (error) mapErr("addStudentToTurma", error);
+  return data; // não há 'id'
+},
+async removeStudentFromTurma(turmaId, studentId) {
+  if (!turmaId || !studentId) throw new Error("removeStudentFromTurma: turmaId e studentId são obrigatórios");
+  const { error } = await supabase
+    .from("turma_members")
+    .delete()
+    .eq("turma_id", turmaId)
+    .eq("student_id", studentId);
+  if (error) mapErr("removeStudentFromTurma", error);
+  return true;
+},
   // ==============================
   // SESSÕES & PRESENÇAS
   // ==============================
-  async listSessions(turmaId) {
+// src/lib/supabaseGateway.js
+// --- Sessões (aulas) ---
+async listSessions(turmaId) {
+  if (!turmaId) throw new Error("listSessions: 'turmaId' é obrigatório");
+
   const { data, error } = await supabase
     .from("sessions")
-    .select("id,turma_id,date,duration_hours,notes,headcount_snapshot")
+    .select("id, turma_id, date, duration_hours, notes, headcount_snapshot, created_at, updated_at")
     .eq("turma_id", turmaId)
     .order("date", { ascending: true });
-  if (error) mapErr("listSessions", error);
 
-  // 🔧 normaliza: guarda apenas o dia para o front
-  return (data || []).map(r => ({
-    ...r,
-    date: String(r.date).slice(0, 10), // "YYYY-MM-DD"
-  }));
+  if (error) throw new Error(`listSessions: ${error.message}`);
+  return data || [];
 },
+
+
+
 // Lista sessões de uma turma num intervalo [start, end] e indica se têm presença
   async listSessionsWithAttendance({ turmaId, start, end }) {
     if (!turmaId) throw new Error("listSessionsWithAttendance: 'turmaId' é obrigatório");
@@ -580,26 +753,44 @@ return { ...data, meeting_rules: normalizeRules(data.meeting_rules) };
     return true;
   },
 
-  async listAttendance(sessionId) {
-    const { data, error } = await supabase
-      .from("attendance")
-      .select("student_id,present,note")
-      .eq("session_id", sessionId);
-    if (error) mapErr("listAttendance", error);
-    return data || [];
-  },
+// --- Attendance ---
+async listAttendance(sessionId) {
+  const { data, error } = await supabase
+    .from("attendance")
+    .select("student_id, present, note")
+    .eq("session_id", sessionId);
 
-  async upsertAttendance(sessionId, studentId, { present, note }) {
-    if (!sessionId || !studentId) throw new Error("sessionId e studentId são obrigatórios.");
-    const { error } = await supabase
-      .from("attendance")
-      .upsert(
-        [{ session_id: sessionId, student_id: studentId, present: !!present, note: note || "" }],
-        { onConflict: "session_id,student_id", ignoreDuplicates: false }
-      );
-    if (error) mapErr("upsertAttendance", error);
-    return true;
-  },
+  if (error) mapErr("listAttendance", error);
+  return data || [];
+},
+async deleteAttendance(sessionId, studentId) {
+  const { error } = await supabase
+    .from("attendance")
+    .delete()
+    .eq("session_id", sessionId)
+    .eq("student_id", studentId);
+
+  if (error) mapErr("deleteAttendance", error);
+  return true;
+},
+async upsertAttendance(sessionId, studentId, { present, note }) {
+  const { data, error } = await supabase
+    .from("attendance")
+    .upsert(
+      {
+        session_id: sessionId,
+        student_id: studentId,
+        present: !!present,
+        note: note || null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: ["session_id", "student_id"] }
+    )
+    .select();
+
+  if (error) mapErr("upsertAttendance", error);
+  return data?.[0] || null;
+},
 
   /**
    * IDEMPOTENTE: Gera sessões a partir de meeting_rules no intervalo [startDate, endDate].
@@ -755,160 +946,252 @@ return { ...data, meeting_rules: normalizeRules(data.meeting_rules) };
   // ==============================
   // FINANCEIRO — Mensalidades
   // ==============================
-  async previewGenerateMonth({ ym }) {
-    const monthStart = monthStartOf(ym);
-    const { data: students, error: e1 } = await supabase
-      .from("students")
-      .select("id,name,monthly_value,due_day,payer_id,status")
-      .eq("status", "ativo");
-    if (e1) mapErr("previewGenerateMonth.students", e1);
+// ✅ Prévia (somente cálculo/mostra – nada grava)
+async previewGenerateMonth({ ym, tenant_id }) {
+  if (!ym) throw new Error("previewGenerateMonth: 'ym' é obrigatório.");
+  if (!tenant_id) throw new Error("previewGenerateMonth: 'tenant_id' é obrigatório.");
 
-    const actives = (students || []).filter((s) => Number(s.monthly_value || 0) > 0);
-    if (actives.length === 0) return [];
+  const [year, month] = ym.split("-").map(Number);
 
-    const { data: existing, error: e2 } = await supabase
-      .from("payments")
-      .select("student_id,competence_month,status")
-      .eq("competence_month", monthStart)
-      .neq("status", "canceled");
-    if (e2) mapErr("previewGenerateMonth.existing", e2);
+  // 1) Buscar alunos ativos do tenant
+  const { data: students, error: e1 } = await supabase
+    .from("students")
+    .select("id, name, monthly_value, due_day, payer_id")
+    .eq("status", "ativo")
+    .eq("tenant_id", tenant_id);
 
-    const setExisting = new Set((existing || []).map((p) => p.student_id));
+  if (e1) throw new Error(`[previewGenerateMonth.students] ${e1.message}`);
 
-    const out = [];
-    for (const s of actives) {
-      if (setExisting.has(s.id)) continue;
+  // 2) Montar lançamentos “virtuais” (sem gravar)
+  const rows = (students || [])
+    .filter((s) => Number(s.monthly_value || 0) > 0) // só gera quem tem valor
+    .map((s) => {
+      // usar UTC para não “virar” a data por fuso
+      const dueDate = new Date(Date.UTC(year, month - 1, Number(s.due_day || 5)))
+        .toISOString()
+        .slice(0, 10); // YYYY-MM-DD
 
-      const due_date = dueDateFor(monthStart.slice(0, 7), s.due_day);
-      out.push({
+      return {
         student_id: s.id,
-        _student_name_snapshot: s.name,
         payer_id: s.payer_id || null,
-        _needs_payer: !s.payer_id,
-        competence_month: monthStart,
-        due_date,
+        competence_month: `${ym}-01`,
+        due_date: dueDate,
         amount: Number(s.monthly_value || 0),
         status: "pending",
-      });
-    }
-    return out;
-  },
-
-  async generateMonth({ ym }) {
-    const monthStart = monthStartOf(ym);
-
-    const { data: students, error: e1 } = await supabase
-      .from("students")
-      .select("id,name,monthly_value,due_day,payer_id,status")
-      .eq("status", "ativo");
-    if (e1) mapErr("generateMonth.students", e1);
-
-    const { data: existing, error: e2 } = await supabase
-      .from("payments")
-      .select("student_id")
-      .eq("competence_month", monthStart)
-      .neq("status", "canceled");
-    if (e2) mapErr("generateMonth.existing", e2);
-
-    const exists = new Set((existing || []).map((p) => p.student_id));
-
-    const { data: payers, error: e3 } = await supabase
-      .from("payers")
-      .select("id,name");
-    if (e3) mapErr("generateMonth.payers", e3);
-    const payerName = new Map((payers || []).map((p) => [p.id, p.name]));
-
-    const toInsert = [];
-    for (const s of students || []) {
-      const amount = Number(s.monthly_value || 0);
-      if (amount <= 0) continue;
-      if (exists.has(s.id)) continue;
-
-      let payer_id = s.payer_id || null;
-
-      if (!payer_id) {
-        const { data: createdPayer, error: ep } = await supabase
-          .from("payers")
-          .insert({ name: s.name })
-          .select("id,name")
-          .single();
-        if (ep) mapErr("generateMonth.createPayer", ep);
-        payer_id = createdPayer.id;
-        payerName.set(createdPayer.id, createdPayer.name);
-
-        const { error: es } = await supabase
-          .from("students")
-          .update({ payer_id })
-          .eq("id", s.id);
-        if (es) mapErr("generateMonth.linkPayerToStudent", es);
-      }
-
-      const due_date = dueDateFor(monthStart.slice(0, 7), s.due_day);
-      const pyName = payerName.get(payer_id) || s.name;
-
-      toInsert.push({
-        student_id: s.id,
-        payer_id,
-        competence_month: monthStart,
-        due_date,
-        amount,
-        status: "pending",
-        paid_at: null,
-        canceled_at: null,
-        cancel_note: null,
-        created_at: new Date().toISOString(),
+        // snapshots úteis para a UI da prévia:
         student_name_snapshot: s.name,
-        payer_name_snapshot: pyName,
-      });
+        _needs_payer: !s.payer_id, // dica p/ interface (“será criado”)
+      };
+    });
+
+  return rows;
+},
+
+// ✅ Geração efetiva (insere em 'payments')
+async generateMonth({ ym, tenant_id }) {
+  if (!ym) throw new Error("generateMonth: 'ym' é obrigatório.");
+  if (!tenant_id) throw new Error("generateMonth: 'tenant_id' é obrigatório.");
+
+  const monthStart = `${ym}-01`;
+
+  // 1) Alunos ativos do tenant
+  const { data: students, error: e1 } = await supabase
+    .from("students")
+    .select("id, name, monthly_value, due_day, payer_id, status")
+    .eq("status", "ativo")
+    .eq("tenant_id", tenant_id);
+  if (e1) mapErr("generateMonth.students", e1);
+
+  // 2) Já existentes (não cancelados) para este mês
+  const { data: existing, error: e2 } = await supabase
+    .from("payments")
+    .select("student_id")
+    .eq("tenant_id", tenant_id)
+    .eq("competence_month", monthStart)
+    .neq("status", "canceled");
+  if (e2) mapErr("generateMonth.existing", e2);
+  const exists = new Set((existing || []).map((p) => p.student_id));
+
+  // 3) Payers do tenant (map para validar existência)
+  const { data: payers, error: e3 } = await supabase
+  .from("payers")
+  .select("id, name")
+  .eq("tenant_id", tenant_id);
+if (e3) mapErr("generateMonth.payers", e3);
+
+const payerName = new Map((payers || []).map((p) => [p.id, p.name]));
+const payerIds = new Set((payers || []).map((p) => p.id));
+const payerByName = new Map(
+  (payers || []).map((p) => [String(p.name || "").trim().toLowerCase(), p.id])
+);
+
+// 4) Preparar inserts (resolve pagador: próprio aluno ou terceiro)
+const toInsert = [];
+for (const s of students || []) {
+  const amount = Number(s.monthly_value || 0);
+  if (amount <= 0) continue;          // ignora mensalidade 0
+  if (exists.has(s.id)) continue;     // já gerado para o mês
+
+  let payer_id = s.payer_id || null;
+
+  // ⚠️ garante pagador válido do MESMO tenant:
+  //    1) se já tem payer_id e ele existe no tenant -> usa
+  //    2) se não tem ou é inválido -> "aluno é o pagador"
+  //       2.1) tenta achar por nome (case-insensitive) pra não duplicar
+  //       2.2) se não achar, cria e vincula no aluno
+  if (!payer_id || !payerIds.has(payer_id)) {
+    const key = String(s.name || "").trim().toLowerCase();
+
+    // tenta reaproveitar um pagador com mesmo nome
+    let reuseId = key ? payerByName.get(key) : null;
+
+    if (reuseId) {
+      payer_id = reuseId;
+    } else {
+      // cria um pagador "self" com o nome do aluno
+      const { data: createdPayer, error: ep } = await supabase
+        .from("payers")
+        .insert({ tenant_id, name: s.name })
+        .select("id, name")
+        .single();
+      if (ep) mapErr("generateMonth.createPayer", ep);
+
+      payer_id = createdPayer.id;
+      payerIds.add(payer_id);
+      payerName.set(payer_id, createdPayer.name);
+      if (key) payerByName.set(key, payer_id);
     }
 
-    if (toInsert.length === 0) return [];
+    // vincula o pagador resolvido no aluno
+    const { error: es } = await supabase
+      .from("students")
+      .update({ payer_id })
+      .eq("id", s.id)
+      .eq("tenant_id", tenant_id);
+    if (es) mapErr("generateMonth.linkPayerToStudent", es);
+  }
 
+  // due_date (UTC) a partir de ym + due_day
+  const [Y, M] = ym.split("-").map(Number);
+  const due_date = new Date(Date.UTC(Y, M - 1, Number(s.due_day || 5)))
+    .toISOString()
+    .slice(0, 10);
+
+  const pyName = payerName.get(payer_id) || s.name;
+
+  toInsert.push({
+    tenant_id,
+    student_id: s.id,
+    payer_id, // ✅ garantido existente
+    competence_month: monthStart,
+    due_date,
+    amount,
+    status: "pending",
+    paid_at: null,
+    canceled_at: null,
+    cancel_note: null,
+    created_at: new Date().toISOString(),
+    student_name_snapshot: s.name,
+    payer_name_snapshot: pyName,
+  });
+}
+  if (toInsert.length === 0) return [];
+
+  // 5) INSERT (sem onConflict). Se duplicar por corrida, tratamos 23505.
+  try {
     const { data, error } = await supabase
       .from("payments")
-      .upsert(toInsert, { onConflict: "student_id,competence_month", ignoreDuplicates: true })
+      .insert(toInsert)
       .select("*");
-    if (error) mapErr("generateMonth.upsertPayments", error);
-
+    if (error) mapErr("generateMonth.insertPayments", error);
     return data || [];
-  },
+  } catch (err) {
+    if (err?.code === "23505") {
+      const { data: rows, error: er } = await supabase
+        .from("payments")
+        .select("*")
+        .eq("tenant_id", tenant_id)
+        .eq("competence_month", monthStart)
+        .neq("status", "canceled");
+      if (er) mapErr("generateMonth.fetchAfterDup", er);
+      return rows || [];
+    }
+    throw err;
+  }
+},
 
-  async listPayments({ ym, status }) {
-    const monthStart = ym ? monthStartOf(ym) : null;
 
-    let q = supabase
-      .from("payments")
-      .select(
-        "id,student_id,payer_id,competence_month,due_date,amount,status,paid_at,canceled_at,cancel_note,created_at,student_name_snapshot,payer_name_snapshot"
-      );
 
-    if (monthStart) q = q.eq("competence_month", monthStart);
-    if (status && status !== "all") q = q.eq("status", status);
+  // 🧩 supabaseGateway.js — substitua seu listPayments por este
+async listPayments({ ym, status = null, tenant_id = null } = {}) {
+  // ym: "YYYY-MM" | null
+  const monthStart = ym ? `${ym}-01` : null;
+  const monthEnd = ym
+    ? new Date(new Date(`${ym}-01T00:00:00`).setMonth(new Date(`${ym}-01T00:00:00`).getMonth() + 1))
+        .toISOString()
+        .slice(0, 10) // YYYY-MM-DD
+    : null;
 
-    const { data, error } = await q;
-    if (error) mapErr("listPayments", error);
+  let q = supabase
+    .from("payments")
+    .select(
+      "id,tenant_id,student_id,payer_id,competence_month,due_date,amount,status,paid_at,canceled_at,cancel_note,created_at,student_name_snapshot,payer_name_snapshot"
+    );
 
-    const today = tzToday("America/Sao_Paulo");
-    const rows = (data || []).map((p) => ({
-      ...p,
-      days_overdue:
-        p.status === "pending" && p.due_date < today
-          ? Math.max(0, Math.floor((new Date(today) - new Date(p.due_date)) / 86400000))
-          : 0,
-    }));
+  if (tenant_id) q = q.eq("tenant_id", tenant_id);
 
-    const sum = (arr) => arr.reduce((acc, it) => acc + Number(it.amount || 0), 0);
+  if (monthStart && monthEnd) {
+    // intervalo do mês [start, end)
+    q = q.gte("competence_month", monthStart).lt("competence_month", monthEnd);
+  }
+
+  if (status && status !== "all") {
+    q = q.eq("status", status);
+  }
+
+  const { data, error } = await q;
+  if (error) mapErr("listPayments", error);
+
+  // "hoje" (zerado) para comparar com due_date (date sem horário)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const rows = (data || []).map((p) => {
+    const due = p.due_date ? new Date(`${p.due_date}T00:00:00`) : null;
+    const diffDays =
+      p.status === "pending" && due && due < today
+        ? Math.max(0, Math.floor((today - due) / 86400000))
+        : 0;
 
     return {
-      rows: rows.sort((a, b) => (a.due_date || "").localeCompare(b.due_date || "")),
-      kpis: {
-        total_billed: sum(rows),
-        total_paid: sum(rows.filter((r) => r.status === "paid")),
-        total_pending: sum(rows.filter((r) => r.status === "pending")),
-        total_overdue: sum(rows.filter((r) => r.status === "pending" && r.due_date < today)),
-      },
+      ...p,
+      days_overdue: diffDays,
+      // (opcional) alias para compatibilidade com telas antigas:
+      student_name: p.student_name_snapshot ?? null,
+      payer_name: p.payer_name_snapshot ?? null,
     };
-  },
+  });
+
+  const sum = (arr) => arr.reduce((acc, it) => acc + Number(it.amount || 0), 0);
+
+  const kpis = {
+    total_billed: sum(rows),
+    total_paid: sum(rows.filter((r) => r.status === "paid")),
+    total_pending: sum(rows.filter((r) => r.status === "pending")),
+    total_overdue: sum(
+      rows.filter((r) => r.status === "pending" && r.days_overdue > 0)
+    ),
+  };
+
+  // ordena por vencimento (nulls por último)
+  rows.sort((a, b) => {
+    const da = a.due_date || "9999-12-31";
+    const db = b.due_date || "9999-12-31";
+    return da.localeCompare(db);
+  });
+
+  return { rows, kpis };
+},
 
   async markPaid(id) {
     if (!id) throw new Error("ID do pagamento é obrigatório.");
@@ -930,15 +1213,23 @@ return { ...data, meeting_rules: normalizeRules(data.meeting_rules) };
     return true;
   },
 
-  async reopenPayment(id) {
-    if (!id) throw new Error("ID do pagamento é obrigatório.");
-    const { error } = await supabase
-      .from("payments")
-      .update({ status: "pending", paid_at: null, canceled_at: null, cancel_note: null })
-      .eq("id", id);
-    if (error) mapErr("reopenPayment", error);
-    return true;
-  },
+  async reopenExpense(id) {
+  if (!id) throw new Error("reopenExpense: 'id' é obrigatório");
+
+  const { data, error } = await supabase
+    .from("expense_entries")
+    .update({
+      status: "pending",
+      canceled_at: null,
+      cancel_note: null,
+    })
+    .eq("id", id)
+    .select("id, status, canceled_at, cancel_note, updated_at")
+    .single();
+
+  if (error) throw new Error(`reopenExpense: ${error.message}`);
+  return data;
+},
 
   // ==============================
   // DESPESAS — Templates
@@ -1142,47 +1433,67 @@ return { ...data, meeting_rules: normalizeRules(data.meeting_rules) };
     return true;
   },
 
-  async createOneOffExpense({
-    date,           // "YYYY-MM-DD"
+// ✅ NOVO contrato canônico
+async createExpenseEntry({
+  due_date,        // "YYYY-MM-DD"
+  amount,
+  description,
+  category = null,
+  cost_center = "PJ",
+}) {
+  const d = String(due_date || "").slice(0, 10);
+  if (!d) throw new Error("createExpenseEntry: 'due_date' é obrigatório (YYYY-MM-DD)");
+
+  const desc = String(description || "").trim();
+  if (!desc) throw new Error("createExpenseEntry: 'description' é obrigatório");
+
+  const val = Number(amount || 0);
+  if (!(val > 0)) throw new Error("createExpenseEntry: 'amount' deve ser > 0");
+
+  const ym = d.slice(0, 7); // "YYYY-MM"
+  const monthStart = `${ym}-01`;
+
+  const row = {
+    template_id: null,
+    title_snapshot: desc,              // mapeia description -> title_snapshot
+    category: category ?? null,
+    amount: val,
+    competence_month: monthStart,
+    due_date: d,
+    status: "pending",
+    paid_at: null,
+    canceled_at: null,
+    cancel_note: null,
+    cost_center: cost_center ?? "PJ",
+  };
+
+  const { data, error } = await supabase
+    .from("expense_entries")
+    .insert([row])
+    .select("id, template_id, title_snapshot, category, amount, competence_month, due_date, status, paid_at, canceled_at, cancel_note, cost_center, created_at, updated_at")
+    .single();
+
+  if (error) throw new Error(`createExpenseEntry: ${error.message}`);
+  return data;
+},
+
+// ♻️ Alias para compatibilidade (chamadas antigas)
+async createOneOffExpense({
+  date,           // "YYYY-MM-DD"
+  amount,
+  title,
+  category = null,
+  cost_center = "PJ",
+}) {
+  // Redireciona para o contrato novo
+  return this.createExpenseEntry({
+    due_date: date,
     amount,
-    title,
-    category = null,
-    cost_center = "PJ",
-  }) {
-    const d = String(date || "").slice(0, 10);
-    if (!d) throw new Error("createOneOffExpense: 'date' é obrigatório (YYYY-MM-DD)");
-    if (!title || String(title).trim() === "") {
-      throw new Error("createOneOffExpense: 'title' é obrigatório");
-    }
-
-    const ym = d.slice(0, 7); // "YYYY-MM"
-    const monthStart = `${ym}-01`;
-
-    const row = {
-      template_id: null,
-      title_snapshot: String(title).trim(),
-      category: category ?? null,
-      amount: Number(amount || 0),
-      competence_month: monthStart,
-      due_date: d,
-      status: "pending",
-      paid_at: null,
-      canceled_at: null,
-      cancel_note: null,
-      cost_center: cost_center ?? "PJ",
-    };
-
-    const { data, error } = await supabase
-      .from("expense_entries")
-      .insert([row])
-      .select(
-        "id, template_id, title_snapshot, category, amount, competence_month, due_date, status, paid_at, canceled_at, cancel_note, cost_center, created_at, updated_at"
-      )
-      .single();
-
-    if (error) throw new Error(`createOneOffExpense: ${error.message}`);
-    return data;
-  },
+    description: title,
+    category,
+    cost_center,
+  });
+},
 
   async markExpensePaid(id) {
     if (!id) throw new Error("markExpensePaid: 'id' é obrigatório");
@@ -1200,34 +1511,41 @@ return { ...data, meeting_rules: normalizeRules(data.meeting_rules) };
   },
 
   async cancelExpense(id, note = null) {
-    if (!id) throw new Error("cancelExpense: 'id' é obrigatório");
-    const { error } = await supabase
-      .from("expense_entries")
-      .update({
-        status: "canceled",
-        canceled_at: new Date().toISOString(),
-        cancel_note: note || null,
-        paid_at: null,
-      })
-      .eq("id", id);
-    if (error) throw new Error(`cancelExpense: ${error.message}`);
-    return true;
-  },
+  if (!id) throw new Error("cancelExpense: 'id' é obrigatório");
 
+  const { data, error } = await supabase
+    .from("expense_entries")
+    .update({
+      status: "canceled",
+      canceled_at: new Date().toISOString(),
+      cancel_note: note || null,
+      paid_at: null,
+    })
+    .eq("id", id)
+    .select("id, status, canceled_at, cancel_note, paid_at, updated_at") // selecione o que a UI precisa
+    .single();
+
+  if (error) throw new Error(`cancelExpense: ${error.message}`);
+  return data; // ← linha atualizada
+},
   async reopenExpense(id) {
-    if (!id) throw new Error("reopenExpense: 'id' é obrigatório");
-    const { error } = await supabase
-      .from("expense_entries")
-      .update({
-        status: "pending",
-        paid_at: null,
-        canceled_at: null,
-        cancel_note: null,
-      })
-      .eq("id", id);
-    if (error) throw new Error(`reopenExpense: ${error.message}`);
-    return true;
-  },
+  if (!id) throw new Error("reopenExpense: 'id' é obrigatório");
+
+  const { data, error } = await supabase
+    .from("expense_entries")
+    .update({
+      status: "pending",
+      canceled_at: null,
+      cancel_note: null,
+    })
+    .eq("id", id)
+    .select("id, status, canceled_at, cancel_note, updated_at")
+    .single();
+
+  if (error) throw new Error(`reopenExpense: ${error.message}`);
+  return data;
+},
+
 
   async previewGenerateExpenses({ ym, cost_center = null } = {}) {
     const monthStart = monthStartOf(ym);
@@ -1345,14 +1663,63 @@ return { ...data, meeting_rules: normalizeRules(data.meeting_rules) };
   // ==============================
   // FINANCEIRO — KPIs Agregados
   // ==============================
-  async getMonthlyFinanceKpis({ ym, cost_center = null }) {
+// ✅ Reabrir pagamento (volta para 'pending' e limpa campos de cancelamento/pagamento)
+// Reabrir pagamento
+ async reopenPayment(id) {
+    if (!id) throw new Error("reopenPayment: 'id' é obrigatório.");
+
+    // 1) Carrega o pagamento alvo
+    const { data: row, error: e1 } = await supabase
+      .from("payments")
+      .select("id, tenant_id, student_id, competence_month")
+      .eq("id", id)
+      .single();
+    if (e1) mapErr("reopenPayment.load", e1);
+    if (!row) throw new Error("Pagamento não encontrado.");
+
+    // 2) Confere se já existe outro ativo no mesmo mês
+    const { data: conflicts, error: e2 } = await supabase
+      .from("payments")
+      .select("id, status")
+      .eq("tenant_id", row.tenant_id)
+      .eq("student_id", row.student_id)
+      .eq("competence_month", row.competence_month)
+      .neq("status", "canceled")
+      .neq("id", row.id);
+    if (e2) mapErr("reopenPayment.conflicts", e2);
+
+    if (conflicts?.length) {
+      const ym = String(row.competence_month).slice(0, 7); // YYYY-MM
+      const [Y, M] = ym.split("-");
+      throw new Error(
+        `Já existe uma mensalidade ativa para este aluno em ${M}/${Y}. ` +
+        `Cancele a outra antes de reabrir esta.`
+      );
+    }
+
+    // 3) Atualiza para 'pending'
+    const patch = {
+      status: "pending",
+      canceled_at: null,
+      cancel_note: null,
+      paid_at: null,
+    };
+    const { error: e3 } = await supabase.from("payments").update(patch).eq("id", id);
+    if (e3) mapErr("reopenPayment.update", e3);
+
+    return true;
+  },
+
+  async getMonthlyFinanceKpis({ ym, tenant_id, cost_center = null }) {
     const monthStart = monthStartOf(ym);
     const today = tzToday("America/Sao_Paulo");
 
-    const { data: payRows, error: e1 } = await supabase
+    let qPay = supabase
       .from("payments")
       .select("amount,status,due_date")
       .eq("competence_month", monthStart);
+      if (tenant_id) qPay = qPay.eq("tenant_id", tenant_id);
+      const { data: payRows, error: e1 } = await qPay;
     if (e1) mapErr("getMonthlyFinanceKpis.payments", e1);
 
     const sum = (arr) => arr.reduce((a, b) => a + Number(b.amount || 0), 0);
@@ -1367,6 +1734,7 @@ return { ...data, meeting_rules: normalizeRules(data.meeting_rules) };
       .from("expense_entries")
       .select("amount,status,due_date,cost_center")
       .eq("competence_month", monthStart);
+      if (tenant_id) q = q.eq("tenant_id", tenant_id);
     if (cost_center) q = q.eq("cost_center", cost_center);
 
     const { data: expRows, error: e2 } = await q;
