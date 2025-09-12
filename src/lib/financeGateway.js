@@ -9,8 +9,8 @@ import { supabaseGateway } from "@/lib/supabaseGateway";
 export const ADAPTER_NAME = "supabase";
 
 // ---------- Financeiro: Receitas (mensalidades) ----------
-async function listPayments({ ym, status = null }) {
-  return supabaseGateway.listPayments({ ym, status });
+async function listPayments({ ym, status = null, tenant_id = null } = {}) {
+  return supabaseGateway.listPayments({ ym, status, tenant_id });
 }
 async function markPaid(id) {
   return supabaseGateway.markPaid(id);
@@ -22,16 +22,21 @@ async function reopenPayment(id) {
   return supabaseGateway.reopenPayment(id);
 }
 
-// KPIs no formato da UI (usa o método novo do supabaseGateway)
+// ---------- KPIs / Sumário ----------
 async function getMonthlySummary({ ym, tenant_id, cost_center = null }) {
+  // fonte única do resumo
   return supabaseGateway.getMonthlyFinancialSummary({ ym, tenant_id, cost_center });
 }
-
+// alias explícito para a mesma função
+async function getMonthlyFinancialSummary(args) {
+  return supabaseGateway.getMonthlyFinancialSummary(args);
+}
+// kpis “clássicos” (se ainda houver lugares chamando)
 async function getMonthlyFinanceKpis(args) {
   return supabaseGateway.getMonthlyFinanceKpis(args);
 }
 
-// ---------- Financeiro: Despesas (templates + entries) ----------
+// ---------- Despesas (templates + entries) ----------
 async function listExpenseTemplates(opts = {}) {
   return supabaseGateway.listExpenseTemplates(opts);
 }
@@ -44,41 +49,12 @@ async function updateExpenseTemplate(id, changes = {}) {
 async function deleteExpenseTemplate(id) {
   return supabaseGateway.deleteExpenseTemplate(id);
 }
-// ---------- Turmas (CRUD) ----------
-async function createTurma(payload) {
-  return supabaseGateway.createTurma(payload);
-}
-async function updateTurma(id, changes) {
-  return supabaseGateway.updateTurma(id, changes);
-}
-async function deleteTurma(id) {
-  return supabaseGateway.deleteTurma(id);
-}
-// ---------- Turmas: vínculos aluno–turma ----------
-async function addStudentToTurma(turmaId, studentId) {
-  return supabaseGateway.addStudentToTurma(turmaId, studentId);
-}
-async function removeStudentFromTurma(turmaId, studentId) {
-  return supabaseGateway.removeStudentFromTurma(turmaId, studentId);
-}
-async function listAttendance(sessionId) {
-  return supabaseGateway.listAttendance(sessionId);
-}
-
-async function upsertAttendance(sessionId, studentId, payload) {
-  return supabaseGateway.upsertAttendance(sessionId, studentId, payload);
-}
-
-
-
-
 
 async function listExpenseEntries({ ym, status = "all", cost_center = null } = {}) {
-  // O supabaseGateway já aplica o filtro por mês e (opcional) status
-  // O filtro por cost_center está contemplado nos KPIs; para a lista,
-  // se precisar filtrar client-side, faça na página. Mantemos a assinatura.
+  // O supabaseGateway já aplica filtro por mês e status
   const out = await supabaseGateway.listExpenseEntries({ ym, status });
   if (!cost_center || cost_center === "all") return out;
+
   const rows = (out?.rows || []).filter(
     (r) => (r.cost_center || "PJ") === cost_center
   );
@@ -93,9 +69,9 @@ async function listExpenseEntries({ ym, status = "all", cost_center = null } = {
     },
   };
 }
+
 // --- ALIAS p/ compatibilidade com telas antigas ---
 async function createOneOffExpense({ date, amount, title, category = null, cost_center = "PJ" }) {
-  // redireciona para o contrato canônico
   return createExpenseEntry({
     due_date: date,
     amount,
@@ -119,7 +95,6 @@ async function reopenExpense(id) {
 }
 
 async function previewGenerateExpenses({ ym, cost_center = null } = {}) {
-  // preview é agrupado por mês; para filtrar por cost_center, filtramos aqui se vier informado
   const preview = await supabaseGateway.previewGenerateExpenses({ ym, cost_center: null });
   if (!cost_center || cost_center === "all") return preview;
   return (preview || []).filter((p) => (p.cost_center || "PJ") === cost_center);
@@ -151,9 +126,7 @@ async function sumTeacherPayoutByMonth(teacherId, ym) {
 }
 async function listTeacherSessionsByMonth(teacherId, ym) {
   return supabaseGateway.listTeacherSessionsByMonth(teacherId, ym);
-
 }
-// --- Professores ---
 async function updateTeacher(id, changes = {}) {
   return supabaseGateway.updateTeacher(id, changes);
 }
@@ -161,67 +134,33 @@ async function createTeacher(payload = {}) {
   return supabaseGateway.createTeacher(payload);
 }
 
-
-// --- Turmas (membros) ---
-async function listTurmaMembers(turmaId) {
-  return supabaseGateway.listTurmaMembers(turmaId);
-}
-async function updateSession(id, changes = {}) {
-  return supabaseGateway.updateSession(id, changes);
-}
-// ⬇️ ADICIONE ESTE WRAPPER
-async function listSessions(turmaId) {
-  return supabaseGateway.listSessions(turmaId);
-}
-
-// ---------- Agenda (usados no fluxo da agenda) ----------
-async function createSession(payload) {
-  // usado ao clicar em “Registrar aula”
-  return supabaseGateway.createSession(payload);
-}
-async function listSessionsWithAttendance({ turmaId, start, end }) {
-  return supabaseGateway.listSessionsWithAttendance({ turmaId, start, end });
-}
-// --- Sessões (aulas) ---
-async function deleteSession(id) {
-  return supabaseGateway.deleteSession(id);
-}
-
-async function deleteExpenseEntry(id) {
-  return supabaseGateway.cancelExpense(id, "[UI] removido pela tela");
-}
-// alias para compatibilidade com a Home
-async function getMonthlyFinancialSummary(args) {
-  return supabaseGateway.getMonthlySummary(args);// ok — args já pode carregar tenant_id
-}
-async function listStudents() {
-  return supabaseGateway.listStudents();
-}
-
-  // --- Cadastro (listas básicas) ---
+// --- Cadastro (listas básicas) ---
 async function listTeachers() {
   return supabaseGateway.listTeachers();
 }
 async function listTurmas() {
   return supabaseGateway.listTurmas();
 }
-
+async function listStudents() {
+  return supabaseGateway.listStudents();
+}
 async function setStudentStatus(id, status) {
   return supabaseGateway.setStudentStatus(id, status);
 }
-
-// --- Presenças por aluno ---
+async function listTurmaMembers(turmaId) {
+  return supabaseGateway.listTurmaMembers(turmaId);
+}
 async function listAttendanceByStudent(studentId) {
   return supabaseGateway.listAttendanceByStudent(studentId);
 }
 async function updateStudent(id, changes = {}) {
   return supabaseGateway.updateStudent(id, changes);
 }
+
 // --- Pagadores ---
 async function listPayers(opts = {}) {
   return supabaseGateway.listPayers(opts);
 }
-
 async function createPayer(payload) {
   return supabaseGateway.createPayer(payload);
 }
@@ -231,23 +170,44 @@ async function updatePayer(id, changes = {}) {
 async function deletePayer(id) {
   return supabaseGateway.deletePayer(id);
 }
+
+// ---------- Agenda (usados no fluxo da agenda) ----------
+async function createSession(payload) {
+  return supabaseGateway.createSession(payload);
+}
+async function listSessionsWithAttendance({ turmaId, start, end }) {
+  return supabaseGateway.listSessionsWithAttendance({ turmaId, start, end });
+}
+async function listSessions(turmaId) {
+  return supabaseGateway.listSessions(turmaId);
+}
+async function updateSession(id, changes = {}) {
+  return supabaseGateway.updateSession(id, changes);
+}
+async function deleteSession(id) {
+  return supabaseGateway.deleteSession(id);
+}
+async function listAttendance(sessionId) {
+  return supabaseGateway.listAttendance(sessionId);
+}
+async function upsertAttendance(sessionId, studentId, payload) {
+  return supabaseGateway.upsertAttendance(sessionId, studentId, payload);
+}
 async function deleteAttendance(sessionId, studentId) {
   return supabaseGateway.deleteAttendance(sessionId, studentId);
 }
 
-//Financeiro
+// ---------- Financeiro: mensalidades (geração) ----------
 async function previewGenerateMonth({ ym, tenant_id }) {
   return supabaseGateway.previewGenerateMonth({ ym, tenant_id });
-  }
+}
 async function generateMonth({ ym, tenant_id }) {
   return supabaseGateway.generateMonth({ ym, tenant_id });
 }
 
-
 // Exporte o objeto compacto usado no app
 export const financeGateway = {
-   // Receitas (mensalidades)
-  // ==============================
+  // Receitas (mensalidades)
   listPayments,
   markPaid,
   cancelPayment,
@@ -255,16 +215,12 @@ export const financeGateway = {
   previewGenerateMonth,
   generateMonth,
 
-  // ==============================
   // KPIs / Sumário
-  // ==============================
-  getMonthlySummary,              // <- wrapper deve chamar supabaseGateway.getMonthlyFinancialSummary
-  getMonthlyFinancialSummary,     // alias
-  getMonthlyFinanceKpis: getMonthlySummary, // compat (alguns pontos ainda chamam por este nome)
+  getMonthlySummary,
+  getMonthlyFinancialSummary,
+  getMonthlyFinanceKpis,
 
-  // ==============================
   // Despesas
-  // ==============================
   listExpenseTemplates,
   createExpenseTemplate,
   updateExpenseTemplate,
@@ -279,41 +235,33 @@ export const financeGateway = {
   generateExpenses,
   deleteExpenseEntry,
 
-  // ==============================
   // Outras receitas
-  // ==============================
   listOtherRevenues,
   createOtherRevenue,
   markOtherRevenuePaid,
   cancelOtherRevenue,
   reopenOtherRevenue,
 
-  // ==============================
   // Professores
-  // ==============================
   sumTeacherPayoutByMonth,
   listTeacherSessionsByMonth,
+  updateTeacher,
+  createTeacher,
 
-  // ==============================
   // Cadastro
-  // ==============================
   listTeachers,
   listTurmas,
   listStudents,
   setStudentStatus,
   listTurmaMembers,
   listAttendanceByStudent,
+  updateStudent,
   listPayers,
   createPayer,
   updatePayer,
   deletePayer,
-  updateTeacher,
-  createTeacher,
-  updateStudent,
 
-  // ==============================
   // Agenda
-  // ==============================
   createSession,
   listSessionsWithAttendance,
   listSessions,
@@ -323,9 +271,7 @@ export const financeGateway = {
   updateSession,
   deleteSession,
 
-  // ==============================
   // Turmas
-  // ==============================
   createTurma,
   updateTurma,
   deleteTurma,

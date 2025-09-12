@@ -91,7 +91,7 @@ export default function FinanceiroPage() {
       const paymentsPromise = financeGateway.listPayments({
         ym,
         status: status === "all" ? null : status,
-        tenant_id, // passa EN internamente
+        tenant_id,
       });
 
       const summaryPromise = financeGateway.getMonthlySummary({ ym, tenant_id });
@@ -256,7 +256,7 @@ export default function FinanceiroPage() {
                 className="rounded border px-3 py-2"
                 disabled={previewLoading}
               >
-                {previewLoading ? "Carregando prévia…" : "Prévia do mês"}
+                {previewLoading ? "Carregando prévia…" : "Prévia das mensalidades"}
               </button>
             )}
             {canGenerate && (
@@ -265,47 +265,38 @@ export default function FinanceiroPage() {
                 className="rounded border px-3 py-2"
                 disabled={genLoading}
               >
-                {genLoading ? "Gerando…" : "Gerar mês"}
+                {genLoading ? "Gerando…" : "Gerar mensalidades"}
               </button>
             )}
           </div>
         </header>
 
-        {/* KPIs */}
-        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <KpiCard title="Faturado" value={fmtBRL(kpis.total_billed)} />
-          <KpiCard title="Pagos" value={fmtBRL(kpis.total_paid)} />
-          <KpiCard title="Pendentes" value={fmtBRL(kpis.total_pending)} />
-          <KpiCard title="Em atraso" value={fmtBRL(kpis.total_overdue)} />
+        {/* KPIs (unificados) */}
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <KpiCard
+            title="Receita (competência)"
+            value={fmtBRL(summary?.receita ?? kpis.total_billed)}
+          />
+          <KpiCard
+            title="Despesas (todas)"
+            value={fmtBRL(summary?.despesas ?? 0)}
+          />
+          <KpiCard
+            title="Professores"
+            value={fmtBRL(summary?.professores ?? 0)}
+          />
+          <KpiCard
+            title="Saldo de caixa"
+            value={fmtBRL(summary ? summary.saldo : kpis.total_paid)}
+          />
+          <KpiCard
+            title="Saldo operacional"
+            value={fmtBRL(summary?.saldo_operacional ?? 0)}
+          />
         </section>
-
-        {/* Sumário (receita, despesas, etc.) */}
-        {summary && (
-          <section className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-5">
-            <div className="rounded border p-3">
-              <div className="text-xs text-gray-500">Receita (faturado)</div>
-              <div className="text-lg font-semibold">{fmtBRL(summary.receita)}</div>
-            </div>
-            <div className="rounded border p-3">
-              <div className="text-xs text-gray-500">Despesas (gerais)</div>
-              <div className="text-lg font-semibold">{fmtBRL(summary.despesas)}</div>
-            </div>
-            <div className="rounded border p-3">
-              <div className="text-xs text-gray-500">Professores</div>
-              <div className="text-lg font-semibold">{fmtBRL(summary.professores)}</div>
-            </div>
-            <div className="rounded border p-3">
-              <div className="text-xs text-gray-500">Saldo</div>
-              <div className="text-lg font-semibold">{fmtBRL(summary.saldo)}</div>
-            </div>
-            <div className="rounded border p-3">
-              <div className="text-xs text-gray-500">Saldo operacional</div>
-              <div className="text-lg font-semibold">
-                {fmtBRL(summary.saldo_operacional)}
-              </div>
-            </div>
-          </section>
-        )}
+        <div className="text-xs text-slate-500">
+          Competência = mês de referência; Caixa = valores efetivamente pagos.
+        </div>
 
         {/* Filtro por centro de custo */}
         {summary?.by_cost_center?.length > 0 && (
@@ -347,10 +338,12 @@ export default function FinanceiroPage() {
           </div>
         )}
 
-        {/* Despesas por centro de custo */}
+        {/* Despesas por centro de custo (competência) */}
         {summary?.by_cost_center?.length > 0 && (
           <section>
-            <div className="mb-2 text-sm font-semibold">Despesas por centro de custo</div>
+            <div className="mb-2 text-sm font-semibold">
+              Despesas por centro de custo (competência)
+            </div>
 
             {(() => {
               const rowsAll = summary.by_cost_center || [];
@@ -425,12 +418,12 @@ export default function FinanceiroPage() {
         {!previewLoading && preview.length > 0 && (
           <section className="rounded border p-4">
             <div className="mb-2 font-semibold">
-              Prévia de geração ({preview.length})
+              Prévia das mensalidades ({preview.length})
             </div>
             <ul className="ml-5 list-disc">
               {preview.map((p, i) => (
                 <li key={`${p.student_id}-${p.due_date}-${i}`}>
-                  <strong>{p._student_name_snapshot || p.student_id}</strong>{" "}
+                  <strong>{p.student_name_snapshot || p.student_id}</strong>{" "}
                   | {p.competence_month?.slice(0, 7) /* YYYY-MM */} → vence em{" "}
                   {fmtDateBR(p.due_date)} — {fmtBRL(p.amount)}{" "}
                   {p._needs_payer && <em className="text-red-600">(sem pagador)</em>}
@@ -456,7 +449,7 @@ export default function FinanceiroPage() {
                   <Th>Pagador</Th>
                   <Th>Competência</Th>
                   <Th>Vencimento</Th>
-                  <Th>Valor</Th>
+                  <Th>Valor da mensalidade</Th>
                   <Th>Status</Th>
                   <Th>Ações</Th>
                 </tr>

@@ -8,4 +8,4 @@ if (!url || !anon) {
   console.warn("[supabaseClient] Variáveis NEXT_PUBLIC_SUPABASE_URL/ANON_KEY não definidas.");
 }
 
-export const supabase = createClient(url || "", anon || "");
+export const supabase = createClient(url || "", anon);

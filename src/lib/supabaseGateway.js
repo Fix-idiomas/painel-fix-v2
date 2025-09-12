@@ -2036,74 +2036,62 @@ async createOneOffExpense({
   // FINANCEIRO — Resumo do mês (com custo de professores)
   // ==============================
  // KPIs para a Home (tenant-aware, sem dupla contagem, mantém soma de professores)
+// ==============================
+// FINANCEIRO — Resumo do mês (com custo de professores vindo das sessões)
+// ==============================
+// ==============================
+// FINANCEIRO — Resumo do mês (inclui Professores nas despesas)
+// ==============================
 async getMonthlyFinancialSummary({ ym, tenant_id, costCenter = null } = {}) {
-  const monthStart = monthStartOf(ym);
-  const today = tzToday("America/Sao_Paulo");
+  // 1) KPIs base (receita + despesas de entries) com escopo por tenant
+  const base = await this.getMonthlyFinanceKpis({ ym, tenant_id, cost_center: null });
+  const receita   = Number(base?.revenue?.total_billed || 0);  // competência (faturado)
+  const pagosRec  = Number(base?.revenue?.paid || 0);          // recebidos (caixa)
+  const despTotal = Number(base?.expense?.total || 0);         // SOMENTE expense_entries
+  const despPagas = Number(base?.expense?.paid || 0);          // pagas (caixa)
+  const by_cost_center = Array.isArray(base?.by_cost_center) ? base.by_cost_center : [];
 
-  // 1) Receitas (usa seu listPayments que já calcula KPIs e aceita tenant)
-  const payments = await this.listPayments({ ym, tenant_id });
-  const receita    = Number(payments?.kpis?.total_billed || 0); // competência (faturado)
-  const recebidos  = Number(payments?.kpis?.total_paid   || 0); // caixa (recebido)
-
-  // 2) Despesas lançadas (entries) filtradas por tenant/mês (ignora canceled)
-  let q = supabase
-    .from("expense_entries")
-    .select("amount,status,due_date,cost_center")
-    .eq("competence_month", monthStart);
-
-  if (tenant_id)  q = q.eq("tenant_id", tenant_id);
-  if (costCenter) q = q.eq("cost_center", costCenter);
-
-  const { data: expRowsRaw, error: eExp } = await q;
-  if (eExp) mapErr("getMonthlyFinancialSummary.expenses", eExp);
-
-  const expRows = (expRowsRaw || []).filter(e => e.status !== "canceled");
-
-  const sumAmounts = (rows) => rows.reduce((acc, r) => acc + Number(r?.amount || 0), 0);
-  const despesas_base  = sumAmounts(expRows);                              // só lançamentos
-  const despesasPagas  = sumAmounts(expRows.filter(e => e.status === "paid"));
-
-  // 3) Professores = soma das aulas (via sessões/payouts)
-  const teachers = await this.listTeachers(); // sua tabela de teachers não tem tenant_id
-  const payouts  = await Promise.all((teachers || []).map(t => this.sumTeacherPayoutByMonth(t.id, ym)));
+  // 2) Professores (sua mesma regra já existente)
+  const teachers = await this.listTeachers({ tenant_id });
+  const payouts = await Promise.all(
+    (teachers || []).map((t) => this.sumTeacherPayoutByMonth(t.id, ym, tenant_id))
+  );
   const professores = payouts.reduce((acc, p) => acc + Number(p?.amount || 0), 0);
 
-  // 4) Totais desejados
-  const despesas        = despesas_base + professores;               // TODAS (avulsos+recorrentes+professores)
-  const despesas_pj     = despesas;                                  // PJ ≡ todas (professores contam como PJ)
-  const despesas_pf     = Math.max(0, despesas_base - professores);  // PF = base − professores (não negativo)
+  // 3) Despesas (todas) = entries (recorrentes + avulsas) + professores
+  const despesas = despTotal + professores;
+
+  // 4) Despesas PJ / PF, conforme sua definição
+  const toKey = (s) => String(s || "").trim().toLowerCase();
+  const totalPJ = by_cost_center
+    .filter((cc) => toKey(cc.cost_center) === "pj")
+    .reduce((a, cc) => a + Number(cc.total || 0), 0);
+  const totalPF = by_cost_center
+    .filter((cc) => toKey(cc.cost_center) === "pf")
+    .reduce((a, cc) => a + Number(cc.total || 0), 0);
+
+  const despesas_pj = totalPJ + professores; // PJ inclui professores
+  const despesas_pf = totalPF;               // PF não inclui professores
 
   // 5) Saldos
-  const saldo             = recebidos - despesasPagas;  // CAIXA: pagos − despesas pagas (dos lançamentos)
-  const saldo_operacional = receita   - despesas;       // COMPETÊNCIA: receita − despesas (professores já incluídos)
+  // - saldo (caixa) continua sendo: recebidos - despesas pagas de entries
+  //   (não soma professores aqui, pois não são lançados como entry; isso mantém seu “caixa” igual)
+  const saldo = pagosRec - despPagas;
 
-  // 6) Tabela por centro de custo (somente o que está lançado em expense_entries)
-  const map = {};
-  for (const r of expRows) {
-    const cc = r.cost_center || "N/A";
-    if (!map[cc]) map[cc] = { cost_center: cc, total: 0, paid: 0, pending: 0, overdue: 0 };
-    const v = Number(r.amount || 0);
-    map[cc].total += v;
-    if (r.status === "paid") {
-      map[cc].paid += v;
-    } else if (r.status === "pending") {
-      map[cc].pending += v;
-      if (String(r.due_date) < today) map[cc].overdue += v;
-    }
-  }
-  const by_cost_center = Object.values(map);
+  // - saldo_operacional (competência): receita (faturado) - despesas (todas)
+  const saldo_operacional = receita - despesas;
 
   return {
     receita,
-    despesas,            // avulsos + recorrentes + professores
-    professores,         // vindo das sessões (insight)
-    saldo,               // caixa
+    despesas,            // (entries + professores)
+    professores,         // card separado
+    saldo,               // caixa: recebidos - despesas pagas (entries)
     saldo_operacional,   // competência
-    by_cost_center,      // apenas lançamentos (como hoje)
-    // extras analíticos (se/quando quiser expor na UI):
-    despesas_pj,
-    despesas_pf,
+    despesas_pj,         // opcional para futuras visões
+    despesas_pf,         // opcional para futuras visões
+    by_cost_center,      // tabela já existente na página
   };
-}
+},
 
-};
+
+  };
