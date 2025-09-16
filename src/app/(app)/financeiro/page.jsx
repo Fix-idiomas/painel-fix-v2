@@ -42,7 +42,8 @@ const STATUS_OPTIONS = [
 export default function FinanceiroPage() {
   const router = useRouter();
   const { session, ready = true } = useSession() || {};
-  const tenant_id = session?.tenantId || "11111111-1111-4111-8111-111111111111";
+  // sem fallback! o tenant vem do JWT (RLS). Mantemos só por compat, mas não vamos usá-lo nas chamadas.
+  const tenant_id = session?.tenantId ?? null;
 
   // 🚫 Se professor, não pode acessar esta página → redireciona para Agenda
   useEffect(() => {
@@ -115,10 +116,10 @@ const expenseBuckets = (() => {
       const paymentsPromise = financeGateway.listPayments({
         ym,
         status: status === "all" ? null : status,
-        tenant_id,
+       
       });
 
-      const summaryPromise = financeGateway.getMonthlySummary({ ym, tenant_id });
+      const summaryPromise = financeGateway.getMonthlySummary({ ym });
 
       const [{ rows, kpis }, summaryData] = await Promise.all([
         paymentsPromise,
@@ -153,7 +154,7 @@ const expenseBuckets = (() => {
   async function loadSummaryFor(ymArg) {
     try {
       setLoadingSummary(true);
-      const res = await financeGateway.getMonthlySummary({ ym: ymArg, tenant_id });
+      const res = await financeGateway.getMonthlySummary({ ym: ymArg });
       setSummary(res || null);
     } catch (e) {
       console.error("[getMonthlySummary]", e?.message || e);
@@ -176,7 +177,7 @@ const expenseBuckets = (() => {
 
     setPreviewLoading(true);
     try {
-      const prev = await financeGateway.previewGenerateMonth({ ym, tenant_id });
+      const prev = await financeGateway.previewGenerateMonth({ ym });
       setPreview(prev ?? []);
     } catch (e) {
       alert(e.message || String(e));
@@ -199,7 +200,7 @@ const expenseBuckets = (() => {
 
     setGenLoading(true);
     try {
-      await financeGateway.generateMonth({ ym, tenant_id });
+      await financeGateway.generateMonth({ ym });
       setPreview([]); // limpa seção de prévia
       await load();
       alert("Mensalidades geradas com sucesso.");
@@ -306,7 +307,7 @@ const expenseBuckets = (() => {
         {/* KPIs (unificados) */}
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <KpiCard
-            title="Receita (competência)"
+            title="Receita (vencimento)"
             value={fmtBRL(summary?.receita ?? kpis.total_billed)}
           />
           <KpiCard
@@ -327,7 +328,7 @@ const expenseBuckets = (() => {
           />
         </section>
         <div className="text-xs text-slate-500">
-          Competência = mês de referência; Caixa = valores efetivamente pagos.
+          vencimento = mês de vencimento; Caixa = valores efetivamente pagos.
         </div>
 {/* Relatórios rápidos */}
 <section className="mt-2 grid gap-4 sm:grid-cols-2">
@@ -403,7 +404,7 @@ const expenseBuckets = (() => {
         {summary?.by_cost_center?.length > 0 && (
           <section>
             <div className="mb-2 text-sm font-semibold">
-              Despesas por centro de custo (competência)
+              Despesas por centro de custo (vencimento)
             </div>
 
             {(() => {

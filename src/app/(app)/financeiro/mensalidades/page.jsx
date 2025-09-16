@@ -27,8 +27,7 @@ export default function MensalidadesPage() {
   const [genLoading, setGenLoading] = useState(false);
 
   const { session, ready = true } = useSession?.() ?? {};
-  // fallback apenas para ambiente de seed/dev
-  const tenant_id = session?.tenantId || "11111111-1111-1111-1111-111111111111";
+  const tenant_id = session?.tenantId ?? null; // só para existir no escopo
 
   const canPreview = typeof financeGateway.previewGenerateMonth === "function";
   const canGenerate = typeof financeGateway.generateMonth === "function";
@@ -41,7 +40,7 @@ export default function MensalidadesPage() {
   async function load() {
     setLoading(true);
     try {
-      const { rows, kpis } = await financeGateway.listPayments({ ym, status, tenant_id });
+      const { rows, kpis } = await financeGateway.listPayments({ ym, status });
       setRows(rows ?? []);
       setKpis(
         kpis ?? {
@@ -72,7 +71,7 @@ export default function MensalidadesPage() {
     setPreviewOpen(true);
     setPreviewLoading(true);
     try {
-      const prev = await financeGateway.previewGenerateMonth({ ym, tenant_id });
+      const prev = await financeGateway.previewGenerateMonth({ ym });
       setPreview(prev ?? []);
     } catch (e) {
       alert(e.message || String(e));
@@ -89,7 +88,7 @@ export default function MensalidadesPage() {
     if (!confirm("Gerar cobranças do mês para alunos ativos?")) return;
     setGenLoading(true);
     try {
-      await financeGateway.generateMonth({ ym, tenant_id });
+      await financeGateway.generateMonth({ ym });
       setPreviewOpen(false);
       await load();
       alert("Mensalidades geradas com sucesso.");

@@ -23,13 +23,13 @@ async function reopenPayment(id) {
 }
 
 // ---------- KPIs / Sumário ----------
-async function getMonthlySummary({ ym, tenant_id, cost_center = null }) {
-  // fonte única do resumo
-  return supabaseGateway.getMonthlyFinancialSummary({ ym, tenant_id, cost_center });
+async function getMonthlySummary({ ym, cost_center = null }) {
+  // fonte única do resumo (RLS aplica o tenant via JWT)
+  return supabaseGateway.getMonthlyFinancialSummary({ ym, cost_center });
 }
 // --- Relatórios ---
-async function reportReceivablesAging({ ym, tenant_id }) {
-  return supabaseGateway.reportReceivablesAging({ ym, tenant_id });
+async function reportReceivablesAging({ ym, }) {
+  return supabaseGateway.reportReceivablesAging({ ym, });
 }
 
 // alias explícito para a mesma função

@@ -967,10 +967,9 @@ async upsertAttendance(sessionId, studentId, { present, note }) {
   // FINANCEIRO — Mensalidades
   // ==============================
 // ✅ Prévia (somente cálculo/mostra – nada grava)
-async previewGenerateMonth({ ym, tenant_id }) {
+async previewGenerateMonth({ ym, }) {
   if (!ym) throw new Error("previewGenerateMonth: 'ym' é obrigatório.");
-  if (!tenant_id) throw new Error("previewGenerateMonth: 'tenant_id' é obrigatório.");
-
+ 
   const [year, month] = ym.split("-").map(Number);
 
   // 1) Buscar alunos ativos do tenant
@@ -978,12 +977,11 @@ async previewGenerateMonth({ ym, tenant_id }) {
     .from("students")
     .select("id, name, monthly_value, due_day, payer_id")
     .eq("status", "ativo")
-    .eq("tenant_id", tenant_id);
-
+   
   if (e1) throw new Error(`[previewGenerateMonth.students] ${e1.message}`);
 
   // 2) Montar lançamentos “virtuais” (sem gravar)
-  const rows = (students || [])
+ return (students || [])
     .filter((s) => Number(s.monthly_value || 0) > 0) // só gera quem tem valor
     .map((s) => {
       // usar UTC para não “virar” a data por fuso
@@ -1008,9 +1006,8 @@ async previewGenerateMonth({ ym, tenant_id }) {
 },
 
 // ✅ Geração efetiva (insere em 'payments')
-async generateMonth({ ym, tenant_id }) {
+async generateMonth({ ym, }) {
   if (!ym) throw new Error("generateMonth: 'ym' é obrigatório.");
-  if (!tenant_id) throw new Error("generateMonth: 'tenant_id' é obrigatório.");
 
   const monthStart = `${ym}-01`;
 
@@ -1019,14 +1016,13 @@ async generateMonth({ ym, tenant_id }) {
     .from("students")
     .select("id, name, monthly_value, due_day, payer_id, status")
     .eq("status", "ativo")
-    .eq("tenant_id", tenant_id);
+    
   if (e1) mapErr("generateMonth.students", e1);
 
   // 2) Já existentes (não cancelados) para este mês
   const { data: existing, error: e2 } = await supabase
     .from("payments")
     .select("student_id")
-    .eq("tenant_id", tenant_id)
     .eq("competence_month", monthStart)
     .neq("status", "canceled");
   if (e2) mapErr("generateMonth.existing", e2);
@@ -1036,8 +1032,7 @@ async generateMonth({ ym, tenant_id }) {
   const { data: payers, error: e3 } = await supabase
   .from("payers")
   .select("id, name")
-  .eq("tenant_id", tenant_id);
-if (e3) mapErr("generateMonth.payers", e3);
+  if (e3) mapErr("generateMonth.payers", e3);
 
 const payerName = new Map((payers || []).map((p) => [p.id, p.name]));
 const payerIds = new Set((payers || []).map((p) => p.id));
@@ -1071,7 +1066,7 @@ for (const s of students || []) {
       // cria um pagador "self" com o nome do aluno
       const { data: createdPayer, error: ep } = await supabase
         .from("payers")
-        .insert({ tenant_id, name: s.name })
+        .insert({ name: s.name })
         .select("id, name")
         .single();
       if (ep) mapErr("generateMonth.createPayer", ep);
@@ -1087,8 +1082,7 @@ for (const s of students || []) {
       .from("students")
       .update({ payer_id })
       .eq("id", s.id)
-      .eq("tenant_id", tenant_id);
-    if (es) mapErr("generateMonth.linkPayerToStudent", es);
+      if (es) mapErr("generateMonth.linkPayerToStudent", es);
   }
 
   // due_date (UTC) a partir de ym + due_day
@@ -1100,7 +1094,7 @@ for (const s of students || []) {
   const pyName = payerName.get(payer_id) || s.name;
 
   toInsert.push({
-    tenant_id,
+    // ❌ sem tenant_id — DEFAULT current_tenant_id() no banco
     student_id: s.id,
     payer_id, // ✅ garantido existente
     competence_month: monthStart,
@@ -1130,7 +1124,6 @@ for (const s of students || []) {
       const { data: rows, error: er } = await supabase
         .from("payments")
         .select("*")
-        .eq("tenant_id", tenant_id)
         .eq("competence_month", monthStart)
         .neq("status", "canceled");
       if (er) mapErr("generateMonth.fetchAfterDup", er);
@@ -1143,7 +1136,7 @@ for (const s of students || []) {
 
 
   // 🧩 supabaseGateway.js — substitua seu listPayments por este
-async listPayments({ ym, status = null, tenant_id = null } = {}) {
+async listPayments({ ym, status = null } = {}) {
   // ym: "YYYY-MM" | null
   const monthStart = ym ? `${ym}-01` : null;
   const monthEnd = ym
@@ -1158,11 +1151,9 @@ async listPayments({ ym, status = null, tenant_id = null } = {}) {
       "id,tenant_id,student_id,payer_id,competence_month,due_date,amount,status,paid_at,canceled_at,cancel_note,created_at,student_name_snapshot,payer_name_snapshot"
     );
 
-  if (tenant_id) q = q.eq("tenant_id", tenant_id);
-
   if (monthStart && monthEnd) {
     // intervalo do mês [start, end)
-    q = q.gte("competence_month", monthStart).lt("competence_month", monthEnd);
+    q = q.gte("due_date", monthStart).lt("due_date", monthEnd);
   }
 
   if (status && status !== "all") {
@@ -1194,14 +1185,14 @@ async listPayments({ ym, status = null, tenant_id = null } = {}) {
 
   const sum = (arr) => arr.reduce((acc, it) => acc + Number(it.amount || 0), 0);
 
-  const kpis = {
-    total_billed: sum(rows),
-    total_paid: sum(rows.filter((r) => r.status === "paid")),
-    total_pending: sum(rows.filter((r) => r.status === "pending")),
-    total_overdue: sum(
-      rows.filter((r) => r.status === "pending" && r.days_overdue > 0)
-    ),
-  };
+const kpis = {
+   // Previsto = tudo que NÃO está cancelado (pending + paid)
+   total_billed:  sum(rows.filter((r) => r.status !== "canceled")),
+   // Recebidos = perene (qualquer lançamento com paid_at)
+   total_paid:    sum(rows.filter((r) => r.paid_at != null)),
+   total_pending: sum(rows.filter((r) => r.status === "pending")),
+   total_overdue: sum(rows.filter((r) => r.status === "pending" && r.days_overdue > 0)),
+ };
 
   // ordena por vencimento (nulls por último)
   rows.sort((a, b) => {
@@ -1732,29 +1723,38 @@ async createOneOffExpense({
 
   async getMonthlyFinanceKpis({ ym, tenant_id, cost_center = null }) {
     const monthStart = monthStartOf(ym);
+    const monthEnd = (() => {
+      const d = new Date(`${ym}-01T00:00:00`);
+      d.setMonth(d.getMonth() + 1);
+      return d.toISOString().slice(0, 10); // YYYY-MM-DD (exclusivo)
+    })();
     const today = tzToday("America/Sao_Paulo");
 
     let qPay = supabase
       .from("payments")
-      .select("amount,status,due_date")
-      .eq("competence_month", monthStart);
-      if (tenant_id) qPay = qPay.eq("tenant_id", tenant_id);
-      const { data: payRows, error: e1 } = await qPay;
+      .select("amount,status,due_date,paid_at")
+      .gte("due_date", monthStart)
+      .lt("due_date", monthEnd);
+     const { data: payRows, error: e1 } = await qPay;
     if (e1) mapErr("getMonthlyFinanceKpis.payments", e1);
 
     const sum = (arr) => arr.reduce((a, b) => a + Number(b.amount || 0), 0);
+    const rows = payRows || [];
     const revenue = {
-      total_billed: sum(payRows || []),
-      paid: sum((payRows || []).filter(r => r.status === "paid")),
-      pending: sum((payRows || []).filter(r => r.status === "pending")),
-      overdue: sum((payRows || []).filter(r => r.status === "pending" && r.due_date < today)),
+      // ✅ PREVISTO = tudo que NÃO está cancelado (pending + paid)
+      total_billed: sum(rows.filter(r => r.status !== "canceled")),
+      // 💰 “recebidos” é perene: qualquer registro com paid_at definido
+      paid: sum(rows.filter(r => r.paid_at != null)),
+      // compat:
+      pending: sum(rows.filter(r => r.status === "pending")),
+      overdue: sum(rows.filter(r => r.status === "pending" && r.due_date < today)),
     };
 
     let q = supabase
       .from("expense_entries")
       .select("amount,status,due_date,cost_center")
-      .eq("competence_month", monthStart);
-      if (tenant_id) q = q.eq("tenant_id", tenant_id);
+      .gte("due_date", monthStart)
+      .lt("due_date", monthEnd);
     if (cost_center) q = q.eq("cost_center", cost_center);
 
     const { data: expRows, error: e2 } = await q;
@@ -2011,7 +2011,7 @@ async reportReceivablesAging({ ym, tenant_id }) {
   // PROFESSORES — Payout por mês
   // ==============================
   async sumTeacherPayoutByMonth(teacherId, ym) {
-    if (!teacherId) throw new Error("sumTeacherPayoutByMonth: 'teacherId' é obrigatório");
+    if (!teacherId || !ym) throw new Error("sumTeacherPayoutByMonth: 'teacherId' e 'ym' são obrigatórios");
     const monthStart = monthStartOf(ym);
 
     const [Y, M] = monthStart.slice(0, 7).split("-").map(Number);
@@ -2027,13 +2027,17 @@ async reportReceivablesAging({ ym, tenant_id }) {
     if (eT) mapErr("sumTeacherPayoutByMonth.teacher", eT);
     if (!teacher) return { hours: 0, sessions: 0, amount: 0, hourly_rate: 0, pay_day: 5 };
 
-    const rateMode = teacher.rate_mode === "by_size" ? "by_size" : "flat";
-    const baseHourly = Number(teacher.hourly_rate || 0);
     const rules = Array.isArray(teacher.rate_rules) ? teacher.rate_rules : [];
+    const baseHourly = Number(teacher.hourly_rate ?? 0);
+    const sortedRules = [...rules].sort((a, b) => Number(a?.min ?? 0) - Number(b?.min ?? 0));
+    const ruleDefault = Number(sortedRules[0]?.hourly_rate || 0);
+    // 👇 se baseHourly=0 e há regras, use as regras (mesmo que rate_mode esteja 'flat' pelo default do banco)
+    const useBySize = teacher.rate_mode === "by_size" || (baseHourly === 0 && rules.length > 0);
+    const rateMode = useBySize ? "by_size" : "flat";
 
     const { data: sess, error: eS } = await supabase
       .from("sessions")
-      .select("id,date,duration_hours,headcount_snapshot,turmas!inner(id,teacher_id)")
+      .select("id,date,duration_hours,headcount_snapshot,canceled_at,turmas!inner(id,teacher_id)")
       .gte("date", monthStart)
       .lt("date", nextMonthStart)
       .eq("turmas.teacher_id", teacherId);
@@ -2044,7 +2048,7 @@ async reportReceivablesAging({ ym, tenant_id }) {
     let count = 0;
 
     function hourlyBySize(headcount) {
-      if (!rules.length) return baseHourly;
+      if (!rules.length) return baseHourly || ruleDefault || 0;
       const n = Number(headcount || 0) > 0 ? Number(headcount) : 1;
       let match = rules.find(r =>
         (r && (r.min == null || n >= Number(r.min))) &&
@@ -2054,18 +2058,18 @@ async reportReceivablesAging({ ym, tenant_id }) {
         const sorted = [...rules].sort((a, b) => Number(a.min || 0) - Number(b.min || 0));
         match = sorted[0];
       }
-      const hr = Number(match?.hourly_rate || baseHourly || 0);
+     const hr = Number(match?.hourly_rate ?? baseHourly ?? ruleDefault ?? 0);
       return hr;
     }
 
     for (const s of (sess || [])) {
-      const h = Number(s.duration_hours || 0);
+      if (s.canceled_at) continue; // ignora sessões canceladas
+      const h = Number(s.duration_hours ?? 0);
       if (h <= 0) continue;
       count += 1;
       totalHours += h;
 
-      const hourly =
-        rateMode === "by_size" ? hourlyBySize(s.headcount_snapshot) : baseHourly;
+      const hourly = useBySize ? hourlyBySize(s.headcount_snapshot) : (baseHourly || ruleDefault || 0);
 
       totalAmount += h * Number(hourly || 0);
     }
@@ -2152,26 +2156,27 @@ async reportReceivablesAging({ ym, tenant_id }) {
 // ==============================
 // FINANCEIRO — Resumo do mês (inclui Professores nas despesas)
 // ==============================
-async getMonthlyFinancialSummary({ ym, tenant_id, costCenter = null } = {}) {
-  // 1) KPIs base (receita + despesas de entries) com escopo por tenant
-  const base = await this.getMonthlyFinanceKpis({ ym, tenant_id, cost_center: null });
+// ✅ Resumo mensal — escopo de tenant via RLS/JWT (sem tenant_id)
+async getMonthlyFinancialSummary({ ym, cost_center = null } = {}) {
+  // 1) KPIs base (receita + despesas de entries)
+  const base = await this.getMonthlyFinanceKpis({ ym, cost_center: null }); // RLS aplica tenant
   const receita   = Number(base?.revenue?.total_billed || 0);  // competência (faturado)
   const pagosRec  = Number(base?.revenue?.paid || 0);          // recebidos (caixa)
   const despTotal = Number(base?.expense?.total || 0);         // SOMENTE expense_entries
   const despPagas = Number(base?.expense?.paid || 0);          // pagas (caixa)
   const by_cost_center = Array.isArray(base?.by_cost_center) ? base.by_cost_center : [];
 
-  // 2) Professores (sua mesma regra já existente)
-  const teachers = await this.listTeachers({ tenant_id });
+  // 2) Professores (escopo via RLS)
+  const teachers = await this.listTeachers(); // sem tenant_id
   const payouts = await Promise.all(
-    (teachers || []).map((t) => this.sumTeacherPayoutByMonth(t.id, ym, tenant_id))
+    (teachers || []).map((t) => this.sumTeacherPayoutByMonth(t.id, ym)) // sem tenant_id
   );
   const professores = payouts.reduce((acc, p) => acc + Number(p?.amount || 0), 0);
 
   // 3) Despesas (todas) = entries (recorrentes + avulsas) + professores
   const despesas = despTotal + professores;
 
-  // 4) Despesas PJ / PF, conforme sua definição
+  // 4) Despesas PJ / PF
   const toKey = (s) => String(s || "").trim().toLowerCase();
   const totalPJ = by_cost_center
     .filter((cc) => toKey(cc.cost_center) === "pj")
@@ -2184,24 +2189,20 @@ async getMonthlyFinancialSummary({ ym, tenant_id, costCenter = null } = {}) {
   const despesas_pf = totalPF;               // PF não inclui professores
 
   // 5) Saldos
-  // - saldo (caixa) continua sendo: recebidos - despesas pagas de entries
-  //   (não soma professores aqui, pois não são lançados como entry; isso mantém seu “caixa” igual)
-  const saldo = pagosRec - despPagas;
-
-  // - saldo_operacional (competência): receita (faturado) - despesas (todas)
-  const saldo_operacional = receita - despesas;
+  const saldo = pagosRec - despPagas;                 // caixa
+  const saldo_operacional = receita - despesas;       // competência
 
   return {
     receita,
-    despesas,            // (entries + professores)
-    professores,         // card separado
-    saldo,               // caixa: recebidos - despesas pagas (entries)
-    saldo_operacional,   // competência
-    despesas_pj,         // opcional para futuras visões
-    despesas_pf,         // opcional para futuras visões
-    by_cost_center,      // tabela já existente na página
+    despesas,
+    professores,
+    saldo,
+    saldo_operacional,
+    despesas_pj,
+    despesas_pf,
+    by_cost_center,
   };
-},
+}
 
 
   };
