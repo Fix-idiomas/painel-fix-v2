@@ -5,7 +5,14 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { financeGateway } from "@/lib/financeGateway";
 
-const fmtBR = (s) => (s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-");
+const fmtBR = (s) => {
+  if (!s) return "—";
+  const str = String(s).trim();
+  const onlyDate = /^\d{4}-\d{2}-\d{2}$/.test(str);
+  const safe = onlyDate ? `${str}T00:00:00` : str.slice(0, 25);
+  const d = new Date(safe);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("pt-BR");
+};
 
 export default function AlunoEvolucaoPage() {
   const params = useParams();

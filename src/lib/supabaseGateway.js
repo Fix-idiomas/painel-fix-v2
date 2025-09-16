@@ -86,6 +86,12 @@ function toIsoTz(dateStr) {
 // ========================================================
 
 export const supabaseGateway = {
+  // helper para obter tenant_id do contexto RLS
+  async getTenantId() {
+    const { data, error } = await supabase.rpc("current_tenant_id");
+    if (error || !data) throw new Error("tenant_id indisponível no contexto");
+    return data; // uuid
+  },
   // ==============================
   // ALUNOS (CRUD + evolução)
   // ==============================
@@ -107,6 +113,8 @@ export const supabaseGateway = {
     payer_id = null,
   }) {
     if (!name) throw new Error("Nome é obrigatório");
+    const tenant_id = await getTenantId(); // <-- aqui
+
     const row = {
       name: String(name).trim(),
       monthly_value: Number(monthly_value || 0),
@@ -119,7 +127,7 @@ export const supabaseGateway = {
     const { data, error } = await supabase
       .from("students")
       .insert(row)
-      .select("id,name,status,monthly_value,due_day,birth_date,payer_id")
+      .select("id,name,tenant_id,status,monthly_value,due_day,birth_date,payer_id")
       .single();
     if (error) mapErr("createStudent", error);
     return data;
@@ -240,13 +248,20 @@ async listAttendanceByStudent(studentId) {
     if (e3) throw new Error(e3.message);
     mapTurma = new Map((turmas || []).map(t => [t.id, t]));
   }
+const toIso = (v) => {
+    if (!v) return null;
+    const s = String(v).trim();
+    const onlyDate = /^\d{4}-\d{2}-\d{2}$/.test(s);
+    const safe = onlyDate ? `${s}T00:00:00` : s.slice(0, 25);
+    const d = new Date(safe);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  };
 
-  // 4) Monta saída no formato que a UI espera
-  const out = (atts || []).map(a => {
+  const out = (atts || []).map((a) => {
     const s = mapSession.get(a.session_id);
-    const turmaName = s ? (mapTurma.get(s.turma_id)?.name ?? null) : null;
+    const turmaName = s ? mapTurma.get(s.turma_id)?.name ?? null : null;
     return {
-      key: `${a.session_id}:${a.student_id}`, // útil para .map key
+      key: `${a.session_id}:${a.student_id}`,
       session_id: a.session_id,
       student_id: a.student_id,
       present: !!a.present,
@@ -254,13 +269,13 @@ async listAttendanceByStudent(studentId) {
       created_at: a.created_at,
       updated_at: a.updated_at,
       tenant_id: a.tenant_id,
-      // 👇 campos "snapshot" que a UI consome
-      session_date_snapshot: s?.date ?? null,
-      turma_name_snapshot: turmaName ?? null,
+      // snapshots consumidos pela UI
+      session_date_snapshot: toIso(s?.date),
+      turma_name_snapshot: turmaName,
     };
   });
 
-  // ordena por data da sessão (fallback created_at)
+   // 6) Ordena por data da sessão (fallback created_at)
   out.sort((a, b) =>
     String(a.session_date_snapshot || a.created_at || "")
       .localeCompare(String(b.session_date_snapshot || b.created_at || ""))
@@ -268,7 +283,6 @@ async listAttendanceByStudent(studentId) {
 
   return out;
 },
-
 
 
 
@@ -394,7 +408,7 @@ async createPayer({ name, email = null }) {
 
   const { data, error } = await supabase
     .from("payers")
-    .insert([{ name: nm, email: email || null }])
+    .insert([{ tenant_id, name: nm, email: email || null }])
     .select("id, name, email, created_at")
     .single();
 
@@ -616,9 +630,13 @@ async listSessions(turmaId) {
     .order("date", { ascending: true });
 
   if (error) throw new Error(`listSessions: ${error.message}`);
-  return data || [];
+   // ⚙️ normaliza p/ ISO confiável
+  const toIso = (d) => (d ? new Date(d).toISOString() : null);
+  return (data || []).map(s => ({
+    ...s,
+    date: toIso(s.date),
+  }));
 },
-
 
 
 // Lista sessões de uma turma num intervalo [start, end] e indica se têm presença
@@ -672,6 +690,7 @@ async listSessions(turmaId) {
 
   async createSession(payload) {
     // payload: { turma_id, date ("YYYY-MM-DD" ou ISO), notes?, duration_hours?, headcount_snapshot? }
+    const tenant_id = await this.getTenantId();
     const row = {
       turma_id: payload?.turma_id,
       date: toIsoTz(String(payload?.date || "").slice(0, 25)),
@@ -679,6 +698,7 @@ async listSessions(turmaId) {
       duration_hours: Number(payload?.duration_hours ?? 0.5),
       headcount_snapshot:
         payload?.headcount_snapshot != null ? Number(payload.headcount_snapshot) : null,
+      tenant_id,
     };
     if (!row.turma_id) throw new Error("turma_id é obrigatório.");
     if (!row.date) throw new Error("date é obrigatório (YYYY-MM-DD ou ISO).");
@@ -686,7 +706,7 @@ async listSessions(turmaId) {
     const { data, error } = await supabase
       .from("sessions")
       .insert(row)
-      .select("id,turma_id,date,duration_hours,notes,headcount_snapshot")
+      .select("id,turma_id,date,duration_hours,notes,headcount_snapshot,tenant_id")
       .single();
     if (error) mapErr("createSession", error);
     return data;
@@ -1766,6 +1786,96 @@ async createOneOffExpense({
 
     return { revenue, expense, net, by_cost_center };
   },
+
+// --- Relatório: Inadimplência (Aging) ---
+async reportReceivablesAging({ ym, tenant_id }) {
+  if (!ym) throw new Error("reportReceivablesAging: 'ym' é obrigatório");
+  const monthStart = monthStartOf(ym);
+  const today = tzToday("America/Sao_Paulo"); // "YYYY-MM-DD"
+
+  let q = supabase
+    .from("payments")
+    .select("id, tenant_id, student_id, payer_id, amount, due_date, status, competence_month, student_name_snapshot, payer_name_snapshot")
+    .eq("competence_month", monthStart)
+    .eq("status", "pending");
+
+  if (tenant_id) q = q.eq("tenant_id", tenant_id);
+
+  const { data, error } = await q;
+  if (error) mapErr("reportReceivablesAging.select", error);
+
+  // Só considera vencidos: due_date < hoje
+  const rows = (data || [])
+    .filter(r => r.due_date && r.due_date < today)
+    .map(r => {
+      const due = new Date(`${r.due_date}T00:00:00`);
+      const ref = new Date(`${today}T00:00:00`);
+      const days_overdue = Math.max(0, Math.floor((ref - due) / 86400000));
+      return {
+        ...r,
+        days_overdue,
+        payer_name: r.payer_name_snapshot ?? "—",
+        student_name: r.student_name_snapshot ?? "—",
+      };
+    });
+
+  // Buckets
+  const bucketOf = (d) => {
+    if (d <= 0) return null;
+    if (d <= 15) return "1-15";
+    if (d <= 30) return "16-30";
+    if (d <= 60) return "31-60";
+    return "61+";
+  };
+
+  const buckets = { "1-15": 0, "16-30": 0, "31-60": 0, "61+": 0 };
+  let total = 0;
+
+  for (const r of rows) {
+    const b = bucketOf(r.days_overdue);
+    if (!b) continue;
+    buckets[b] += Number(r.amount || 0);
+    total += Number(r.amount || 0);
+  }
+
+  // Por pagador
+  const by_payer_map = new Map();
+  for (const r of rows) {
+    const b = bucketOf(r.days_overdue);
+    if (!b) continue;
+    const key = r.payer_id || `payer:${r.payer_name}`;
+    if (!by_payer_map.has(key)) {
+      by_payer_map.set(key, {
+        payer_id: r.payer_id,
+        payer_name: r.payer_name,
+        total: 0,
+        "1-15": 0, "16-30": 0, "31-60": 0, "61+": 0,
+        items: []
+      });
+    }
+    const agg = by_payer_map.get(key);
+    agg[b] += Number(r.amount || 0);
+    agg.total += Number(r.amount || 0);
+    agg.items.push({
+      id: r.id,
+      student_id: r.student_id,
+      student_name: r.student_name,
+      due_date: r.due_date,
+      amount: Number(r.amount || 0),
+      days_overdue: r.days_overdue,
+    });
+  }
+  const by_payer = [...by_payer_map.values()].sort((a,b) => b.total - a.total);
+
+  return {
+    as_of: today,
+    ym,
+    total,
+    buckets,
+    by_payer,
+    rows, // detalhado (se quiser listar tudo)
+  };
+},
 
   // ==============================
   // OUTRAS RECEITAS

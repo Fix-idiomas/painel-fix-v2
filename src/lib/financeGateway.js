@@ -27,6 +27,11 @@ async function getMonthlySummary({ ym, tenant_id, cost_center = null }) {
   // fonte única do resumo
   return supabaseGateway.getMonthlyFinancialSummary({ ym, tenant_id, cost_center });
 }
+// --- Relatórios ---
+async function reportReceivablesAging({ ym, tenant_id }) {
+  return supabaseGateway.reportReceivablesAging({ ym, tenant_id });
+}
+
 // alias explícito para a mesma função
 async function getMonthlyFinancialSummary(args) {
   return supabaseGateway.getMonthlyFinancialSummary(args);
@@ -156,6 +161,14 @@ async function listAttendanceByStudent(studentId) {
 async function updateStudent(id, changes = {}) {
   return supabaseGateway.updateStudent(id, changes);
 }
+// --- Students ---
+async function createStudent(payload) {
+  return supabaseGateway.createStudent(payload);
+}
+async function deleteStudent(id) {
+  return supabaseGateway.deleteStudent(id);
+}
+
 
 // --- Pagadores ---
 async function listPayers(opts = {}) {
@@ -204,7 +217,26 @@ async function previewGenerateMonth({ ym, tenant_id }) {
 async function generateMonth({ ym, tenant_id }) {
   return supabaseGateway.generateMonth({ ym, tenant_id });
 }
+async function deleteExpenseEntry(id, opts = {}) {
+  return supabaseGateway.deleteExpenseEntry(id, opts);
+}
+async function createTurma(payload) {
+  return supabaseGateway.createTurma(payload);
+}
+async function updateTurma(id, changes = {}) {
+  return supabaseGateway.updateTurma(id, changes);
+}
+async function deleteTurma(id) {
+  return supabaseGateway.deleteTurma(id);
+}
 
+// ---------- Turmas: vínculos aluno–turma ----------
+async function addStudentToTurma(turmaId, studentId) {
+  return supabaseGateway.addStudentToTurma(turmaId, studentId);
+}
+async function removeStudentFromTurma(turmaId, studentId) {
+  return supabaseGateway.removeStudentFromTurma(turmaId, studentId);
+}
 // Exporte o objeto compacto usado no app
 export const financeGateway = {
   // Receitas (mensalidades)
@@ -214,6 +246,7 @@ export const financeGateway = {
   reopenPayment,
   previewGenerateMonth,
   generateMonth,
+  deleteExpenseEntry,
 
   // KPIs / Sumário
   getMonthlySummary,
@@ -260,6 +293,9 @@ export const financeGateway = {
   createPayer,
   updatePayer,
   deletePayer,
+  createStudent,
+  deleteStudent,
+
 
   // Agenda
   createSession,
@@ -277,4 +313,6 @@ export const financeGateway = {
   deleteTurma,
   addStudentToTurma,
   removeStudentFromTurma,
+  // Relatórios
+  reportReceivablesAging,
 };

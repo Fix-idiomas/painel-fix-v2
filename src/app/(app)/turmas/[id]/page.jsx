@@ -9,6 +9,8 @@ import { financeGateway } from "@/lib/financeGateway";
 // Se você tiver um hook `useSession()`, use assim. Se exporta o próprio contexto,
 // troque para useContext(SessionContext).
 import { useSession } from "@/contexts/SessionContext";
+import { useSearchParams } from "next/navigation";
+
 
 const WEEKDAYS = [
   { value: "1", label: "Segunda" },
@@ -24,7 +26,13 @@ const labelWeekday = (n) => {
   return found ? found.label : "—";
 };
 
-const fmtBR = (s) => (s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-");
+const fmtBR = (s) => {
+  if (!s) return "-";
+  const str = String(s);
+  const input = str.length <= 10 ? `${str}T00:00:00` : str; // só adiciona hora se vier só a data
+  const d = new Date(input);
+  return Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString("pt-BR");
+};
 const fmtNum = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
 // mês atual no formato yyyy-mm para o link do relatório
@@ -44,9 +52,10 @@ const describeRule = (r) => {
 const norm = (v) => (v === undefined || v === null ? "" : String(v));
 
 export default function TurmaDetailPage() {
-  const params = useParams();
-  const router = useRouter();
-  const turmaId = Array.isArray(params?.id) ? params.id[0] : params?.id;
+const router = useRouter();
+const search = useSearchParams();
+const params = useParams();
+const turmaId = Array.isArray(params?.id) ? params.id[0] : params?.id;
 
   // --- Sessão / RBAC ---
   const sessionCtx = useSession?.() ?? {};
@@ -80,6 +89,9 @@ export default function TurmaDetailPage() {
   const [formSess, setFormSess] = useState({ date: "", notes: "", duration_hours: "0.5" });
   const [attendanceDraft, setAttendanceDraft] = useState([]); // [{student_id, name, present, note}]
   const [allPresent, setAllPresent] = useState(false);
+  const searchParams = useSearchParams();
+  const [openedFromQuery, setOpenedFromQuery] = useState(false);
+
 
   // ---- membros (somente admin/financeiro)
   const [addStudentId, setAddStudentId] = useState("");
@@ -314,6 +326,10 @@ export default function TurmaDetailPage() {
     await financeGateway.removeStudentFromTurma(turma.id, student_id);
     await loadAll();
   }
+
+  useEffect(() => {
+    router.replace(`/turmas/${turmaId}`, { scroll: false });
+  }, [search, router, turmaId]);
 
   if (!ready) return <main className="p-6">Preparando sessão…</main>;
   if (loading) return <main className="p-6">Carregando…</main>;

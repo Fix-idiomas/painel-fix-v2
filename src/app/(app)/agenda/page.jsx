@@ -2,66 +2,58 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseGateway as gw } from "@/lib/supabaseGateway";
-
-/** ===== Helpers de data (sem depender de libs externas) ===== */
-const TZ = "America/Sao_Paulo";
+import { useRouter } from "next/navigation";
 
 // YYYY-MM-DD (fuso São Paulo)
 function todayISO() {
   const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
   });
-  const parts = fmt.formatToParts(new Date());
-  const y = parts.find(p => p.type === "year")?.value;
-  const m = parts.find(p => p.type === "month")?.value;
-  const d = parts.find(p => p.type === "day")?.value;
-  return `${y}-${m}-${d}`;
-}
-function addDaysISO(ymd, n=0) {
-  const d = new Date(`${ymd}T00:00:00-03:00`); // fuso SP aproximado
-  d.setDate(d.getDate() + Number(n||0));
-  const y = d.getFullYear();
-  const m = String(d.getMonth()+1).padStart(2,"0");
-  const dd= String(d.getDate()).padStart(2,"0");
-  return `${y}-${m}-${dd}`;
-}
-function startOfWeekISO(ymd) {
-  const d = new Date(`${ymd}T00:00:00-03:00`);
-  const dow = d.getDay(); // 0..6 (0=Dom)
-  const diff = dow === 0 ? 0 : dow; // começando Domingo
-  return addDaysISO(ymd, -diff);
-}
-function toIsoLocal(dateYMD, hhmm="00:00") {
-  const [H="00", M="00"] = String(hhmm||"00:00").split(":");
-  const d = new Date(`${dateYMD}T${H.padStart(2,"0")}:${M.padStart(2,"0")}:00`);
-  return d.toISOString();
+  return fmt.format(new Date()); // "YYYY-MM-DD"
 }
 
-/** Dado um item (sessão real), injeta horário vindo da regra, se o horário estiver 00:00 */
+// Início da semana (weekStartsOn = 1 => segunda-feira)
+function startOfWeekISO(ymd, weekStartsOn = 1) {
+  const [Y, M, D] = String(ymd).slice(0, 10).split("-").map(Number);
+  const d = new Date(Date.UTC(Y, M - 1, D));
+  const dow = d.getUTCDay(); // 0..6 (0=Dom)
+  const back = (dow - weekStartsOn + 7) % 7;
+  d.setUTCDate(d.getUTCDate() - back);
+  return d.toISOString().slice(0, 10);
+}
+
+// Adiciona N dias em YYYY-MM-DD (UTC estável)
+function addDaysISO(ymd, n = 0) {
+  const [Y, M, D] = String(ymd).slice(0, 10).split("-").map(Number);
+  const d = new Date(Date.UTC(Y, M - 1, D));
+  d.setUTCDate(d.getUTCDate() + Number(n || 0));
+  return d.toISOString().slice(0, 10);
+}
+
+/** Se a sessão real não tiver hora, injeta horário a partir das meeting_rules */
 function withDisplayTimeFromRules(ev, turma) {
   if (!ev?.date) return ev;
-  // Se já veio com hora diferente de 00:00, mantém
-  const hasTime = ev.date.length > 10;
-  if (hasTime) return ev;
-
-  // Puxa horário da rule correspondente ao weekday
-  const d = new Date(`${ev.date}T00:00:00-03:00`);
-  const wd = d.getDay(); // 0..6
-  const rule = (turma?.meeting_rules || []).find(r => Number(r.weekday) === wd);
+  if (String(ev.date).length > 10) return ev; // já tem hora
+  const [Y, M, D] = String(ev.date).slice(0, 10).split("-").map(Number);
+  const wd = new Date(Date.UTC(Y, M - 1, D)).getUTCDay(); // 0..6
+  const rule = (turma?.meeting_rules || []).find((r) => Number(r.weekday) === wd);
   const time = rule?.time || "08:00";
   return { ...ev, time_from_rule: time };
 }
 
-/** Gera slots planejados para uma turma na semana [monday..sunday] */
+/** Gera slots planejados para a semana [weekStart .. weekStart+6] */
 function plannedSlotsForWeek(turma, weekStartYMD) {
   const rules = Array.isArray(turma?.meeting_rules) ? turma.meeting_rules : [];
   if (!rules.length) return [];
   const out = [];
-  for (let i=0;i<7;i++) {
+  for (let i = 0; i < 7; i++) {
     const ymd = addDaysISO(weekStartYMD, i);
-    const d = new Date(`${ymd}T00:00:00-03:00`);
-    const wd = d.getDay();
-    const r = rules.find(rr => Number(rr.weekday) === wd);
+    const [Y, M, D] = ymd.split("-").map(Number);
+    const wd = new Date(Date.UTC(Y, M - 1, D)).getUTCDay();
+    const r = rules.find((rr) => Number(rr.weekday) === wd);
     if (!r) continue;
     out.push({
       type: "planned",
@@ -76,12 +68,21 @@ function plannedSlotsForWeek(turma, weekStartYMD) {
 }
 
 export default function AgendaPage() {
+  async function showClaims() {
+    const { data } = await import("@/lib/supabaseClient").then(mod => mod.supabase.auth.getSession());
+    const token = data?.session?.access_token;
+    if (!token) return alert("Sem sessão");
+    const [, payload] = token.split(".");
+    const json = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
+    alert(`role=${json.role}\ntenant_id=${json.tenant_id}\nperms=${JSON.stringify(json.perms||{})}`);
+  }
   const [error, setError] = useState("");
-  const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [turmas, setTurmas] = useState([]);
   const [sessionsByTurma, setSessionsByTurma] = useState({});
-  const [weekStart, setWeekStart] = useState(() => startOfWeekISO(todayISO()));
+  const [weekStart, setWeekStart] = useState(() => startOfWeekISO(todayISO(), 1));
+  const [selectedDay, setSelectedDay] = useState(null); // null = semana, string = YYYY-MM-DD
+  const router = useRouter();
 
   // Carrega turmas + sessões reais da semana
   useEffect(() => {
@@ -92,49 +93,44 @@ export default function AgendaPage() {
         const ts = await gw.listTurmas();
         if (!mounted) return;
 
-        // Para cada turma, buscar sessões reais no intervalo da semana
         const end = addDaysISO(weekStart, 6);
         const byTurma = {};
         for (const t of ts) {
-          const sess = await gw.listSessionsWithAttendance({ turmaId: t.id, start: weekStart, end });
+          const sess = await gw.listSessionsWithAttendance({
+            turmaId: t.id,
+            start: weekStart,
+            end,
+          });
           byTurma[t.id] = sess;
         }
-
         setTurmas(ts);
         setSessionsByTurma(byTurma);
+        setError("");
       } catch (e) {
         setError(e?.message || String(e));
       } finally {
-        if (mounted) setLoading(false);
+        mounted && setLoading(false);
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [weekStart]);
 
-  // Constrói a lista de itens (planned + real), com dedupe
+  // Lista (planned + real), com dedupe
   const items = useMemo(() => {
-    const end = addDaysISO(weekStart, 6);
     const map = [];
-
     for (const t of turmas) {
-      // planned
       const planned = plannedSlotsForWeek(t, weekStart);
-
-      // reais
       const sess = sessionsByTurma[t.id] || [];
 
-      // dedupe: se existe sessão real no mesmo YMD da turma, não mostra o planejado daquele dia
-      const realKey = new Set(sess.map(s => `${t.id}|${String(s.date).slice(0,10)}`));
+      const realKey = new Set(
+        sess.map((s) => `${t.id}|${String(s.date).slice(0, 10)}`)
+      );
 
       for (const p of planned) {
         const key = `${t.id}|${p.date}`;
-        if (!realKey.has(key)) {
-          map.push({
-            ...p,
-            turma_name: t.name,
-            label: "Planejada",
-          });
-        }
+        if (!realKey.has(key)) map.push({ ...p, turma_name: t.name, label: "Planejada" });
       }
       for (const s of sess) {
         const normalized = {
@@ -142,49 +138,34 @@ export default function AgendaPage() {
           id: s.id,
           turma_id: t.id,
           turma_name: t.name,
-          date: s.date, // pode ser ISO com hora
+          date: s.date,
           duration_hours: s.duration_hours,
           has_attendance: s.has_attendance,
           label: s.has_attendance ? "Sessão (com presença)" : "Sessão (registrada)",
         };
-        // injeta horário da rule quando o date vier sem hora (00:00)
         map.push(withDisplayTimeFromRules(normalized, t));
       }
     }
-
-    // Ordena por data/hora
-    return map.sort((a,b) => {
-      const ad = a.date.length > 10 ? a.date : `${a.date}T${a.time_from_rule || a.time || "00:00"}:00`;
-      const bd = b.date.length > 10 ? b.date : `${b.date}T${b.time_from_rule || b.time || "00:00"}:00`;
+    const sorted = map.sort((a, b) => {
+      const ad =
+        String(a.date).length > 10
+          ? String(a.date)
+          : `${a.date}T${a.time_from_rule || a.time || "00:00"}:00`;
+      const bd =
+        String(b.date).length > 10
+          ? String(b.date)
+          : `${b.date}T${b.time_from_rule || b.time || "00:00"}:00`;
       return ad.localeCompare(bd);
     });
-  }, [turmas, sessionsByTurma, weekStart]);
-
-  async function onRegisterPlanned(ev) {
-    // ev: { type:"planned", turma_id, date:"YYYY-MM-DD", time:"HH:mm", duration_hours }
-    if (!ev?.turma_id || !ev?.date) return alert("Dados insuficientes do slot.");
-    try {
-      setSaving(true);
-      await gw.createSession({
-        turma_id: ev.turma_id,
-        date: toIsoLocal(ev.date, ev.time), // salva timestamptz com hora
-        notes: "Aula registrada a partir da agenda",
-        duration_hours: ev.duration_hours ?? 0.5,
-        headcount_snapshot: null,
-      });
-
-      // Recarrega só a turma afetada (na mesma semana)
-      const end = addDaysISO(weekStart, 6);
-      const sess = await gw.listSessionsWithAttendance({
-        turmaId: ev.turma_id, start: weekStart, end
-      });
-      setSessionsByTurma(old => ({ ...old, [ev.turma_id]: sess }));
-      alert("Aula registrada ✅");
-    } catch (err) {
-      alert(err?.message || String(err));
-    } finally {
-      setSaving(false);
+    if (selectedDay) {
+      return sorted.filter(ev => String(ev.date).slice(0, 10) === selectedDay);
     }
+    return sorted;
+  }, [turmas, sessionsByTurma, weekStart, selectedDay]);
+
+  // Navega para Turmas › [id] com query abrindo o modal lá
+  function goToCreateSession(ev) {
+    router.push(`/turmas/${ev.turma_id}`);
   }
 
   const weekLabel = useMemo(() => {
@@ -192,9 +173,17 @@ export default function AgendaPage() {
     return `${weekStart} → ${end}`;
   }, [weekStart]);
 
-  function goPrevWeek() { setWeekStart(prev => addDaysISO(prev, -7)); }
-  function goNextWeek() { setWeekStart(prev => addDaysISO(prev, 7)); }
-  function goThisWeek() { setWeekStart(startOfWeekISO(todayISO())); }
+  function goPrevWeek() { setWeekStart((p) => addDaysISO(p, -7)); }
+  function goNextWeek() { setWeekStart((p) => addDaysISO(p,  7)); }
+  function goThisWeek() {
+    const today = todayISO();
+    if (selectedDay === today) return; // já está no dia
+    setSelectedDay(today);
+  }
+
+  function goFullWeek() {
+    setSelectedDay(null);
+  }
 
   if (error) {
     return (
@@ -208,12 +197,19 @@ export default function AgendaPage() {
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="font-semibold text-lg">Agenda</h1>
         <div className="flex items-center gap-2">
-          <button onClick={goPrevWeek} className="px-2 py-1 border rounded">◀ Semana</button>
-          <span className="text-sm text-gray-600">{weekLabel}</span>
-          <button onClick={goNextWeek} className="px-2 py-1 border rounded">Semana ▶</button>
-          <button onClick={goThisWeek} className="px-2 py-1 border rounded ml-2">Hoje</button>
+          <h1 className="font-semibold text-lg">Agenda</h1>
+          <button onClick={showClaims} className="px-2 py-1 border rounded bg-yellow-50 hover:bg-yellow-100 text-yellow-900">Ver claims</button>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={goPrevWeek} className="px-2 py-1 border rounded" disabled={!!selectedDay}>◀ Semana</button>
+          <span className="text-sm text-gray-600">{selectedDay ? `Dia ${selectedDay}` : weekLabel}</span>
+          <button onClick={goNextWeek} className="px-2 py-1 border rounded" disabled={!!selectedDay}>Semana ▶</button>
+          {!selectedDay ? (
+            <button onClick={goThisWeek} className="px-2 py-1 border rounded ml-2">Hoje</button>
+          ) : (
+            <button onClick={goFullWeek} className="px-2 py-1 border rounded ml-2">Semana</button>
+          )}
         </div>
       </div>
 
@@ -222,10 +218,11 @@ export default function AgendaPage() {
       ) : (
         <ul className="space-y-2">
           {items.map((ev, idx) => {
-            const ymd = String(ev.date).slice(0,10);
+            const ymd = String(ev.date).slice(0, 10);
             const hhmm =
-              (ev.date.length > 10 ? new Date(ev.date).toISOString().slice(11,16)
-               : (ev.time_from_rule || ev.time || "00:00"));
+              String(ev.date).length > 10
+                ? new Date(ev.date).toISOString().slice(11, 16)
+                : ev.time_from_rule || ev.time || "00:00";
             return (
               <li key={`${ymd}-${idx}`} className="p-3 border rounded">
                 <div className="flex items-center justify-between">
@@ -236,16 +233,13 @@ export default function AgendaPage() {
                     </div>
                   </div>
                   {ev.type === "planned" && (
-                    <div>
-                      <button
-                        onClick={() => onRegisterPlanned(ev)}
-                        disabled={saving}
-                        className="text-xs px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-50"
-                        title="Transformar este horário em aula realizada"
-                      >
-                        {saving ? "Registrando..." : "Registrar aula"}
-                      </button>
-                    </div>
+                    <button
+                      onClick={() => goToCreateSession(ev)}
+                      className="text-xs px-2 py-1 border rounded hover:bg-gray-50"
+                      title="Abrir criação de sessão na página da turma"
+                    >
+                      Registrar aula
+                    </button>
                   )}
                 </div>
               </li>

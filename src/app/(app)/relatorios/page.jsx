@@ -24,6 +24,17 @@ export default function RelatoriosHubPage() {
           desc="Resumo financeiro e projeções (a consolidar com despesas)."
           disabled
         />
+
+        {/* Inadimplência */}
+        <div className="rounded border p-4">
+          <h2 className="text-lg font-medium">Inadimplência</h2>
+          <p className="mt-1 text-sm text-gray-600">
+            Mensalidades pendentes e vencidas, por aluno/pagador.
+          </p>
+          <Link href="/relatorios/inadimplencia" className="mt-3 inline-block rounded border px-3 py-2">
+            Abrir
+          </Link>
+        </div>
       </section>
     </main>
   );

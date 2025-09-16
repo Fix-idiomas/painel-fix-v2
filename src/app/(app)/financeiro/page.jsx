@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Guard from "@/components/Guard";
-
+import Link from "next/link";
 import { useSession } from "@/contexts/SessionContext";
 import { financeGateway, ADAPTER_NAME } from "@/lib/financeGateway";
 
@@ -79,6 +79,30 @@ export default function FinanceiroPage() {
   const [summary, setSummary] = useState(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [selectedCostCenter, setSelectedCostCenter] = useState("all");
+
+  // --- KPIs complementares (a partir do summary/by_cost_center) ---
+const expenseBuckets = (() => {
+  if (!summary) return null;
+  const all = summary.by_cost_center || [];
+
+  const sum = (arr) => arr.reduce((a, r) => a + Number(r?.total || 0), 0);
+  const is = (cc, name) =>
+    String(cc || "").trim().toLowerCase() === String(name).toLowerCase();
+
+  // totais por centro
+  const totalEntries = sum(all); // todas as despesas (avulsas + recorrentes) lançadas
+  const totalPJ = sum(all.filter((x) => is(x.cost_center, "PJ")));
+  const totalPF = sum(all.filter((x) => is(x.cost_center, "PF")));
+
+  // professores (vem do cálculo de sessões, já em summary.professores)
+  const professores = Number(summary.professores || 0);
+
+  return {
+    despesas_todas: totalEntries + professores, // todas + professores
+    despesas_pj: totalPJ + professores,         // PJ + professores
+    despesas_pf: totalPF,                       // PF (sem professores)
+  };
+})();
 
   // ---------- capabilities do adapter ----------
   const canPreview = typeof financeGateway.previewGenerateMonth === "function";
@@ -259,6 +283,7 @@ export default function FinanceiroPage() {
                 {previewLoading ? "Carregando prévia…" : "Prévia das mensalidades"}
               </button>
             )}
+
             {canGenerate && (
               <button
                 onClick={doGenerate}
@@ -268,6 +293,13 @@ export default function FinanceiroPage() {
                 {genLoading ? "Gerando…" : "Gerar mensalidades"}
               </button>
             )}
+
+            <button
+              onClick={() => router.push("/relatorios")}
+              className="rounded border px-3 py-2"
+            >
+              Relatórios
+            </button>
           </div>
         </header>
 
@@ -297,6 +329,35 @@ export default function FinanceiroPage() {
         <div className="text-xs text-slate-500">
           Competência = mês de referência; Caixa = valores efetivamente pagos.
         </div>
+{/* Relatórios rápidos */}
+<section className="mt-2 grid gap-4 sm:grid-cols-2">
+  <div className="rounded border p-4">
+    <h3 className="text-base font-medium">Assiduidade</h3>
+    <p className="mt-1 text-sm text-gray-600">
+      Presenças, ausências e % por turma e mês.
+    </p>
+    <Link href="/relatorios/assiduidade" className="mt-3 inline-block rounded border px-3 py-2">
+      Abrir
+    </Link>
+  </div>
+
+  <div className="rounded border p-4">
+    <h3 className="text-base font-medium">Inadimplência</h3>
+    <p className="mt-1 text-sm text-gray-600">
+      Mensalidades pendentes em atraso, por aluno/pagador.
+    </p>
+    <Link href="/relatorios/inadimplencia" className="mt-3 inline-block rounded border px-3 py-2">
+      Abrir
+    </Link>
+  </div>
+</section>
+{expenseBuckets && (
+  <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+    <KpiCard title="Despesas (todas)" value={fmtBRL(expenseBuckets.despesas_todas)} />
+    <KpiCard title="Despesas PJ" value={fmtBRL(expenseBuckets.despesas_pj)} />
+    <KpiCard title="Despesas PF" value={fmtBRL(expenseBuckets.despesas_pf)} />
+  </section>
+)}
 
         {/* Filtro por centro de custo */}
         {summary?.by_cost_center?.length > 0 && (
