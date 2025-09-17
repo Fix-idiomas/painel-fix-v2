@@ -58,6 +58,9 @@ export default function Tabs() {
           <span className="hidden text-xs text-gray-500 sm:inline">
             {session?.name ?? "Dev"} • {role}
           </span>
+          <Link href="/conta" className="px-2 py-1 hover:underline">
+            Minha Conta
+          </Link>
           <select
             aria-label="Selecionar papel (mock)"
             className="rounded border px-2 py-1 text-sm"

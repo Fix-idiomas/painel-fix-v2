@@ -220,7 +220,7 @@ export default function ProfessoresPage() {
           .map((r) => ({
             min: Number(r.min || 0),
             max: Number(r.max || 0),
-            rate: Number(r.rate || 0),
+            hourly_rate: Number(r.rate || 0),
           }))
           .filter((r) => r.max >= r.min);
         payload.hourly_rate = Number(form.hourly_rate || 0); // fallback

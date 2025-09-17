@@ -1371,9 +1371,9 @@ const kpis = {
     if (!finalTitle) throw new Error("createExpenseEntry: 'title' é obrigatório (direto ou via template)");
 
     const finalCategory  = category  ?? t?.category ?? null;
-    const finalAmount    = Number(amount ?? t?.amount ?? 0) || 0;
-    const finalCost      = cost_center ?? t?.cost_center ?? "PJ";
-    const finalDueDay    = Number(due_day ?? t?.due_day ?? 5) || 5;
+  const finalAmount    = Number((amount ?? t?.amount ?? 0) || 0);
+  const finalCost      = cost_center ?? t?.cost_center ?? "PJ";
+  const finalDueDay    = Number((due_day ?? t?.due_day ?? 5) || 5);
 
     let finalDueDate = due_date;
     if (!finalDueDate) finalDueDate = dueDateFor(monthStart.slice(0, 7), finalDueDay);
@@ -2011,78 +2011,65 @@ async reportReceivablesAging({ ym, tenant_id }) {
   // PROFESSORES — Payout por mês
   // ==============================
   async sumTeacherPayoutByMonth(teacherId, ym) {
-    if (!teacherId || !ym) throw new Error("sumTeacherPayoutByMonth: 'teacherId' e 'ym' são obrigatórios");
-    const monthStart = monthStartOf(ym);
+  if (!teacherId || !ym) throw new Error("sumTeacherPayoutByMonth: 'teacherId' e 'ym' são obrigatórios");
+  const monthStart = `${ym}-01`;
+  const [Y, M] = ym.split("-").map(Number);
+  const nextMonthStart = `${M === 12 ? Y + 1 : Y}-${String(M === 12 ? 1 : M + 1).padStart(2, "0")}-01`;
 
-    const [Y, M] = monthStart.slice(0, 7).split("-").map(Number);
-    const nextY = M === 12 ? Y + 1 : Y;
-    const nextM = M === 12 ? 1 : M + 1;
-    const nextMonthStart = `${nextY}-${String(nextM).padStart(2, "0")}-01`;
+  // pega rate do professor
+  const { data: teacher, error: eT } = await supabase
+    .from("teachers")
+    .select("id, hourly_rate, rate_mode, rate_rules, pay_day, status")
+    .eq("id", teacherId)
+    .single();
+  if (eT) mapErr("sumTeacherPayoutByMonth.teacher", eT);
+  if (!teacher) return { hours: 0, sessions: 0, amount: 0, hourly_rate: 0, pay_day: 5 };
 
-    const { data: teacher, error: eT } = await supabase
-      .from("teachers")
-      .select("id, hourly_rate, pay_day, rate_mode, rate_rules, status")
-      .eq("id", teacherId)
-      .single();
-    if (eT) mapErr("sumTeacherPayoutByMonth.teacher", eT);
-    if (!teacher) return { hours: 0, sessions: 0, amount: 0, hourly_rate: 0, pay_day: 5 };
+  const rateMode = teacher.rate_mode === "by_size" ? "by_size" : "flat";
+  const baseHourly = Number(teacher.hourly_rate || 0);
+  const rules = Array.isArray(teacher.rate_rules) ? teacher.rate_rules : [];
 
-    const rules = Array.isArray(teacher.rate_rules) ? teacher.rate_rules : [];
-    const baseHourly = Number(teacher.hourly_rate ?? 0);
-    const sortedRules = [...rules].sort((a, b) => Number(a?.min ?? 0) - Number(b?.min ?? 0));
-    const ruleDefault = Number(sortedRules[0]?.hourly_rate || 0);
-    // 👇 se baseHourly=0 e há regras, use as regras (mesmo que rate_mode esteja 'flat' pelo default do banco)
-    const useBySize = teacher.rate_mode === "by_size" || (baseHourly === 0 && rules.length > 0);
-    const rateMode = useBySize ? "by_size" : "flat";
+  // ⚠️ usa snapshots da sessão e o campo correto: duration_hours
+  const { data: sess, error: eS } = await supabase
+    .from("sessions")
+    .select("id,date,duration_hours,headcount_snapshot,teacher_id_snapshot,turmas!inner(id,teacher_id)")
+    .gte("date", monthStart)
+    .lt("date", nextMonthStart)
+    .eq("teacher_id_snapshot", teacherId);
+  if (eS) mapErr("sumTeacherPayoutByMonth.sessions", eS);
 
-    const { data: sess, error: eS } = await supabase
-      .from("sessions")
-      .select("id,date,duration_hours,headcount_snapshot,canceled_at,turmas!inner(id,teacher_id)")
-      .gte("date", monthStart)
-      .lt("date", nextMonthStart)
-      .eq("turmas.teacher_id", teacherId);
-    if (eS) mapErr("sumTeacherPayoutByMonth.sessions", eS);
+  let totalHours = 0, totalAmount = 0, count = 0;
 
-    let totalHours = 0;
-    let totalAmount = 0;
-    let count = 0;
+  const hourlyBySize = (headcount) => {
+    if (!rules.length) return baseHourly;
+    const n = Number(headcount || 0) > 0 ? Number(headcount) : 1;
+    let match = rules.find(r =>
+      (r.min == null || n >= Number(r.min)) &&
+      (r.max == null || n <= Number(r.max))
+    );
+    if (!match) match = [...rules].sort((a,b)=>Number(a.min||0)-Number(b.min||0))[0];
+    return Number(match?.hourly_rate || baseHourly || 0);
+  };
 
-    function hourlyBySize(headcount) {
-      if (!rules.length) return baseHourly || ruleDefault || 0;
-      const n = Number(headcount || 0) > 0 ? Number(headcount) : 1;
-      let match = rules.find(r =>
-        (r && (r.min == null || n >= Number(r.min))) &&
-        (r.max == null || n <= Number(r.max))
-      );
-      if (!match) {
-        const sorted = [...rules].sort((a, b) => Number(a.min || 0) - Number(b.min || 0));
-        match = sorted[0];
-      }
-     const hr = Number(match?.hourly_rate ?? baseHourly ?? ruleDefault ?? 0);
-      return hr;
-    }
+  for (const s of (sess || [])) {
+    const h = Number(s.duration_hours || 0); // <-- CORRETO
+    if (h <= 0) continue;
+    count += 1;
+    totalHours += h;
 
-    for (const s of (sess || [])) {
-      if (s.canceled_at) continue; // ignora sessões canceladas
-      const h = Number(s.duration_hours ?? 0);
-      if (h <= 0) continue;
-      count += 1;
-      totalHours += h;
+  const hc = Number(s.headcount_snapshot || 0);
+  const hr = rateMode === "by_size" ? hourlyBySize(hc) : baseHourly;
+  totalAmount += h * hr;
+  }
 
-      const hourly = useBySize ? hourlyBySize(s.headcount_snapshot) : (baseHourly || ruleDefault || 0);
-
-      totalAmount += h * Number(hourly || 0);
-    }
-
-    return {
-      hours: Number(totalHours || 0),
-      sessions: count,
-      amount: Number(totalAmount || 0),
-      hourly_rate: baseHourly,
-      pay_day: Number(teacher.pay_day || 5),
-    };
-  },
-
+  return {
+    hours: Number(totalHours || 0),
+    sessions: count,
+    amount: Number(totalAmount || 0),
+    hourly_rate: baseHourly,
+    pay_day: Number(teacher.pay_day || 5),
+  };
+},
   async listTeacherSessionsByMonth(teacherId, ym) {
     if (!teacherId) throw new Error("listTeacherSessionsByMonth: 'teacherId' é obrigatório");
     const monthStart = monthStartOf(ym);
@@ -2104,8 +2091,8 @@ async reportReceivablesAging({ ym, tenant_id }) {
     const rules = Array.isArray(teacher.rate_rules) ? teacher.rate_rules : [];
 
     const { data: sess, error: eS } = await supabase
-      .from("sessions")
-      .select("id,date,duration_hours,headcount_snapshot,turma_id,turmas!inner(id,name,teacher_id)")
+  .from("sessions")
+  .select("id,date,duration_hours,headcount_snapshot,turma_id,turmas!inner(id,name,teacher_id)")
       .gte("date", monthStart)
       .lt("date", nextMonthStart)
       .eq("turmas.teacher_id", teacherId)
@@ -2127,7 +2114,7 @@ async reportReceivablesAging({ ym, tenant_id }) {
     }
 
     const rows = (sess || []).map(s => {
-      const h = Number(s.duration_hours || 0);
+  const h = Number(s.duration_hours || 0);
       const hourly = rateMode === "by_size" ? hourlyBySize(s.headcount_snapshot) : baseHourly;
       const amount = h * Number(hourly || 0);
       const toIso = (d) => (d ? new Date(d).toISOString() : null);
