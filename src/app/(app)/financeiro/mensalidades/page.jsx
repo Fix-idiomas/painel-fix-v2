@@ -5,6 +5,30 @@ import { useEffect, useMemo, useState } from "react";
 import { financeGateway, ADAPTER_NAME } from "@/lib/financeGateway";
 import Guard from "@/components/Guard";
 import { useSession } from "@/contexts/SessionContext";
+import { computeRevenueKPIs, getPaymentStatusLabel } from "@/lib/finance";
+
+function KpiCard({ title, value, tone = "neutral" }) {
+  const toneBox = {
+    danger:  "border-red-300 bg-red-50",
+    warning: "border-amber-300 bg-amber-50",
+    success: "border-green-300 bg-green-50",
+    neutral: "border-slate-200 bg-white",
+  }[tone] || "border-slate-200 bg-white";
+
+  const toneText = {
+    danger:  "text-red-800",
+    warning: "text-amber-800",
+    success: "text-green-800",
+    neutral: "text-slate-900",
+  }[tone] || "text-slate-900";
+
+  return (
+    <div className={`rounded border p-3 ${toneBox}`}>
+      <div className={`text-xs ${toneText} opacity-80`}>{title}</div>
+      <div className={`text-xl font-semibold ${toneText}`}>{value}</div>
+    </div>
+  );
+}
 
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -25,6 +49,14 @@ export default function MensalidadesPage() {
   const [preview, setPreview] = useState([]);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [genLoading, setGenLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const [revKpis, setRevKpis] = useState({
+  receita_prevista_mes: 0,
+  receita_a_receber: 0,
+  receita_atrasada: 0,
+  receita_recebida: 0,
+});
 
   const { session, ready = true } = useSession?.() ?? {};
   const tenant_id = session?.tenantId ?? null; // só para existir no escopo
@@ -37,31 +69,63 @@ export default function MensalidadesPage() {
     return `Mensalidades – ${M}/${Y}`;
   }, [ym]);
 
-  async function load() {
-    setLoading(true);
-    try {
-      const { rows, kpis } = await financeGateway.listPayments({ ym, status });
-      setRows(rows ?? []);
-      setKpis(
-        kpis ?? {
-          total_billed: 0,
-          total_paid: 0,
-          total_pending: 0,
-          total_overdue: 0,
-        }
-      );
-    } catch (e) {
-      alert(e.message || String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
+async function load() {
+  setLoading(true);
+  setError?.(null);
 
-  useEffect(() => {
-    if (!ready) return;
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, ym, status]);
+  try {
+    // 1) Busca pagamentos (API ignora undefined)
+    const resp = await financeGateway.listPayments({
+      ym,
+      status: status === "all" ? undefined : status,
+    });
+
+    // 2) Extrai/normaliza linhas
+    const loadedRows =
+      Array.isArray(resp?.rows) ? resp.rows :
+      Array.isArray(resp)       ? resp       : [];
+
+    const rowsNorm = loadedRows.map(r => ({
+      ...r,
+      amount: Number(r?.amount ?? 0),
+    }));
+    setRows(rowsNorm);
+
+    // 3) KPIs canônicos (policy fixa = due_date)
+    const kpisNew = computeRevenueKPIs(rowsNorm, { ym, policy: "due_date" });
+    setRevKpis(kpisNew);
+
+    // (opcional) se ainda usa os KPIs legados do gateway em algum lugar:
+    setKpis?.(
+      resp?.kpis ?? {
+        total_billed: 0,
+        total_paid: 0,
+        total_pending: 0,
+        total_overdue: 0,
+      }
+    );
+  } catch (e) {
+    setError?.(e?.message || String(e));
+    setRows([]);
+    setRevKpis({
+      receita_prevista_mes: 0,
+      receita_a_receber: 0,
+      receita_atrasada: 0,
+      receita_recebida: 0,
+    });
+    setKpis?.({ total_billed: 0, total_paid: 0, total_pending: 0, total_overdue: 0 });
+  } finally {
+    setLoading(false);
+  }
+}
+
+// se você usa useSession, mantenha o gate; se não usa, pode simplificar
+useEffect(() => {
+  // só impede quando explicitamente false; se undefined/true, carrega
+  if (ready === false) return;
+  load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [ready, ym, status]);
 
   async function openPreview() {
     if (!canPreview) {
@@ -176,10 +240,10 @@ export default function MensalidadesPage() {
         {/* KPIs */}
         {!loading && (
           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Kpi title="Total faturado" value={fmtBRL(kpis.total_billed)} />
-            <Kpi title="Recebido" value={fmtBRL(kpis.total_paid)} />
-            <Kpi title="Pendente" value={fmtBRL(kpis.total_pending)} />
-            <Kpi title="Em atraso" value={fmtBRL(kpis.total_overdue)} />
+            <KpiCard title="Total faturado" value={fmtBRL(revKpis.receita_prevista_mes + revKpis.receita_recebida)} />
+            <KpiCard title="Recebido"       value={fmtBRL(revKpis.receita_recebida)} />
+            <KpiCard title="Pendente"       value={fmtBRL(revKpis.receita_a_receber + revKpis.receita_atrasada)} />
+            <KpiCard title="Em atraso"      value={fmtBRL(revKpis.receita_atrasada)} />
           </section>
         )}
 

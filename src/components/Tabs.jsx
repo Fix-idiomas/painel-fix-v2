@@ -6,9 +6,9 @@ import { useSession } from "@/contexts/SessionContext";
 
 // Visibilidade por papel
 const ROLE_TABS = {
-  admin:      ["home", "cadastro", "turmas", "agenda", "gastos", "relatorios", "financeiro"],
+  admin:      ["home", "cadastro", "turmas", "agenda",             "relatorios", "financeiro"],
   professor:  [          "turmas", "agenda",            "relatorios"],
-  financeiro: ["home", "cadastro",            "gastos", "relatorios", "financeiro"]
+  financeiro: ["home", "cadastro",                      "relatorios", "financeiro"]
 };
 
 // Mapa de abas → rotas
@@ -17,10 +17,8 @@ const TABS = [
   { key: "cadastro",   label: "Cadastro",    href: "/cadastro" },
   { key: "turmas",     label: "Turmas",      href: "/turmas" },
   { key: "agenda",     label: "Agenda",      href: "/agenda" },
-  { key: "gastos",     label: "Gastos",      href: "/gastos" },
   { key: "relatorios", label: "Relatórios",  href: "/relatorios" },
   { key: "financeiro", label: "Financeiro",  href: "/financeiro" },
-  
 ];
 
 export default function Tabs() {

@@ -292,7 +292,7 @@ const toIso = (v) => {
   async listTeachers() {
     const { data, error } = await supabase
       .from("teachers")
-      .select("id,name,user_id,status,hourly_rate,pay_day,rate_mode,rate_rules")
+      .select("id,name,email, phone, user_id, status, hourly_rate, pay_day, rate_mode, rate_rules")
       .order("name", { ascending: true });
     if (error) mapErr("listTeachers", error);
     return data || [];
@@ -328,6 +328,7 @@ async createTeacher(payload = {}) {
 },
 
 // Atualizar professor
+// Atualizar professor (normaliza rate_rules -> hourly_rate)
 async updateTeacher(id, changes = {}) {
   if (!id) throw new Error("updateTeacher: 'id' é obrigatório");
 
@@ -340,7 +341,9 @@ async updateTeacher(id, changes = {}) {
 
   if (changes.pay_day !== undefined) {
     const d = Number(changes.pay_day);
-    if (!Number.isInteger(d) || d < 1 || d > 28) throw new Error("updateTeacher: 'pay_day' deve ser 1..28");
+    if (!Number.isInteger(d) || d < 1 || d > 28) {
+      throw new Error("updateTeacher: 'pay_day' deve ser 1..28");
+    }
     patch.pay_day = d;
   }
 
@@ -349,33 +352,56 @@ async updateTeacher(id, changes = {}) {
   }
 
   if (changes.rate_rules !== undefined) {
-    patch.rate_rules = Array.isArray(changes.rate_rules) ? changes.rate_rules : [];
+    const toNum = (v) => {
+      const n = Number(String(v ?? "").trim());
+      return Number.isFinite(n) ? n : null;
+    };
+    const arr = Array.isArray(changes.rate_rules) ? changes.rate_rules : [];
+    // Form do modal usa { min, max, rate } (strings). Persistir como { min, max, hourly_rate } (números).
+    const normalized = arr
+      .map((r) => ({
+        min:         toNum(r.min),
+        max:         toNum(r.max),
+        hourly_rate: toNum(r.rate ?? r.hourly_rate),
+      }))
+      // opcional: remove regras sem valor de hora
+      .filter((r) => r.hourly_rate !== null);
+
+    patch.rate_rules = normalized;
   }
 
-  if (Object.keys(patch).length === 0) throw new Error("updateTeacher: nada para atualizar");
+  if (Object.keys(patch).length === 0) {
+    throw new Error("updateTeacher: nada para atualizar");
+  }
 
   const { data, error } = await supabase
     .from("teachers")
     .update(patch)
     .eq("id", id)
     .select("id, name, email, phone, status, hourly_rate, pay_day, rate_mode, rate_rules, updated_at")
-    .single();
+    .maybeSingle();
 
   if (error) throw new Error(`updateTeacher: ${error.message}`);
   return data;
 },
 
+
   async setTeacherStatus(id, status) {
-    if (!id) throw new Error("ID do professor é obrigatório.");
-    const { data, error } = await supabase
-      .from("teachers")
-      .update({ status })
-      .eq("id", id)
-      .select("id,name,status")
-      .single();
-    if (error) mapErr("setTeacherStatus", error);
-    return data;
-  },
+  if (!id) throw new Error("setTeacherStatus: 'id' é obrigatório");
+
+  if (!["ativo", "inativo"].includes(status)) {
+    throw new Error("setTeacherStatus: status inválido (use 'ativo' ou 'inativo')");
+  }
+   const { data, error } = await supabase
+    .from("teachers")
+    .update({ status })
+    .eq("id", id)
+    .select("id, name, email, phone, status, hourly_rate, pay_day, rate_mode, rate_rules, updated_at")
+    .maybeSingle();
+
+  if (error) throw new Error(`setTeacherStatus: ${error.message}`);
+  return data;
+},
 
   async deleteTeacher(id) {
     if (!id) throw new Error("ID do professor é obrigatório.");
@@ -1143,8 +1169,12 @@ for (const s of students || []) {
 async listPayments({ ym, status = "all", page = 1, pageSize = 50 } = {}) {
   if (!ym) throw new Error("listPayments: 'ym' é obrigatório.");
 
-  // usa seu helper; se não existir, substitua por `${ym}-01`
+
+  // Calcula intervalo do mês pelo due_date
   const monthStart = typeof monthStartOf === "function" ? monthStartOf(ym) : `${ym}-01`;
+  const d = new Date(monthStart);
+  d.setMonth(d.getMonth() + 1);
+  const monthEnd = d.toISOString().slice(0, 10);
 
   const from = (page - 1) * pageSize;
   const to   = from + pageSize - 1;
@@ -1155,7 +1185,8 @@ async listPayments({ ym, status = "all", page = 1, pageSize = 50 } = {}) {
       "id, student_id, payer_id, competence_month, due_date, amount, status, paid_at, canceled_at, cancel_note, student_name_snapshot, payer_name_snapshot",
       { count: "exact" }
     )
-    .eq("competence_month", monthStart)       // << chave: competência
+    .gte("due_date", monthStart)
+    .lt("due_date", monthEnd)
     .order("due_date", { ascending: true })
     .range(from, to);
 
@@ -1191,20 +1222,19 @@ async listPayments({ ym, status = "all", page = 1, pageSize = 50 } = {}) {
         : 0,
   }));
 
-  // KPIs usados na página
-  const kpis = rows.reduce(
-    (acc, r) => {
-      const v = Number(r.amount || 0);
-      acc.total_billed += v;
-      if (r.status === "paid")    acc.total_paid    += v;
-      if (r.status === "pending") acc.total_pending += v;
-      if (r.status === "pending" && new Date(r.due_date) < new Date()) {
-        acc.total_overdue += v;
-      }
-      return acc;
-    },
-    { total_billed: 0, total_paid: 0, total_pending: 0, total_overdue: 0 }
-  );
+  // KPIs customizados
+  const today = new Date().toISOString().slice(0, 10);
+  const kpis = {
+    receita_a_receber: rows
+      .filter(r => r.status === "pending")
+      .reduce((acc, r) => acc + Number(r.amount || 0), 0),
+    receita_atrasada: rows
+      .filter(r => r.status === "pending" && r.due_date < today)
+      .reduce((acc, r) => acc + Number(r.amount || 0), 0),
+    receita_recebida: rows
+      .filter(r => r.status === "paid")
+      .reduce((acc, r) => acc + Number(r.amount || 0), 0),
+  };
 
   return { rows, kpis };
 },

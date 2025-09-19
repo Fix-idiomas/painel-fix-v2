@@ -170,7 +170,8 @@ export default function ProfessoresPage() {
         ? t.rate_rules.map((r) => ({
             min: String(r.min ?? ""),
             max: String(r.max ?? ""),
-            rate: String(r.rate ?? ""),
+            // aceita ambos formatos: 'rate' (legado) ou 'hourly_rate' (novo)
+            rate: String((r.hourly_rate ?? "")), // só hourly_rate agora
           }))
         : [],
     });

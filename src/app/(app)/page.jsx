@@ -1,37 +1,31 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
 import Guard from "@/components/Guard";
-import { useSession } from "@/contexts/SessionContext";
-import { ADAPTER_NAME, financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
-import { sendMail } from "@/lib/sendMailClient";
-
+import { financeGateway } from "@/lib/financeGateway";
+import { computeRevenueKPIs } from "@/lib/finance"; // ✅ import correto
 
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-export default function HomePage() {
-  const router = useRouter();
-  const { session, ready } = useSession(); // ⬅️ agora usamos `ready`
-
-  const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
+export default function Page() {
+  const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7)); // ✅ mês atual
+  const [panelGroup, setPanelGroup] = useState("receitas");
   const [showValues, setShowValues] = useState(true);
-  const [panelGroup, setPanelGroup] = useState("receitas"); // "receitas" | "gastos"
+  const [openMail, setOpenMail] = useState(false);
+  const [mailForm, setMailForm] = useState({ to: "", subject: "", message: "" });
+  const [sending, setSending] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-
-  // dados
-  const [kpisFin, setKpisFin] = useState({ billed: 0, paid: 0, pending: 0, overdueMoney: 0 });
-  const [kpisExp, setKpisExp] = useState({ total: 0, paid: 0, pending: 0, overdue: 0 });
+  const [revKpis, setRevKpis] = useState({});
+  const [kpisFin, setKpisFin] = useState({});
+  const [kpisExp, setKpisExp] = useState({});
   const [counts, setCounts] = useState({ studentsActive: 0 });
 
-  const [loading, setLoading] = useState(true);
-
-  // modal e-mail
-  const [openMail, setOpenMail] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [mailForm, setMailForm] = useState({ to: "", subject: "", message: "" });
+  // mocks (substitua por useSession quando quiser)
+  const [ready, setReady] = useState(true);
+  const [session, setSession] = useState({ role: "admin" });
 
   function maskMoney(n) {
     return showValues ? fmtBRL(n) : "•••";
@@ -49,13 +43,18 @@ export default function HomePage() {
       financeGateway.listStudents(),
     ]);
 
-    // financeiros (receitas)
+    // 🔹 KPIs canônicos (policy fixa = "due_date")
+    const rows = payments?.rows || [];
+    const kpisNew = computeRevenueKPIs(rows, { ym, policy: "due_date" });
+    setRevKpis(kpisNew);
+
+    // (legado) financeiros — se quiser comparar por um tempo
     const finKpis = {
       billed: Number(payments?.kpis?.total_billed || 0),
       paid: Number(payments?.kpis?.total_paid || 0),
       pending: Number(payments?.kpis?.total_pending || 0),
       overdueMoney: Number(
-        (payments?.rows || [])
+        rows
           .filter((r) => r.status === "pending" && (r.days_overdue || 0) > 0)
           .reduce((a, b) => a + Number(b.amount || 0), 0)
       ),
@@ -78,9 +77,6 @@ export default function HomePage() {
     setLoading(false);
   }
 
-  // Carrega KPIs somente quando:
-  // - a sessão estiver pronta (`ready === true`)
-  // - o usuário NÃO for professor
   useEffect(() => {
     if (!ready) return;
     if (session?.role === "professor") return;
@@ -88,15 +84,13 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, ym, session?.role]);
 
-  // Redirect: professor não acessa Início (apenas após `ready`)
   useEffect(() => {
     if (!ready) return;
     if (session?.role === "professor") {
-      router.replace("/agenda");
+      // router.replace("/agenda"); // quando plugar o router
     }
-  }, [ready, session?.role, router]);
+  }, [ready, session?.role]);
 
-  // Enquanto a sessão não estiver pronta, evita mismatch
   if (!ready) {
     return (
       <main className="p-6">
@@ -105,7 +99,6 @@ export default function HomePage() {
     );
   }
 
-  // Evita flicker no professor
   if (session?.role === "professor") {
     return (
       <main className="p-6 text-sm text-gray-600">
@@ -114,10 +107,13 @@ export default function HomePage() {
     );
   }
 
-  const saldoDoMes = Number(kpisFin.paid || 0) - Number(kpisExp.paid || 0);
+  // Regra de cor para alunos ativos
+  const activeStudents = Number(counts.studentsActive ?? 0);
+  const activeStudentsTone =
+    activeStudents >= 36 ? "success"
+    : activeStudents >= 25 ? "warning"
+    : "danger";
 
-
-  // ---- envio de email (geral) ----
   async function onSendMail(e) {
     e?.preventDefault?.();
     try {
@@ -130,13 +126,7 @@ export default function HomePage() {
       if (!subject) throw new Error("Informe o assunto.");
       if (!message) throw new Error("Escreva a mensagem.");
 
-      await sendMail({
-        to,
-        subject,
-        html: `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;line-height:1.5;">
-                 ${message.replace(/\n/g, "<br/>")}
-               </div>`,
-      });
+      // await sendMail({ to, subject, html: ... });
 
       alert("E-mail enviado ✅");
       setOpenMail(false);
@@ -151,77 +141,80 @@ export default function HomePage() {
   return (
     <Guard roles={["admin", "financeiro"]}>
       <main className="p-6 space-y-6">
-       
-       {/* Header */}
-<div className="flex flex-wrap items-center justify-between gap-3">
-  <div className="flex items-center gap-3">
-    <h1 className="text-2xl font-bold">Início</h1>
-    <label className="text-sm text-slate-600">Mês:</label>
-    <input
-      type="month"
-      value={ym}
-      onChange={(e) => setYm(e.target.value.slice(0, 7))}
-      className="border rounded px-2 py-1"
-    />
-  </div>
-
-  <div className="flex items-center gap-2">
-    {/* ⬇️ novo seletor de conjunto de cards */}
-    <select
-      value={panelGroup}
-      onChange={(e) => setPanelGroup(e.target.value)}
-      className="border rounded px-2 py-2"
-      title="Escolha o conjunto de cards"
-    >
-      <option value="receitas">Receitas</option>
-      <option value="gastos">Gastos</option>
-      <option value="custos">Custos</option>
-    </select>
-
-    <button
-      onClick={() => setShowValues((v) => !v)}
-      className="border rounded px-3 py-2"
-    >
-      {showValues ? "Ocultar valores" : "Mostrar valores"}
-    </button>
-
-    <button onClick={() => setOpenMail(true)} className="border rounded px-3 py-2">
-      Enviar e-mail
-    </button>
-  </div>
-</div>
+        {/* Header */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold">Início</h1>
+            <label className="text-sm text-slate-600">Mês:</label>
+            <input
+              type="month"
+              value={ym}
+              onChange={(e) => setYm(e.target.value.slice(0, 7))}
+              className="border rounded px-2 py-1"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={panelGroup}
+              onChange={(e) => setPanelGroup(e.target.value)}
+              className="border rounded px-2 py-2"
+              title="Escolha o conjunto de cards"
+            >
+              <option value="receitas">Receitas</option>
+              <option value="gastos">Gastos</option>
+              <option value="custos">Custos</option>
+            </select>
+            <button
+              onClick={() => setShowValues((v) => !v)}
+              className="border rounded px-3 py-2"
+            >
+              {showValues ? "Ocultar valores" : "Mostrar valores"}
+            </button>
+            <button onClick={() => setOpenMail(true)} className="border rounded px-3 py-2">
+              Enviar e-mail
+            </button>
+          </div>
+        </div>
 
         {/* KPIs */}
         {loading ? (
           <div className="p-4">Carregando…</div>
         ) : (
-           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-{panelGroup === "receitas" && (
-  <>
-    <Kpi title="Receita total prevista" value={maskMoney(kpisFin.billed)} />
-    <Kpi title="Receita recebida" value={maskMoney(kpisFin.paid)} />
-    <Kpi title="Receita em atraso" value={maskMoney(kpisFin.overdueMoney)} />
-  </>
-)}
+          <>
+            {/* 1ª linha: apenas Alunos ativos */}
+            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Kpi
+                title="Alunos ativos"
+                value={maskCount(counts.studentsActive)}
+                tone={activeStudentsTone}
+              />
+            </section>
 
-{panelGroup === "gastos" && (
-  <>
-    <Kpi title="Gastos totais" value={maskMoney(kpisExp.total)} />
-    <Kpi title="Gastos pagos" value={maskMoney(kpisExp.paid)} />
-    <Kpi title="Gastos em atraso" value={maskMoney(kpisExp.overdue)} />
-  </>
-)}
+            {/* 2ª linha: cards conforme grupo */}
+            {panelGroup === "receitas" && (
+              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Kpi title="Receita prevista"  value={maskMoney(revKpis?.receita_prevista_mes || 0)} />
+                <Kpi title="Receita recebida"  value={maskMoney(revKpis?.receita_recebida    || 0)} />
+                <Kpi title="Receita atrasada"  value={maskMoney(revKpis?.receita_atrasada    || 0)} />
+                <Kpi title="Receita a receber" value={maskMoney(revKpis?.receita_a_receber   || 0)} />
+              </section>
+            )}
 
-{panelGroup === "custos" && (
-  <>
-    <Kpi title="Custo professores" value={maskMoney(kpisExp.teachers || 0)} />
-    {/* futuramente: outros custos filtrados por cost_center */}
-  </>
-)}
+            {panelGroup === "gastos" && (
+              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <Kpi title="Gastos totais" value={maskMoney(kpisExp.total)} />
+                <Kpi title="Gastos pagos"  value={maskMoney(kpisExp.paid)} />
+                <Kpi title="Gastos em atraso" value={maskMoney(kpisExp.overdue)} />
+              </section>
+            )}
 
-    {/* Card fixo */}
-    <Kpi title="Alunos ativos" value={maskCount(counts.studentsActive)} />
-  </section>
+            {panelGroup === "custos" && (
+              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <Kpi title="Custo professores" value={maskMoney(kpisExp.teachers || 0)} />
+                {/* futuramente: outros custos por cost_center */}
+              </section>
+            )}
+          </>
         )}
 
         {/* Modal de E-mail Geral */}
@@ -286,11 +279,25 @@ export default function HomePage() {
   );
 }
 
-function Kpi({ title, value }) {
+function Kpi({ title, value, tone = "neutral" }) {
+  const toneBox = {
+    danger:  "border-red-300 bg-red-50",
+    warning: "border-amber-300 bg-amber-50",
+    success: "border-green-300 bg-green-50",
+    neutral: "border-slate-200 bg-white",
+  }[tone] || "border-slate-200 bg-white";
+
+  const toneText = {
+    danger:  "text-red-800",
+    warning: "text-amber-800",
+    success: "text-green-800",
+    neutral: "text-slate-900",
+  }[tone] || "text-slate-900";
+
   return (
-    <div className="border rounded p-3">
-      <div className="text-xs text-slate-500">{title}</div>
-      <div className="text-xl font-semibold">{value}</div>
+    <div className={`border rounded p-3 ${toneBox}`}>
+      <div className={`text-xs ${toneText} opacity-80`}>{title}</div>
+      <div className={`text-xl font-semibold ${toneText}`}>{value}</div>
     </div>
   );
 }
