@@ -74,7 +74,7 @@ export default function AgendaPage() {
     if (!token) return alert("Sem sessão");
     const [, payload] = token.split(".");
     const json = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
-    alert(`role=${json.role}\ntenant_id=${json.tenant_id}\nperms=${JSON.stringify(json.perms||{})}`);
+  alert(`[DEBUG ADMIN] Claims JWT:\nrole=${json.role}\ntenant_id=${json.tenant_id}\nperms=${JSON.stringify(json.perms||{})}`);
   }
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);

@@ -113,7 +113,7 @@ export const supabaseGateway = {
     payer_id = null,
   }) {
     if (!name) throw new Error("Nome é obrigatório");
-    const tenant_id = await getTenantId(); // <-- aqui
+    const tenant_id = await this.getTenantId(); // <-- aqui
 
     const row = {
       name: String(name).trim(),
@@ -408,7 +408,7 @@ async createPayer({ name, email = null }) {
 
   const { data, error } = await supabase
     .from("payers")
-    .insert([{ tenant_id, name: nm, email: email || null }])
+    .insert([{ name: nm, email: email || null }])
     .select("id, name, email, created_at")
     .single();
 
@@ -643,7 +643,7 @@ async listSessions(turmaId) {
   async listSessionsWithAttendance({ turmaId, start, end }) {
     if (!turmaId) throw new Error("listSessionsWithAttendance: 'turmaId' é obrigatório");
 
-    const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID || "11111111-1111-4111-8111-111111111111";
+    
     const s = String(start || "").slice(0, 10); // "YYYY-MM-DD"
     const e = String(end   || "").slice(0, 10); // "YYYY-MM-DD"
     if (!s || !e) throw new Error("listSessionsWithAttendance: 'start' e 'end' são obrigatórios (YYYY-MM-DD)");
@@ -656,8 +656,10 @@ async listSessions(turmaId) {
     const { data: sessRows, error: eS } = await supabase
       .from("sessions")
       .select("id, turma_id, date, duration_hours, notes")
-      .eq("tenant_id", TENANT_ID)
-      .eq("turma_id", turmaId)
+      
+      // RLS já limita por tenant; se quiser reforçar via app:
+      // const tenant_id = await this.getTenantId();
+      // .eq("tenant_id", tenant_id)
       .gte("date", startISO)
       .lte("date", endISO)
       .order("date", { ascending: true });
@@ -669,7 +671,7 @@ async listSessions(turmaId) {
     const { data: att, error: eA } = await supabase
       .from("attendance")
       .select("session_id")
-      .eq("tenant_id", TENANT_ID)
+       // .eq("tenant_id", tenant_id) // opcional, se usar linha acima
       .in("session_id", ids);
     if (eA) throw new Error(eA.message);
 
@@ -1001,8 +1003,6 @@ async previewGenerateMonth({ ym, }) {
         _needs_payer: !s.payer_id, // dica p/ interface (“será criado”)
       };
     });
-
-  return rows;
 },
 
 // ✅ Geração efetiva (insere em 'payments')
@@ -1019,6 +1019,9 @@ async generateMonth({ ym, }) {
     
   if (e1) mapErr("generateMonth.students", e1);
 
+  const candidates = (students || []).filter((s) => Number(s.monthly_value || 0) > 0);
+  if (!candidates.length) return { inserted: 0, skipped_existing: 0, created_payers: 0 };
+
   // 2) Já existentes (não cancelados) para este mês
   const { data: existing, error: e2 } = await supabase
     .from("payments")
@@ -1027,11 +1030,15 @@ async generateMonth({ ym, }) {
     .neq("status", "canceled");
   if (e2) mapErr("generateMonth.existing", e2);
   const exists = new Set((existing || []).map((p) => p.student_id));
+  const toProcess = candidates.filter((s) => !exists.has(s.id));
+  if (!toProcess.length) {
+    return { inserted: 0, skipped_existing: candidates.length, created_payers: 0 };
+  }
 
   // 3) Payers do tenant (map para validar existência)
   const { data: payers, error: e3 } = await supabase
-  .from("payers")
-  .select("id, name")
+    .from("payers")
+    .select("id, name");
   if (e3) mapErr("generateMonth.payers", e3);
 
 const payerName = new Map((payers || []).map((p) => [p.id, p.name]));
@@ -1133,73 +1140,71 @@ for (const s of students || []) {
   }
 },
 
+async listPayments({ ym, status = "all", page = 1, pageSize = 50 } = {}) {
+  if (!ym) throw new Error("listPayments: 'ym' é obrigatório.");
 
+  // usa seu helper; se não existir, substitua por `${ym}-01`
+  const monthStart = typeof monthStartOf === "function" ? monthStartOf(ym) : `${ym}-01`;
 
-  // 🧩 supabaseGateway.js — substitua seu listPayments por este
-async listPayments({ ym, status = null } = {}) {
-  // ym: "YYYY-MM" | null
-  const monthStart = ym ? `${ym}-01` : null;
-  const monthEnd = ym
-    ? new Date(new Date(`${ym}-01T00:00:00`).setMonth(new Date(`${ym}-01T00:00:00`).getMonth() + 1))
-        .toISOString()
-        .slice(0, 10) // YYYY-MM-DD
-    : null;
+  const from = (page - 1) * pageSize;
+  const to   = from + pageSize - 1;
 
   let q = supabase
     .from("payments")
     .select(
-      "id,tenant_id,student_id,payer_id,competence_month,due_date,amount,status,paid_at,canceled_at,cancel_note,created_at,student_name_snapshot,payer_name_snapshot"
-    );
+      "id, student_id, payer_id, competence_month, due_date, amount, status, paid_at, canceled_at, cancel_note, student_name_snapshot, payer_name_snapshot",
+      { count: "exact" }
+    )
+    .eq("competence_month", monthStart)       // << chave: competência
+    .order("due_date", { ascending: true })
+    .range(from, to);
 
-  if (monthStart && monthEnd) {
-    // intervalo do mês [start, end)
-    q = q.gte("due_date", monthStart).lt("due_date", monthEnd);
-  }
-
-  if (status && status !== "all") {
-    q = q.eq("status", status);
-  }
+  if (status && status !== "all") q = q.eq("status", status);
 
   const { data, error } = await q;
-  if (error) mapErr("listPayments", error);
+  if (error) mapErr("listPayments.query", error);
 
-  // "hoje" (zerado) para comparar com due_date (date sem horário)
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // normaliza campos esperados pela UI
+  const rows = (data || []).map((r) => ({
+    id: r.id,
+    student_id: r.student_id,
+    payer_id: r.payer_id,
+    competence_month: r.competence_month,
+    due_date: r.due_date,
+    amount: r.amount,
+    status: r.status,
+    paid_at: r.paid_at,
+    canceled_at: r.canceled_at,
+    cancel_note: r.cancel_note,
+    student_name: r.student_name_snapshot,
+    payer_name: r.payer_name_snapshot,
+    // atraso (opcional)
+    days_overdue:
+      r.status === "pending"
+        ? Math.max(
+            0,
+            Math.floor(
+              (Date.now() - new Date(`${r.due_date}T00:00:00Z`).getTime()) /
+                (1000 * 60 * 60 * 24)
+            )
+          )
+        : 0,
+  }));
 
-  const rows = (data || []).map((p) => {
-    const due = p.due_date ? new Date(`${p.due_date}T00:00:00`) : null;
-    const diffDays =
-      p.status === "pending" && due && due < today
-        ? Math.max(0, Math.floor((today - due) / 86400000))
-        : 0;
-
-    return {
-      ...p,
-      days_overdue: diffDays,
-      // (opcional) alias para compatibilidade com telas antigas:
-      student_name: p.student_name_snapshot ?? null,
-      payer_name: p.payer_name_snapshot ?? null,
-    };
-  });
-
-  const sum = (arr) => arr.reduce((acc, it) => acc + Number(it.amount || 0), 0);
-
-const kpis = {
-   // Previsto = tudo que NÃO está cancelado (pending + paid)
-   total_billed:  sum(rows.filter((r) => r.status !== "canceled")),
-   // Recebidos = perene (qualquer lançamento com paid_at)
-   total_paid:    sum(rows.filter((r) => r.paid_at != null)),
-   total_pending: sum(rows.filter((r) => r.status === "pending")),
-   total_overdue: sum(rows.filter((r) => r.status === "pending" && r.days_overdue > 0)),
- };
-
-  // ordena por vencimento (nulls por último)
-  rows.sort((a, b) => {
-    const da = a.due_date || "9999-12-31";
-    const db = b.due_date || "9999-12-31";
-    return da.localeCompare(db);
-  });
+  // KPIs usados na página
+  const kpis = rows.reduce(
+    (acc, r) => {
+      const v = Number(r.amount || 0);
+      acc.total_billed += v;
+      if (r.status === "paid")    acc.total_paid    += v;
+      if (r.status === "pending") acc.total_pending += v;
+      if (r.status === "pending" && new Date(r.due_date) < new Date()) {
+        acc.total_overdue += v;
+      }
+      return acc;
+    },
+    { total_billed: 0, total_paid: 0, total_pending: 0, total_overdue: 0 }
+  );
 
   return { rows, kpis };
 },
@@ -1223,24 +1228,6 @@ const kpis = {
     if (error) mapErr("cancelPayment", error);
     return true;
   },
-
-  async reopenExpense(id) {
-  if (!id) throw new Error("reopenExpense: 'id' é obrigatório");
-
-  const { data, error } = await supabase
-    .from("expense_entries")
-    .update({
-      status: "pending",
-      canceled_at: null,
-      cancel_note: null,
-    })
-    .eq("id", id)
-    .select("id, status, canceled_at, cancel_note, updated_at")
-    .single();
-
-  if (error) throw new Error(`reopenExpense: ${error.message}`);
-  return data;
-},
 
   // ==============================
   // DESPESAS — Templates
@@ -1343,66 +1330,7 @@ const kpis = {
     };
   },
 
-  async createExpenseEntry({
-    ym,
-    template_id = null,
-    title = null,
-    category = null,
-    amount = null,
-    due_day = null,
-    due_date = null,
-    cost_center = null,
-  } = {}) {
-    const monthStart = monthStartOf(ym);
-
-    let t = null;
-    if (template_id) {
-      const { data: tpl, error: eTpl } = await supabase
-        .from("expense_templates")
-        .select("id, title, category, amount, frequency, due_day, due_month, cost_center, active")
-        .eq("id", template_id)
-        .single();
-      if (eTpl) throw new Error(`createExpenseEntry (template): ${eTpl.message}`);
-      if (!tpl) throw new Error("createExpenseEntry: template não encontrado");
-      t = tpl;
-    }
-
-    const finalTitle = (title ?? t?.title ?? "").trim();
-    if (!finalTitle) throw new Error("createExpenseEntry: 'title' é obrigatório (direto ou via template)");
-
-    const finalCategory  = category  ?? t?.category ?? null;
-  const finalAmount    = Number((amount ?? t?.amount ?? 0) || 0);
-  const finalCost      = cost_center ?? t?.cost_center ?? "PJ";
-  const finalDueDay    = Number((due_day ?? t?.due_day ?? 5) || 5);
-
-    let finalDueDate = due_date;
-    if (!finalDueDate) finalDueDate = dueDateFor(monthStart.slice(0, 7), finalDueDay);
-
-    const row = {
-      template_id: t?.id ?? null,
-      title_snapshot: finalTitle,
-      category: finalCategory,
-      amount: finalAmount,
-      competence_month: monthStart,
-      due_date: finalDueDate,
-      status: "pending",
-      paid_at: null,
-      canceled_at: null,
-      cancel_note: null,
-      cost_center: finalCost,
-    };
-
-    const { data, error } = await supabase
-      .from("expense_entries")
-      .insert([row])
-      .select(
-        "id, template_id, title_snapshot, category, amount, competence_month, due_date, status, paid_at, canceled_at, cancel_note, cost_center, created_at, updated_at"
-      )
-      .single();
-
-    if (error) throw new Error(`createExpenseEntry: ${error.message}`);
-    return data;
-  },
+ 
 
   async updateExpenseTemplate(id, changes = {}) {
     if (!id) throw new Error("updateExpenseTemplate: 'id' é obrigatório");

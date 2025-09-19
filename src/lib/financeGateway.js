@@ -9,8 +9,8 @@ import { supabaseGateway } from "@/lib/supabaseGateway";
 export const ADAPTER_NAME = "supabase";
 
 // ---------- Financeiro: Receitas (mensalidades) ----------
-async function listPayments({ ym, status = null, tenant_id = null } = {}) {
-  return supabaseGateway.listPayments({ ym, status, tenant_id });
+async function listPayments({ ym, status = null } = {}) {
+  return supabaseGateway.listPayments({ ym, status });
 }
 async function markPaid(id) {
   return supabaseGateway.markPaid(id);
@@ -211,11 +211,11 @@ async function deleteAttendance(sessionId, studentId) {
 }
 
 // ---------- Financeiro: mensalidades (geração) ----------
-async function previewGenerateMonth({ ym, tenant_id }) {
-  return supabaseGateway.previewGenerateMonth({ ym, tenant_id });
+async function previewGenerateMonth({ ym }) {
+  return supabaseGateway.previewGenerateMonth({ ym });
 }
-async function generateMonth({ ym, tenant_id }) {
-  return supabaseGateway.generateMonth({ ym, tenant_id });
+async function generateMonth({ ym }) {
+  return supabaseGateway.generateMonth({ ym });
 }
 async function deleteExpenseEntry(id, opts = {}) {
   return supabaseGateway.deleteExpenseEntry(id, opts);
