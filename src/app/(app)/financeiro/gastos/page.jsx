@@ -35,6 +35,7 @@ export default function GastosPage() {
   const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
   const [status, setStatus] = useState("all");      // all | pending | paid | canceled
   const [costCenter, setCostCenter] = useState("all"); // all | PJ | PF
+  const [updatingId, setUpdatingId] = useState(null);
 
   // mês
   const [rows, setRows] = useState([]);
@@ -93,7 +94,7 @@ export default function GastosPage() {
   useEffect(() => {
     load();
   }, [ym, status, costCenter]);
-
+ 
   // ====== Ações do mês ======
   async function onPreview() {
     const prev = await financeGateway.previewGenerateExpenses({ ym });
@@ -117,25 +118,85 @@ export default function GastosPage() {
   }
 
   // ====== Ações por item ======
-  const markPaid = async (id) => {
-    await financeGateway.markExpensePaid(id);
+ const markPaid = async (id) => {
+  try {
+    setUpdatingId(id);
+    if (financeGateway.updateExpenseEntry) {
+      await financeGateway.updateExpenseEntry(id, {
+        status: "paid",
+        paid_at: new Date().toISOString(),
+      });
+    } else {
+      const { supabase } = await import("@/lib/supabaseClient");
+      const { error } = await supabase
+        .from("expense_entries")
+        .update({ status: "paid", paid_at: new Date().toISOString() })
+        .eq("id", id);
+      if (error) throw error;
+    }
     await load();
-  };
-  const reopen = async (id) => {
-    await financeGateway.reopenExpense(id);
-    await load();// recarrega lista após Reabrir
-  };
-  async function cancel(id) {
-    const note = prompt("Motivo do cancelamento (opcional):") || "";
-    await financeGateway.cancelExpense(id, note);
-    await load();
+  } finally {
+    setUpdatingId(null);
   }
-  const delEntry = async (id) => {
-    if (!confirm("Excluir lançamento?")) return;
-    await financeGateway.deleteExpenseEntry(id);
-    await load();
-  };
+};
 
+
+const reopen = async (id) => {
+  try {
+    setUpdatingId(id);
+    if (financeGateway.updateExpenseEntry) {
+      await financeGateway.updateExpenseEntry(id, {
+        status: "pending",
+        paid_at: null,
+      });
+    } else {
+      const { supabase } = await import("@/lib/supabaseClient");
+      const { error } = await supabase
+        .from("expense_entries")
+        .update({ status: "pending", paid_at: null })
+        .eq("id", id);
+      if (error) throw error;
+    }
+    await load();
+  } finally {
+    setUpdatingId(null);
+  }
+};
+
+const cancel = async (id) => {
+  try {
+    setUpdatingId(id);
+    const note = prompt("Motivo do cancelamento (opcional):") || "";
+    if (financeGateway.updateExpenseEntry) {
+      await financeGateway.updateExpenseEntry(id, {
+        status: "canceled",
+        paid_at: null,
+        // cancel_reason: note, // se existir
+      });
+    } else {
+      const { supabase } = await import("@/lib/supabaseClient");
+      const { error } = await supabase
+        .from("expense_entries")
+        .update({ status: "canceled", paid_at: null /*, cancel_reason: note */ })
+        .eq("id", id);
+      if (error) throw error;
+    }
+    await load();
+  } finally {
+    setUpdatingId(null);
+  }
+};
+
+const delEntry = async (id) => {
+  if (!confirm("Excluir lançamento?")) return;
+  await financeGateway.deleteExpenseEntry
+    ? financeGateway.deleteExpenseEntry(id)
+    : (await import("@/lib/supabaseClient")).supabase
+        .from("expense_entries")
+        .delete()
+        .eq("id", id);
+  await load();
+};
   // ====== Templates ======
   function openCreateTpl() {
     setTplId(null);

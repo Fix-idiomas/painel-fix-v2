@@ -1,9 +1,24 @@
 import { supabase } from "./supabaseClient";
 
 // ------------------------ Helpers ------------------------
-const mapErr = (ctx, err) => {
-  console.error(`[supabaseGateway] ${ctx}:`, err?.message || err);
-  throw new Error(err?.message || `Erro em ${ctx}`);
+ const mapErr = (ctx, err) => {
+   const code = err?.code || err?.status || err?.name;
+   const text = `${err?.message || ""} ${err?.details || ""}`.toLowerCase();
+
+   // teacher_id_snapshot NOT NULL → mensagem amigável
+   if (
+     code === "23502" ||                // not_null_violation (Postgres)
+     text.includes("null value in column") ||
+     text.includes("violates not-null constraint")
+   ) {
+     if (text.includes("teacher_id_snapshot")) {
+       console.error(`[supabaseGateway] ${ctx}:`, err);
+       throw new Error("É obrigatório atribuir um professor à turma para criar uma sessão.");
+     }
+   }
+
+   console.error(`[supabaseGateway] ${ctx}:`, err?.message || err);
+   throw new Error(err?.message || `Erro em ${ctx}`);
 };
 
 // Normaliza meeting_rules para manter shape consistente
@@ -718,7 +733,7 @@ async listSessions(turmaId) {
 
   async createSession(payload) {
     // payload: { turma_id, date ("YYYY-MM-DD" ou ISO), notes?, duration_hours?, headcount_snapshot? }
-    const tenant_id = await this.getTenantId();
+   
     const row = {
       turma_id: payload?.turma_id,
       date: toIsoTz(String(payload?.date || "").slice(0, 25)),
@@ -726,43 +741,66 @@ async listSessions(turmaId) {
       duration_hours: Number(payload?.duration_hours ?? 0.5),
       headcount_snapshot:
         payload?.headcount_snapshot != null ? Number(payload.headcount_snapshot) : null,
-      tenant_id,
+    
     };
     if (!row.turma_id) throw new Error("turma_id é obrigatório.");
     if (!row.date) throw new Error("date é obrigatório (YYYY-MM-DD ou ISO).");
 
     const { data, error } = await supabase
       .from("sessions")
-      .insert(row)
-      .select("id,turma_id,date,duration_hours,notes,headcount_snapshot,tenant_id")
+      .insert([row]) // array é o padrão + seguro
+      .select("id,turma_id,date,duration_hours,notes,headcount_snapshot")
       .single();
     if (error) mapErr("createSession", error);
     return data;
   },
 
-  async updateSession(id, changes) {
-    if (!id) throw new Error("ID da sessão é obrigatório.");
+async updateSession(id, changes) {
+  if (!id || (typeof id !== "string" && typeof id !== "number")) {
+    throw new Error("ID da sessão é obrigatório.");
+  }
 
-    const patch = {};
-    if (changes?.date != null) {
-      patch.date = toIsoTz(String(changes.date).slice(0, 25));
-    }
-    if (changes?.notes != null)            patch.notes = changes.notes || "";
-    if (changes?.duration_hours !== undefined)
-      patch.duration_hours = Number(changes.duration_hours ?? 0.5);
-    if (changes?.headcount_snapshot !== undefined)
-      patch.headcount_snapshot =
-        changes.headcount_snapshot != null ? Number(changes.headcount_snapshot) : null;
+  const patch = {};
+  if (changes?.date != null) {
+    patch.date = toIsoTz(String(changes.date).slice(0, 25));
+  }
+  if (changes?.notes != null)            patch.notes = changes.notes || "";
+  if (changes?.duration_hours !== undefined)
+    patch.duration_hours = Number(changes.duration_hours ?? 0.5);
+  if (changes?.headcount_snapshot !== undefined)
+    patch.headcount_snapshot =
+      changes.headcount_snapshot != null ? Number(changes.headcount_snapshot) : null;
 
+  // Se não há mudanças, retorna o registro atual
+  if (Object.keys(patch).length === 0) {
     const { data, error } = await supabase
       .from("sessions")
-      .update(patch)
-      .eq("id", id)
       .select("id,turma_id,date,duration_hours,notes,headcount_snapshot")
-      .single();
-    if (error) mapErr("updateSession", error);
-    return data;
-  },
+      .eq("id", id)
+      .limit(1);
+    if (error) mapErr("updateSession.select", error);
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error("Sessão não encontrada.");
+    return row;
+  }
+
+  const { data, error } = await supabase
+    .from("sessions")
+    .update(patch)
+    .eq("id", id)
+    .select("id,turma_id,date,duration_hours,notes,headcount_snapshot"); // sem .single()
+
+  if (error) mapErr("updateSession", error);
+
+  // Normaliza: PostgREST retorna array no UPDATE + select
+  const row = Array.isArray(data) ? data[0] : data;
+
+  if (!row) {
+    // 0 linhas atualizadas: ou ID não existe ou RLS bloqueou
+    throw new Error("Sessão não encontrada ou sem permissão para editar.");
+  }
+  return row;
+},
 
   // Sessão avulsa (ex: reposição, aula extra)
   async createOneOffSession({
@@ -832,7 +870,7 @@ async upsertAttendance(sessionId, studentId, { present, note }) {
         note: note || null,
         updated_at: new Date().toISOString(),
       },
-      { onConflict: ["session_id", "student_id"] }
+      { onConflict: "session_id,student_id" }
     )
     .select();
 
