@@ -1,11 +1,15 @@
+// src/lib/finance/helpers.js
 import { isSameYm, todayISO } from "./dates.js";
-import { isOverdue } from "./status.js";
+import { isOverdue } from "./status.js"; // (ok ficar importado mesmo se não usado aqui)
 
 /**
  * policy: "due_date" | "competence" | "both"
  * ym: "YYYY-MM" (mês-alvo)
  */
-export function computeRevenueKPIs(rows, { ym, tz = "America/Sao_Paulo", policy = "due_date" } = {}) {
+export function computeRevenueKPIs(
+  rows,
+  { ym, tz = "America/Sao_Paulo", policy = "due_date" } = {}
+) {
   const clean = (rows ?? []).filter(Boolean);
 
   if (policy === "due_date") {
@@ -32,15 +36,19 @@ function computeByDueDate(rows, ym, tz) {
 
   for (const r of rows) {
     if (!r || r.status === "canceled") continue;
+
     const inMonthByDue = isSameYm(r.due_date, ym);
 
+    // pendentes do mês (por due_date)
     if (r.status === "pending" && inMonthByDue) {
-      prevista += r.amount ?? 0;
-      if (r.due_date && r.due_date < today) atrasada += r.amount ?? 0;
-      else aReceber += r.amount ?? 0;
+      const amt = r.amount ?? 0;
+      prevista += amt;
+      if (r.due_date && r.due_date < today) atrasada += amt;
+      else aReceber += amt;
     }
 
-    if (r.status === "paid" && r.paid_at && isSameYm(r.paid_at, ym)) {
+    // ✅ recebidos do mês (por due_date)
+    if (r.status === "paid" && inMonthByDue) {
       recebida += r.amount ?? 0;
     }
   }
@@ -59,7 +67,8 @@ function computeByCompetence(rows, ym) {
 
   for (const r of rows) {
     if (!r || r.status === "canceled") continue;
-    const inMonthByComp = r.competence_month && r.competence_month.startsWith(ym);
+    const inMonthByComp =
+      r.competence_month && r.competence_month.startsWith(ym);
 
     if (inMonthByComp) {
       if (r.status === "pending" || r.status === "paid") {

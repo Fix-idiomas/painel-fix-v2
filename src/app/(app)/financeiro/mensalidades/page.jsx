@@ -5,7 +5,14 @@ import { useEffect, useMemo, useState } from "react";
 import { financeGateway, ADAPTER_NAME } from "@/lib/financeGateway";
 import Guard from "@/components/Guard";
 import { useSession } from "@/contexts/SessionContext";
-import { computeRevenueKPIs, getPaymentStatusLabel } from "@/lib/finance";
+import { computeRevenueKPIs } from "@/lib/finance";
+
+// Tradução de status para exibir na tabela
+const statusLabels = {
+  pending: "Pendente",
+  paid: "Pago",
+  canceled: "Cancelado",
+};
 
 function KpiCard({ title, value, tone = "neutral" }) {
   const toneBox = {
@@ -32,6 +39,19 @@ function KpiCard({ title, value, tone = "neutral" }) {
 
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+// Data BR com pontos: "YYYY-MM-DD" -> "DD.MM.YYYY"
+const fmtBRDate = (s) => {
+  if (!s) return "—";
+  const parts = String(s).slice(0, 10).split("-"); // garante YYYY-MM-DD
+  if (parts.length === 3) {
+    const [Y, M, D] = parts;
+    return `${D}.${M}.${Y}`;
+  }
+  // fallback robusto
+  try { return new Date(s + "T00:00:00").toLocaleDateString("pt-BR").replace(/\//g, "."); }
+  catch { return s; }
+};
 
 export default function MensalidadesPage() {
   const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7)); // "YYYY-MM"
@@ -127,7 +147,7 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [ready, ym, status]);
 
-  async function openPreview() {
+async function openPreview() {
     if (!canPreview) {
       alert("Prévia indisponível no adaptador atual.");
       return;
@@ -135,14 +155,75 @@ useEffect(() => {
     setPreviewOpen(true);
     setPreviewLoading(true);
     try {
-      const prev = await financeGateway.previewGenerateMonth({ ym });
-      setPreview(prev ?? []);
+      // 1) prévia “crua”
+const prev = (await financeGateway.previewGenerateMonth({ ym })) || [];
+
+// 2) IDs de alunos
+const studentIds = [...new Set(prev.map(p => p.student_id).filter(Boolean))];
+
+// 3) buscar alunos (nome + payer_id)
+const { supabase } = await import("@/lib/supabaseClient");
+let studs = [];
+if (studentIds.length) {
+  const tries = ["id, full_name, payer_id", "id, name, payer_id"];
+  for (const cols of tries) {
+    const { data, error } = await supabase.from("students").select(cols).in("id", studentIds);
+    if (!error) { studs = data || []; break; }
+  }
+}
+
+// 4) índices: nome do aluno e payer_id do aluno
+const studentNameById = Object.create(null);
+const payerIdByStudentId = Object.create(null);
+for (const s of studs) {
+  studentNameById[s.id] = s.full_name ?? s.name ?? "";
+  payerIdByStudentId[s.id] = s.payer_id ?? null;
+}
+
+// 5) coletar payer_ids (da própria prévia + do aluno)
+const payerIdsSet = new Set(prev.map(p => p.payer_id).filter(Boolean));
+for (const sid of studentIds) {
+  const pid = payerIdByStudentId[sid];
+  if (pid) payerIdsSet.add(pid);
+}
+const payerIds = [...payerIdsSet];
+
+// 6) buscar pagadores (nome)
+let pays = [];
+if (payerIds.length) {
+  const tries = ["id, name", "id, full_name"];
+  for (const cols of tries) {
+    const { data, error } = await supabase.from("payers").select(cols).in("id", payerIds);
+    if (!error) { pays = data || []; break; }
+  }
+}
+const payerNameById = Object.create(null);
+for (const p of pays) payerNameById[p.id] = p.name ?? p.full_name ?? "";
+
+// 7) enriquecer linhas
+const enriched = prev.map((r) => {
+  const pid = r.payer_id ?? payerIdByStudentId[r.student_id] ?? null;
+  return {
+    ...r,
+    student_name:
+      r.student_name_snapshot ??
+      studentNameById[r.student_id] ??
+      r.student_name ??
+      r.student_id,
+    payer_name:
+      r.payer_name_snapshot ??
+      (pid ? payerNameById[pid] : undefined) ??
+      r.payer_name ??
+      "—",
+  };
+});
+      setPreview(enriched);
     } catch (e) {
-      alert(e.message || String(e));
+      alert(e?.message || String(e));
     } finally {
       setPreviewLoading(false);
     }
-  }
+  } 
 
   async function doGenerate() {
     if (!canGenerate) {
@@ -192,21 +273,36 @@ useEffect(() => {
   const [open, setOpen] = useState(false);
   const [payerId, setPayerId] = useState("");
   const [busy, setBusy] = useState(false);
+  const [payerOptions, setPayerOptions] = useState([]);
 
-  // Opções de pagadores a partir das rows PENDENTES do mês corrente
-  const payerOptions = useMemo(() => {
-    const byId = new Map();
-    for (const r of rows || []) {
-      if (r?.status !== "pending") continue;
-      const id = r?.payer_id;
-      if (!id) continue;
-      if (!byId.has(id)) {
-        const name = r?.payer_name_snapshot || `Pagador ${id}`;
-        byId.set(id, name);
-      }
+   // Monta opções pegando SEMPRE do banco de pagadores
+  useEffect(() => {
+  (async () => {
+   if (!open) { setPayerOptions([]); return; } // carrega só quando abrir o painel
+
+    const { supabase } = await import("@/lib/supabaseClient");
+
+    // tentar ordenar por 'name' e, se não houver, cair para 'full_name'
+    let payers = [];
+    let q1 = await supabase.from("payers").select("id, name").order("name", { ascending: true });
+    if (q1.error) {
+      const q2 = await supabase.from("payers").select("id, full_name").order("full_name", { ascending: true });
+      payers = q2.data || [];
+    } else {
+      payers = q1.data || [];
     }
-    return Array.from(byId, ([value, label]) => ({ value, label }));
-  }, [rows]);
+
+    const opts = (payers || [])
+      .map(p => ({
+        value: p.id,
+        label: p.name ?? p.full_name ?? `Pagador ${String(p.id).slice(0,6)}`
+      }))
+      .sort((a,b) => a.label.localeCompare(b.label, "pt-BR"));
+
+    setPayerOptions(opts);
+  })();
+}, [open]);
+
 
   function monthRange(ymStr) {
     const start = `${ymStr}-01`;
@@ -401,13 +497,15 @@ useEffect(() => {
                     <tr key={id} className="border-t">
                       <Td>{r.student_name_snapshot || r.student_name || "—"}</Td>
                       <Td>{r.payer_name_snapshot || r.payer_name || "—"}</Td>
-                      <Td>{r.due_date}</Td>
+                      <Td>{fmtBRDate(r.due_date)}</Td>
                       <Td>{fmtBRL(r.amount)}</Td>
                       <Td>
-                        {r.status}
-                        {r.status === "pending" && r.days_overdue > 0 ? (
+                        {r.status === "pending"
+                          ? (r.days_overdue > 0 ? "Atrasado" : "Pendente")
+                          : (statusLabels?.[r.status] ?? r.status ?? "—")}
+                          {r.status === "pending" && r.days_overdue > 0 && (
                           <span className="ml-2 text-red-600 text-xs">({r.days_overdue}d)</span>
-                        ) : null}
+                        )}
                       </Td>
                       <Td>
                         {r.status === "pending" ? (
@@ -451,18 +549,18 @@ useEffect(() => {
                     <thead className="bg-slate-50">
                       <tr>
                         <Th>Aluno</Th>
+                        <Th>Pagador</Th>
                         <Th>Vencimento</Th>
-                        <Th>Valor</Th>
-                        <Th>Pagador?</Th>
+                        <Th>Valor?</Th>
                       </tr>
                     </thead>
                     <tbody>
                       {preview.map((p, i) => (
                         <tr key={`${p.student_id}:${i}`} className="border-t">
-                          <Td>{p.student_name || p.student_id}</Td>
-                          <Td>{p.due_date}</Td>
+                          <Td>{p.student_name}</Td>
+                          <Td>{p.payer_name}</Td>
+                          <Td>{fmtBRDate(p.due_date)}</Td>
                           <Td>{fmtBRL(p.amount)}</Td>
-                          <Td>{p._needs_payer ? "Será criado" : "OK"}</Td>
                         </tr>
                       ))}
                     </tbody>

@@ -9,6 +9,18 @@ import { computeRevenueKPIs } from "@/lib/finance"; // ✅ import correto
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
+const TZ = "America/Sao_Paulo";
+const fmtBRDateDots = (s) => {
+  if (!s) return "—";
+  const [Y, M, D] = String(s).slice(0, 10).split("-");
+  return `${D}.${M}.${Y}`;
+};
+const ymAddMonths = (ym, delta) => {
+  const [Y, M] = ym.split("-").map(Number);
+  const d = new Date(Date.UTC(Y, (M - 1) + delta, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+};
+
 export default function Page() {
   const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7)); // ✅ mês atual
   const [panelGroup, setPanelGroup] = useState("receitas");
@@ -22,6 +34,9 @@ export default function Page() {
   const [kpisFin, setKpisFin] = useState({});
   const [kpisExp, setKpisExp] = useState({});
   const [counts, setCounts] = useState({ studentsActive: 0 });
+  const [upcoming, setUpcoming] = useState([]);     // vencem nos próximos 7 dias
+  const [birthdays, setBirthdays] = useState([]);   // aniversariantes do mês
+
 
   // mocks (substitua por useSession quando quiser)
   const [ready, setReady] = useState(true);
@@ -67,6 +82,66 @@ export default function Page() {
       pending: Number(expenses?.kpis?.pending || 0),
       overdue: Number(expenses?.kpis?.overdue || 0),
     };
+    // ===== Próximos 7 dias (independe do "ym" selecionado nos cards) =====
+{
+  // hoje e +7 no fuso de SP -> "YYYY-MM-DD"
+  const nowSP = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+  const todayISO = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(nowSP);
+  const plus7 = new Date(nowSP);
+  plus7.setDate(plus7.getDate() + 7);
+  const endISO = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(plus7);
+
+  const ymNow  = todayISO.slice(0, 7);
+  const ymNext = ymAddMonths(ymNow, 1);
+
+  // buscamos mês atual + próximo e filtramos em memória
+  const [dueNow, dueNext] = await Promise.all([
+    financeGateway.listPayments({ ym: ymNow }),
+    financeGateway.listPayments({ ym: ymNext }),
+  ]);
+  const rowsNow  = Array.isArray(dueNow?.rows)  ? dueNow.rows  : (Array.isArray(dueNow)  ? dueNow  : []);
+  const rowsNext = Array.isArray(dueNext?.rows) ? dueNext.rows : (Array.isArray(dueNext) ? dueNext : []);
+
+  const up = [...rowsNow, ...rowsNext]
+    .filter(r =>
+      r?.status === "pending" &&
+      r?.due_date >= todayISO &&
+      r?.due_date <= endISO
+    )
+    .map(r => ({
+      id: r.payment_id || r.id,
+      due_date: r.due_date,
+      amount: Number(r.amount || 0),
+      student_name: r.student_name_snapshot || r.student_name || "—",
+      payer_name:   r.payer_name_snapshot   || r.payer_name   || "—",
+       isToday: r.due_date === todayISO,   //badge para vencendo hoje
+    }))
+    .sort((a, b) => a.due_date.localeCompare(b.due_date));
+
+  setUpcoming(up);
+}
+
+// ===== Aniversariantes do mês (considera alunos ativos) =====
+{
+  const nowSP = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+  const mm = nowSP.getMonth() + 1;
+
+  const list = (students || [])
+    .filter(s => (s?.status || "").toLowerCase() === "ativo")
+    .map(s => {
+      const name = s.full_name ?? s.name ?? "";
+      const dob  = s.birth_date ?? s.date_of_birth ?? null;
+      if (!name || !dob) return null;
+      const m = Number(String(dob).slice(5, 7));
+      if (m !== mm) return null;
+      const d = Number(String(dob).slice(8, 10));
+      return { id: s.id, name, dd: d };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.dd - b.dd);
+
+  setBirthdays(list);
+}
 
     // contagens
     const studentsActive = (students || []).filter((s) => s.status === "ativo").length;
@@ -216,6 +291,73 @@ export default function Page() {
             )}
           </>
         )}
+{/* Blocos extras: Próximos 7 dias + Aniversariantes do mês */}
+<section className="grid gap-4 lg:grid-cols-2">
+  {/* Vencem nos próximos 7 dias */}
+  <div className="border rounded overflow-hidden">
+    <div className="px-3 py-2 border-b bg-slate-50 font-semibold">
+      Vencem nos próximos 7 dias
+    </div>
+    {upcoming.length === 0 ? (
+      <div className="p-4 text-slate-600">Nada a vencer no período.</div>
+    ) : (
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50">
+          <tr>
+            <Th>Vencimento</Th>
+            <Th>Aluno</Th>
+            <Th>Pagador</Th>
+            <Th className="text-right">Valor</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {upcoming.map((r) => (
+            <tr key={r.id} className="border-t">
+              <Td>
+                {fmtBRDateDots(r.due_date)}
+                {r.isToday && (
+                  <span className="ml-2 rounded-full px-2 py-0.5 text-xs bg-amber-100 text-amber-800">
+                    Hoje
+                  </span>
+                )}
+              </Td>
+              <Td>{r.student_name}</Td>
+              <Td>{r.payer_name}</Td>
+              <Td className="text-right">{maskMoney(r.amount)}</Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+  </div>
+
+  {/* Aniversariantes do mês */}
+  <div className="border rounded overflow-hidden">
+    <div className="px-3 py-2 border-b bg-slate-50 font-semibold">
+      Aniversariantes do mês
+    </div>
+    {birthdays.length === 0 ? (
+      <div className="p-4 text-slate-600">Nenhum aniversariante encontrado.</div>
+    ) : (
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50">
+          <tr>
+            <Th style={{width: 80}}>Dia</Th>
+            <Th>Nome</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {birthdays.map((b) => (
+            <tr key={b.id} className="border-t">
+              <Td>{String(b.dd).padStart(2, "0")}</Td>
+              <Td>{b.name}</Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+  </div>
+</section>
 
         {/* Modal de E-mail Geral */}
         <Modal
@@ -301,3 +443,19 @@ function Kpi({ title, value, tone = "neutral" }) {
     </div>
   );
 }
+function Th({ children, className = "", style }) {
+  return (
+    <th className={`text-left px-3 py-2 font-medium ${className}`} style={style}>
+      {children}
+    </th>
+  );
+}
+
+function Td({ children, className = "", style }) {
+  return (
+    <td className={`px-3 py-2 ${className}`} style={style}>
+      {children}
+    </td>
+  );
+}
+
