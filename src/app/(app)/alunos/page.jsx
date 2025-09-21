@@ -39,6 +39,8 @@ export default function AlunosPage() {
   // --------- Modal EDITAR ----------
   const [openEdit, setOpenEdit] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);     // confirm modal (edição)
+  const [pendingChanges, setPendingChanges] = useState(null); // payload aguardando confirmação
   const [editId, setEditId] = useState(null);
   const [formEdit, setFormEdit] = useState({
     name: "",
@@ -113,23 +115,26 @@ export default function AlunosPage() {
 
   // ---------- Edit ----------
   function openEditModal(s) {
-    setEditId(s.id);
+    setEditId(s?.id || null);
     setFormEdit({
-      name: s.name || "",
-      monthly_value: String(s.monthly_value ?? ""),
-      due_day: String(s.due_day ?? "5"),
-      birth_date: s.birth_date || "", // yyyy-mm-dd
+      name: s?.name ?? "",
+      monthly_value: String(s?.monthly_value ?? ""),
+      due_day: String(s?.due_day ?? ""),
+      birth_date: s?.birth_date || "",
     });
-
-    // configura pagador atual do aluno
-    if (!s.payer_id) {
-      setPayerModeEdit(PAYER_MODE.SELF);
-      setPayerIdEdit("");
-    } else {
+    // inicializa pagador no modo correto
+    if (s?.payer_id) {
       setPayerModeEdit(PAYER_MODE.EXISTING);
       setPayerIdEdit(s.payer_id);
+    } else {
+      setPayerModeEdit(PAYER_MODE.SELF);
+      setPayerIdEdit("");
     }
     setNewPayerEdit({ name: "", email: "" });
+
+    // limpa estado do modal de confirmação
+    setConfirmOpen(false);
+    setPendingChanges(null);
 
     setOpenEdit(true);
   }
@@ -140,11 +145,13 @@ export default function AlunosPage() {
     try {
       setSavingEdit(true);
 
-      // resolver pagador conforme seleção do EDIT
+      // calcula due_day sanitizado
+      const newDueDay = Math.min(Math.max(Number(formEdit.due_day || 5), 1), 28);
+
+      // resolve pagador conforme seleção no EDIT
       let chosenPayerId = null;
       if (payerModeEdit === PAYER_MODE.EXISTING) {
-        if (!payerIdEdit) throw new Error("Selecione um pagador existente.");
-        chosenPayerId = payerIdEdit;
+        chosenPayerId = payerIdEdit || null;
       } else if (payerModeEdit === PAYER_MODE.NEW) {
         if (!newPayerEdit.name.trim()) throw new Error("Informe o nome do novo pagador.");
         const py = await financeGateway.createPayer({
@@ -153,18 +160,38 @@ export default function AlunosPage() {
         });
         chosenPayerId = py.id;
       } else {
-        // SELF
-        chosenPayerId = null;
+        chosenPayerId = null; // SELF
       }
 
-      await financeGateway.updateStudent(editId, {
+      const changes = {
         name: formEdit.name.trim(),
         monthly_value: Number(formEdit.monthly_value || 0),
-        due_day: Math.min(Math.max(Number(formEdit.due_day || 5), 1), 28),
-        birth_date: formEdit.birth_date || null, // yyyy-mm-dd
+        due_day: newDueDay,
+        birth_date: formEdit.birth_date || null,
         payer_id: chosenPayerId,
-      });
+      };
 
+      // lê due_day atual no DB para comparar
+      const { supabase } = await import("@/lib/supabaseClient");
+      const { data: curr, error: currErr } = await supabase
+        .from("students")
+        .select("due_day")
+        .eq("id", editId)
+        .single();
+
+      // se mudou, abre o modal de confirmação e interrompe o salvar
+      if (!currErr) {
+        const oldDueDay = curr?.due_day ?? null;
+        if (oldDueDay != null && Number(oldDueDay) !== changes.due_day) {
+          setPendingChanges(changes);
+          setConfirmOpen(true);
+          setSavingEdit(false);
+          return;
+        }
+      }
+
+      // se não mudou (ou não conseguiu ler), salva normalmente
+      await financeGateway.updateStudent(editId, changes);
       setOpenEdit(false);
       setEditId(null);
       await load();
@@ -179,6 +206,28 @@ export default function AlunosPage() {
     if (savingEdit) return;
     setOpenEdit(false);
     setEditId(null);
+  }
+
+  function cancelConfirmDueDay() {
+    setConfirmOpen(false);
+    setPendingChanges(null);
+  }
+
+  async function confirmSaveEdit() {
+    if (!pendingChanges || !editId) return;
+    try {
+      setSavingEdit(true);
+      await financeGateway.updateStudent(editId, pendingChanges);
+      setConfirmOpen(false);
+      setPendingChanges(null);
+      setOpenEdit(false);
+      setEditId(null);
+      await load();
+    } catch (e) {
+      alert(e.message || String(e));
+    } finally {
+      setSavingEdit(false);
+    }
   }
 
   // ---------- Ações de linha ----------
@@ -231,30 +280,30 @@ export default function AlunosPage() {
             </thead>
             <tbody>
               {list.map((s) => (
-  <tr key={s.id} className="border-t">
-    <Td>{s.name}</Td>
-    <Td>{fmtBRL(s.monthly_value)}</Td>
-    <Td>{s.due_day}</Td>
-    <Td>{s.birth_date ? new Date(s.birth_date).toLocaleDateString("pt-BR") : "-"}</Td>
-    <Td>{s.status}</Td>
-    <Td className="py-2">
-      <div className="flex gap-2">
-        <button onClick={() => openEditModal(s)} className="px-2 py-1 border rounded">
-          Editar
-        </button>
-        <Link href={`/alunos/${s.id}/evolucao`} className="px-2 py-1 border rounded">
-          Evolução
-        </Link>
-        <button onClick={() => onToggleStatus(s)} className="px-2 py-1 border rounded">
-          {s.status === "ativo" ? "Inativar" : "Ativar"}
-        </button>
-        <button onClick={() => onDelete(s)} className="px-2 py-1 border rounded">
-          Excluir
-        </button>
-      </div>
-    </Td>
-  </tr>
-))}
+                <tr key={s.id} className="border-t">
+                  <Td>{s.name}</Td>
+                  <Td>{fmtBRL(s.monthly_value)}</Td>
+                  <Td>{s.due_day}</Td>
+                  <Td>{s.birth_date ? fmtYmdBR(s.birth_date) : "-"}</Td>
+                  <Td>{s.status}</Td>
+                  <Td className="py-2">
+                    <div className="flex gap-2">
+                      <button onClick={() => openEditModal(s)} className="px-2 py-1 border rounded">
+                        Editar
+                      </button>
+                      <Link href={`/alunos/${s.id}/evolucao`} className="px-2 py-1 border rounded">
+                        Evolução
+                      </Link>
+                      <button onClick={() => onToggleStatus(s)} className="px-2 py-1 border rounded">
+                        {s.status === "ativo" ? "Inativar" : "Ativar"}
+                      </button>
+                      <button onClick={() => onDelete(s)} className="px-2 py-1 border rounded">
+                        Excluir
+                      </button>
+                    </div>
+                  </Td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}
@@ -515,6 +564,36 @@ export default function AlunosPage() {
             </div>
           </div>
         </form>
+      </Modal>
+
+      {/* Modal de confirmação (edição) */}
+      <Modal
+        open={confirmOpen}
+        onClose={cancelConfirmDueDay}
+        title="Confirmar alteração do dia de vencimento"
+        footer={
+          <>
+            <button
+              onClick={cancelConfirmDueDay}
+              className="px-3 py-2 border rounded"
+              disabled={savingEdit}
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={confirmSaveEdit}
+              className="px-3 py-2 border rounded bg-emerald-600 text-white disabled:opacity-50"
+              disabled={savingEdit}
+            >
+              Confirmar
+            </button>
+          </>
+        }
+      >
+        <p className="text-sm text-slate-700">
+          Esta mudança vale <b>apenas para cobranças futuras</b>. As mensalidades
+          <b> já geradas não serão atualizadas automaticamente</b>.
+        </p>
       </Modal>
     </main>
   );
