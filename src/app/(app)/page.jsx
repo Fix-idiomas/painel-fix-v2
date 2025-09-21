@@ -82,44 +82,89 @@ export default function Page() {
       pending: Number(expenses?.kpis?.pending || 0),
       overdue: Number(expenses?.kpis?.overdue || 0),
     };
-    // ===== Próximos 7 dias (independe do "ym" selecionado nos cards) =====
+   
+ // ===== Próximos 7 dias (pendentes; consulta direta + fallback) =====
 {
-  // hoje e +7 no fuso de SP -> "YYYY-MM-DD"
+  const { supabase } = await import("@/lib/supabaseClient");
+
+  // hoje e +7 no fuso de SP → "YYYY-MM-DD"
   const nowSP = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
   const todayISO = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(nowSP);
   const plus7 = new Date(nowSP);
   plus7.setDate(plus7.getDate() + 7);
   const endISO = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(plus7);
 
-  const ymNow  = todayISO.slice(0, 7);
-  const ymNext = ymAddMonths(ymNow, 1);
+  let rows = [];
+  try {
+    const { data, error } = await supabase
+      .from("payments")
+      .select(
+        "id, payment_id, student_id, payer_id, student_name_snapshot, payer_name_snapshot, amount, due_date, status"
+      )
+      .eq("status", "pending")
+      .gte("due_date", todayISO)
+      .lte("due_date", endISO)
+      .order("due_date", { ascending: true })
+      .limit(200);
 
-  // buscamos mês atual + próximo e filtramos em memória
-  const [dueNow, dueNext] = await Promise.all([
-    financeGateway.listPayments({ ym: ymNow }),
-    financeGateway.listPayments({ ym: ymNext }),
-  ]);
-  const rowsNow  = Array.isArray(dueNow?.rows)  ? dueNow.rows  : (Array.isArray(dueNow)  ? dueNow  : []);
-  const rowsNext = Array.isArray(dueNext?.rows) ? dueNext.rows : (Array.isArray(dueNext) ? dueNext : []);
+    if (error) throw error;
+    rows = data || [];
+  } catch {
+    // Fallback: pega mês atual + próximo via gateway e filtra intervalo
+    const ymNow = todayISO.slice(0, 7);
+    const ymNext = ymAddMonths(ymNow, 1);
 
-  const up = [...rowsNow, ...rowsNext]
-    .filter(r =>
-      r?.status === "pending" &&
-      r?.due_date >= todayISO &&
-      r?.due_date <= endISO
-    )
-    .map(r => ({
+    const [dueNow, dueNext] = await Promise.all([
+      financeGateway.listPayments({ ym: ymNow, status: "pending" }),
+      financeGateway.listPayments({ ym: ymNext, status: "pending" }),
+    ]);
+
+    const rowsNow =
+      Array.isArray(dueNow?.rows) ? dueNow.rows : Array.isArray(dueNow) ? dueNow : [];
+    const rowsNext =
+      Array.isArray(dueNext?.rows) ? dueNext.rows : Array.isArray(dueNext) ? dueNext : [];
+
+    rows = [...rowsNow, ...rowsNext].filter(
+      (r) => r?.due_date >= todayISO && r?.due_date <= endISO
+    );
+  }
+
+  // Completa nomes se faltar snapshot
+  const needStudent = [...new Set(rows.filter(r => !r.student_name_snapshot && r.student_id).map(r => r.student_id))];
+  const needPayer   = [...new Set(rows.filter(r => !r.payer_name_snapshot   && r.payer_id).map(r => r.payer_id))];
+
+  const studentNameById = Object.create(null);
+  const payerNameById   = Object.create(null);
+
+  if (needStudent.length) {
+    let q1 = await supabase.from("students").select("id, full_name").in("id", needStudent);
+    let sList = q1.error
+      ? (await supabase.from("students").select("id, name").in("id", needStudent)).data
+      : q1.data;
+    for (const s of sList || []) studentNameById[s.id] = s.full_name ?? s.name ?? "";
+  }
+  if (needPayer.length) {
+    let p1 = await supabase.from("payers").select("id, name").in("id", needPayer);
+    let pList = p1.error
+      ? (await supabase.from("payers").select("id, full_name").in("id", needPayer)).data
+      : p1.data;
+    for (const p of pList || []) payerNameById[p.id] = p.name ?? p.full_name ?? "";
+  }
+
+  const up = rows
+    .map((r) => ({
       id: r.payment_id || r.id,
       due_date: r.due_date,
       amount: Number(r.amount || 0),
-      student_name: r.student_name_snapshot || r.student_name || "—",
-      payer_name:   r.payer_name_snapshot   || r.payer_name   || "—",
-       isToday: r.due_date === todayISO,   //badge para vencendo hoje
+      student_name: r.student_name_snapshot ?? studentNameById[r.student_id] ?? "—",
+      payer_name: r.payer_name_snapshot ?? payerNameById[r.payer_id] ?? "—",
+      isToday: r.due_date === todayISO,
     }))
     .sort((a, b) => a.due_date.localeCompare(b.due_date));
 
   setUpcoming(up);
 }
+
 
 // ===== Aniversariantes do mês (considera alunos ativos) =====
 {
@@ -165,6 +210,19 @@ export default function Page() {
       // router.replace("/agenda"); // quando plugar o router
     }
   }, [ready, session?.role]);
+  
+useEffect(() => {
+  const onFocus = () => load();
+  const onVisible = () => { if (document.visibilityState === "visible") load(); };
+
+  window.addEventListener("focus", onFocus);
+  document.addEventListener("visibilitychange", onVisible);
+
+  return () => {
+    window.removeEventListener("focus", onFocus);
+    document.removeEventListener("visibilitychange", onVisible);
+  };
+}, [ym]); // reanexa quando o mês muda
 
   if (!ready) {
     return (
@@ -458,4 +516,3 @@ function Td({ children, className = "", style }) {
     </td>
   );
 }
-
