@@ -54,18 +54,28 @@ const fmtBRDate = (s) => {
   }
 };
 
-export default function MensalidadesPage() {
+export default function MensalidadesPage() { 
   // ---------- Sessão / Permissões (do contexto) ----------
-  const { session, ready = true } = useSession?.() ?? {};
-  const isOwner =
-    !!(session?.tenant && session?.user && session.tenant.owner_user_id === session.user.id);
-  const claim = session?.claim || null; // { role: 'admin'|'user', perms: { classes:{}, finance:{} } }
-  const isAdmin = isOwner || claim?.role === "admin";
-  const financePerms = (claim && claim.perms && claim.perms.finance) || {};
-  const canFinanceRead = !!(isAdmin || financePerms.read);
-  const canFinanceWrite = !!(isAdmin || financePerms.write);
+  const sess = useSession(); // ✅ sempre chama o hook
+  const session = sess?.session;
+  const ready   = sess?.ready ?? false;
+  console.log("Session debug:", sess);
+  console.log("session keys:", Object.keys(session || {}));
+console.log("tenant object:", session?.tenant);
+console.log("tenant keys:", Object.keys(session?.tenant || {}));
+console.log("user object:", session?.user);
+console.log("user keys:", Object.keys(session?.user || {}));
+console.log("claim object:", session?.claim);
 
-  // ---------- Estado ----------
+
+  const isOwner = session?.role === "owner";
+  const isAdmin = isOwner || session?.role === "admin";
+
+  const financePerms = session?.perms?.finance || {};
+  const canFinanceRead  = !!(isAdmin || financePerms.read);
+ const canFinanceWrite = !!(isAdmin || financePerms.write);
+
+   // ---------- Estado ----------
   const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7)); // "YYYY-MM"
   const [status, setStatus] = useState("all"); // all | pending | paid | canceled
   const [loading, setLoading] = useState(true);
@@ -87,30 +97,57 @@ export default function MensalidadesPage() {
   // 🔐 Permissão vinda do BANCO (fonte da verdade p/ leitura)
   const [permChecked, setPermChecked] = useState(false);
   const [canReadDB, setCanReadDB] = useState(false);
+  const [canWriteDB, setCanWriteDB]   = useState(false);
 
   // 1) Checa permissão no banco via RPC (is_admin_or_finance_read)
   useEffect(() => {
+    if (ready === false) return; // aguarda contexto inicializar
     (async () => {
-      if (ready === false) return; // aguarda contexto inicializar
-      try {
+       try {
         const { supabase } = await import("@/lib/supabaseClient");
         const { data: tenantId, error: tErr } = await supabase.rpc("current_tenant_id");
         if (tErr) throw tErr;
-        const { data: ok, error: pErr } = await supabase.rpc("is_admin_or_finance_read", {
-          p_tenant: tenantId,
-        });
-        if (pErr) throw pErr;
-        setCanReadDB(!!ok);
-      } catch (e) {
-        console.warn("perm check failed:", e);
-        setCanReadDB(false);
-      } finally {
-        setPermChecked(true);
-      }
-    })();
-  }, [ready]);
 
-  // 🔒 Gate de rota: só renderiza depois de checar permissão no banco
+        const [readRes, writeRes] = await Promise.all([
+        supabase.rpc("is_admin_or_finance_read",  { p_tenant: tenantId }),
+        supabase.rpc("is_admin_or_finance_write", { p_tenant: tenantId }),
+      ]);
+
+      if (readRes.error)  throw readRes.error;
+      if (writeRes.error) throw writeRes.error;
+
+      setCanReadDB(!!readRes.data);
+      setCanWriteDB(!!writeRes.data);
+    } catch (e) {
+      console.warn("perm check failed:", e);
+      setCanReadDB(false);
+      setCanWriteDB(false);
+    } finally {
+      setPermChecked(true);
+    }
+  })();
+}, [ready]);
+
+  // 2) Carregar dados
+  useEffect(() => {
+    if (ready === false || !canReadDB) return;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, canReadDB, ym, status]);
+
+  // ---------- Derived values (must be before any returns) ----------
+  const canPreview  = canReadDB  && typeof financeGateway.previewGenerateMonth === "function";
+  const canGenerate =
+  (canWriteDB /* write vindo do banco/RLS */) &&
+  typeof financeGateway.generateMonth === "function";
+
+  const title = useMemo(() => {
+    if (!ym) return "Mensalidades";
+    const [Y, M] = ym.split("-");
+    return `Mensalidades – ${M}/${Y}`;
+  }, [ym]);
+
+  // ---------- Gate de rota (após TODOS os hooks) ----------
   if (ready === false || !permChecked) {
     return <div className="p-6">Carregando…</div>;
   }
@@ -124,15 +161,6 @@ export default function MensalidadesPage() {
       </main>
     );
   }
-
-  const canPreview = typeof financeGateway.previewGenerateMonth === "function";
-  const canGenerate = typeof financeGateway.generateMonth === "function";
-
-  const title = useMemo(() => {
-    const [Y, M] = ym.split("-");
-    return `Mensalidades – ${M}/${Y}`;
-  }, [ym]);
-
   // ---------- Carregar lista/KPIs ----------
   async function load() {
     setLoading(true);
@@ -216,12 +244,6 @@ export default function MensalidadesPage() {
       setLoading(false);
     }
   }
-
-  useEffect(() => {
-    if (ready === false) return;
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, ym, status]);
 
   // ---------- Prévia de geração ----------
   async function openPreview() {
@@ -546,8 +568,12 @@ export default function MensalidadesPage() {
               Prévia de geração
             </button>
           )}
-          {canGenerate && canFinanceWrite && (
-            <button onClick={doGenerate} className="border rounded px-3 py-2 bg-emerald-600 text-white" disabled={genLoading}>
+          {canGenerate && (
+            <button 
+              onClick={doGenerate} 
+              className="border rounded px-3 py-2 bg-emerald-600 text-white" 
+              disabled={genLoading}
+              >
               {genLoading ? "Gerando…" : "Gerar mensalidades"}
             </button>
           )}
@@ -559,8 +585,18 @@ export default function MensalidadesPage() {
 
       {/* Fonte/adapter (útil p/ debug) */}
       <div className="text-xs text-slate-500">
-        Adapter: <b>{ADAPTER_NAME}</b>
-      </div>
+  Adapter: <b>{ADAPTER_NAME}</b> ·{" "}
+  owner:{String(isOwner)} · admin:{String(isAdmin)} ·{" "}
+  canFinanceWrite(sess):{String(canFinanceWrite)} ·{" "}
+  canReadDB(RPC):{String(canReadDB)} · canWriteDB(RPC):{String(canWriteDB)} ·{" "}
+  genMethod:{String(typeof financeGateway.generateMonth === "function")} ·{" "}
+  prevMethod:{String(typeof financeGateway.previewGenerateMonth === "function")}
+</div>
+<div className="text-[10px] text-slate-500">
+  tenant.owner_user_id: {String(session?.tenant?.owner_user_id || "—")} ·{" "}
+  user.id: {String(session?.user?.id || "—")} ·{" "}
+  claim.role: {String(session?.claim?.role || "—")}
+</div>
 
       {/* KPIs */}
       {!loading && (
@@ -690,7 +726,7 @@ export default function MensalidadesPage() {
               <button onClick={() => setPreviewOpen(false)} className="px-3 py-2 border rounded">
                 Fechar
               </button>
-              {canGenerate && canFinanceWrite && (
+              {canGenerate && (
                 <button
                   onClick={doGenerate}
                   disabled={previewLoading || genLoading || preview.length === 0}

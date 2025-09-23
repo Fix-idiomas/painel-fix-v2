@@ -5,61 +5,69 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 const STORAGE_KEY = "pf.session";
 
-// ---------- Helpers ----------
-const DEV_TENANT_ID = "11111111-1111-4111-8111-111111111111";
-const isUuid = (s) =>
-  typeof s === "string" &&
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+const FULL_PERMS = {
+   finance: { read: true, write: true },
+   classes: { read: true, write: true },
+};
 
 // migra/normaliza tenant e campos essenciais
 function normalizeSession(raw) {
   const s = typeof raw === "object" && raw ? raw : {};
-  let tenantId = s.tenantId;
+  const tenantId = s.tenantId ?? null;
+  const role = s.role ?? "owner"; // default local pode ser owner para facilitar testes
+  const rawPerms = s.perms || {};
 
-  // migração: se vier "tenant-fix" ou algo inválido, força UUID de dev
-  if (!isUuid(tenantId)) tenantId = DEV_TENANT_ID;
+  const perms =
+    role === "owner" || role === "admin"
+      ? FULL_PERMS
+      : {
+          finance: {
+            read: !!rawPerms?.finance?.read,
+            write: !!rawPerms?.finance?.write,
+          },
+          classes: {
+            read: !!rawPerms?.classes?.read,
+            write: !!rawPerms?.classes?.write,
+          },
+        };
 
-  return {
+   return {
     userId: s.userId ?? "dev-admin",
-    role: s.role ?? "admin", // "admin" | "professor" | "financeiro"
+    role,
     teacherId: s.teacherId ?? null,
     name: s.name ?? "Administrador (dev)",
     tenantId,
     tenantName: s.tenantName ?? "Fix Idiomas",
+    perms,
   };
 }
 
+
 // ---------- Defaults ----------
 const DEFAULT_SESSION = normalizeSession({
-  userId: "dev-admin",
-  role: "admin",
+  userId: "dev-owner",
+  role: "owner",
   teacherId: null,
-  name: "Administrador (dev)",
-  tenantId: DEV_TENANT_ID,
+  name: "Owner (dev)",
+  tenantId: null,
   tenantName: "Fix Idiomas",
 });
 
+// ---------- Role presets (dev only) ----------
 const ROLE_PRESETS = {
+  owner: {
+    userId: "dev-owner",
+    role: "owner",
+    teacherId: null,
+    name: "Owner (dev)",
+  },
   admin: {
     userId: "dev-admin",
     role: "admin",
     teacherId: null,
     name: "Administrador (dev)",
   },
-  professor: {
-    userId: "dev-teacher-001",
-    role: "professor",
-    teacherId: "teacher-001", // ajuste conforme seus seeds
-    name: "Prof. Alice (dev)",
-  },
-  financeiro: {
-    userId: "dev-fin-001",
-    role: "financeiro",
-    teacherId: null,
-    name: "Financeiro (dev)",
-  },
 };
-
 const SessionContext = createContext(null);
 
 export function SessionProvider({ children }) {
@@ -90,13 +98,36 @@ export function SessionProvider({ children }) {
     }
   }, [session, ready]);
 
+  // Promove admin → owner se o banco confirmar que este usuário é o owner do tenant
+  useEffect(() => {
+    if (!ready) return;
+    if (session?.role !== "admin") return;
+
+    (async () => {
+      try {
+        const { supabase } = await import("@/lib/supabaseClient");
+        const { data: ownerOk, error } = await supabase.rpc("is_owner");
+        if (!error && ownerOk === true) {
+          setSession((prev) => normalizeSession({ ...prev, role: "owner" }));
+        }
+      } catch {
+        /* mantém como admin se falhar */
+      }
+    })();
+  }, [ready, session?.role]);
+
   const value = useMemo(
     () => ({
       session,
       ready,
       setSession,
 
-      // Troca de papel preservando tenant atual
+      // helpers prontos para a UI
+      isOwner: session?.role === "owner",
+      isAdmin: session?.role === "owner" || session?.role === "admin",
+      perms: session?.perms ?? {},
+
+      // Troca de papel preservando tenant atual (dev only)
       switchRole(next) {
         const patch = ROLE_PRESETS[next] ?? ROLE_PRESETS.admin;
         setSession((prev) => {
@@ -104,8 +135,8 @@ export function SessionProvider({ children }) {
           return normalizeSession({
             ...base,
             ...patch,
-            tenantId: base.tenantId, // preserva
-            tenantName: base.tenantName, // preserva
+            tenantId: base.tenantId,    // preserva
+            tenantName: base.tenantName // preserva
           });
         });
       },
@@ -117,18 +148,16 @@ export function SessionProvider({ children }) {
           const base = normalizeSession(prev ?? DEFAULT_SESSION);
 
           if (typeof nextTenant === "string") {
-            const tid = isUuid(nextTenant) ? nextTenant : DEV_TENANT_ID;
             return normalizeSession({
               ...base,
-              tenantId: tid,
-              // preserva tenantName se só veio id
-              tenantName: base.tenantName,
+              tenantId: nextTenant,
+              tenantName: base.tenantName, // preserva se só veio id
             });
           }
 
           return normalizeSession({
             ...base,
-            tenantId: isUuid(nextTenant.tenantId) ? nextTenant.tenantId : DEV_TENANT_ID,
+            tenantId: nextTenant.tenantId ?? base.tenantId,
             tenantName: nextTenant.tenantName ?? base.tenantName,
           });
         });
@@ -144,6 +173,7 @@ export function SessionProvider({ children }) {
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
+
 
 export function useSession() {
   const ctx = useContext(SessionContext);

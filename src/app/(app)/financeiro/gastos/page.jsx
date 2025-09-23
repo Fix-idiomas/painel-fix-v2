@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";            // ⬅️ NEW
-import Guard from "@/components/Guard";                  // ⬅️ NEW
 import { useSession } from "@/contexts/SessionContext";  // ⬅️ NEW
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
@@ -14,29 +12,20 @@ const statusLabels = {
   canceled: "Cancelado",
 };
 
-
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const fmtBR = (s) => (s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-");
 
 export default function GastosPage() {
-  const router = useRouter();                 // ⬅️ NEW
-  const { session } = useSession();           // ⬅️ NEW
+  const { perms, isAdmin } = useSession();
+  const canFinanceRead  = isAdmin || !!perms?.finance?.read;
+  const canFinanceWrite = isAdmin || !!perms?.finance?.write;
 
-  // 🚫 professor não acessa Gastos → manda para Agenda
-  useEffect(() => {
-    if (session?.role === "professor") {
-      router.replace("/agenda");
-    }
-  }, [session?.role, router]);
-
-  if (session?.role === "professor") return null;
 
   const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
   const [status, setStatus] = useState("all");      // all | pending | paid | canceled
   const [costCenter, setCostCenter] = useState("all"); // all | PJ | PF
   const [updatingId, setUpdatingId] = useState(null);
-
   // mês
   const [rows, setRows] = useState([]);
   const [kpis, setKpis] = useState({ total: 0, paid: 0, pending: 0, overdue: 0 });
@@ -68,7 +57,23 @@ export default function GastosPage() {
     amount: "",
     cost_center: "PJ",     // PJ | PF
   });
+   useEffect(() => {
+   if (!canFinanceWrite) return; // usuário comum não carrega templates
+   loadTemplates();
+ }, [canFinanceWrite, ym]);
 
+  // 🚫 Gate: sem permissão de leitura → bloqueia a página
+ if (!canFinanceRead) {
+   return (
+     <main className="p-6">
+       <h1 className="text-xl font-semibold mb-2">Acesso negado</h1>
+       <p className="text-sm opacity-75">
+         Você não tem permissão para visualizar o Financeiro desta escola.
+       </p>
+     </main>
+   );
+ }  
+  
   // ====== Carregamentos ======
   async function load() {
     setLoading(true);
@@ -87,13 +92,7 @@ export default function GastosPage() {
     setTemplates(list);
   }
 
-  useEffect(() => {
-    loadTemplates();
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [ym, status, costCenter]);
+ 
  
   // ====== Ações do mês ======
   async function onPreview() {
@@ -298,8 +297,7 @@ const delEntry = async (id) => {
   }
 
   return (
-    <Guard roles={["admin", "financeiro"]}>
-      <main className="p-6 space-y-8">
+       <main className="p-6 space-y-8">
         {/* Header / Filtros */}
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-bold">Gastos</h1>
@@ -694,7 +692,6 @@ const delEntry = async (id) => {
           </form>
         </Modal>
       </main>
-    </Guard>
   );
 }
 
