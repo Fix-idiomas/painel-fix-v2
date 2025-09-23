@@ -6,44 +6,71 @@ import { supabase } from "@/lib/supabaseClient";
 import Link from "next/link";
 
 export default function MinhaContaPage() {
-  const [loading, setLoading]   = useState(true);
-  const [user, setUser]         = useState(null);
-  const [claim, setClaim]       = useState(null); // sua claim (tenant + role/identificação)
-  const [tenant, setTenant]     = useState(null); // dados do tenant (inclui owner_user_id)
-  const [members, setMembers]   = useState([]);   // claims do tenant
+  const [loading, setLoading] = useState(true);
 
-  // estado do modal/cadastro
+  const [user, setUser]       = useState(null);
+  const [claim, setClaim]     = useState(null);  // claim do usuário atual (tenant_id, role)
+  const [tenant, setTenant]   = useState(null);  // dados do tenant
+  const [members, setMembers] = useState([]);    // membros do tenant (com display_name/email)
+  const [membersError, setMembersError] = useState(null);
+
+  // modal/cadastro
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [form, setForm] = useState({
-    name: "",
-    email: "",
-    phone: "",
-    cpf: "",
-    password: "",
-    role: "", // identificação livre: ex. "teacher B", "adm Bruno"
+    name: "", email: "", phone: "", cpf: "", password: "", role: "",
   });
-
-  // Permissões (jsonb) para gravar em user_claims.perms
   const [perms, setPerms] = useState({
     classes: { read: true,  write: false },
     finance: { read: false, write: false },
   });
+  const [creating, setCreating] = useState(false);
+  const [createMsg, setCreateMsg] = useState(null);
 
+  // helpers UI
   function togglePerm(path) {
-    // path: "classes.read" | "classes.write" | "finance.read" | "finance.write"
     setPerms(prev => {
       const [area, key] = path.split(".");
       return { ...prev, [area]: { ...prev[area], [key]: !prev[area][key] } };
     });
   }
-
-  const [creating, setCreating] = useState(false);
-  const [createMsg, setCreateMsg] = useState(null);
-
-  // owner tem acesso total; admin (via claim) também
-  const isOwner = useMemo(() => tenant?.owner_user_id === user?.id, [tenant, user]);
+  function onChangeField(key, value) {
+    setForm(prev => ({ ...prev, [key]: value }));
+  }
+  const isOwner   = useMemo(() => tenant?.owner_user_id === user?.id, [tenant, user]);
   const isAdminUI = useMemo(() => isOwner || claim?.role === "admin", [isOwner, claim]);
 
+  // --------- Carregar membros (user_claims + profiles) ----------
+// substitua a função inteira por esta versão
+async function loadMembersByTenantId(tenantId) {
+  const msg = (e) =>
+    e?.message || e?.hint || e?.details || e?.code || "Falha ao carregar membros.";
+
+  setMembersError(null);
+
+  const { data, error } = await supabase
+    .from("user_claims")
+    .select("user_id, role, perms, created_at, user_name_snapshot, user_email_snapshot")
+    .eq("tenant_id", tenantId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.warn("user_claims fetch failed:", error);
+    setMembers([]);
+    setMembersError(msg(error));
+    return;
+  }
+
+  const rows = (data ?? []).map((c) => ({
+    ...c,
+    display_name: c.user_name_snapshot || c.user_email_snapshot || c.user_id,
+    display_email: c.user_email_snapshot || null,
+  }));
+
+  setMembers(rows);
+}
+
+
+  // --------- Boot / Sessão ----------
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -51,14 +78,17 @@ export default function MinhaContaPage() {
         const { data: { user: u }, error: uErr } = await supabase.auth.getUser();
         if (uErr || !u) {
           if (typeof window !== "undefined") {
-            localStorage.setItem("postLoginRedirect", window.location.pathname + window.location.search);
+            localStorage.setItem(
+              "postLoginRedirect",
+              window.location.pathname + window.location.search
+            );
             window.location.href = "/login";
           }
           return;
         }
         setUser(u);
 
-        // 1) Se for PROPRIETÁRIO (owner_user_id), libera direto
+        // 1) Proprietário?
         const { data: owned } = await supabase
           .from("tenants")
           .select("id, name, created_at, owner_user_id")
@@ -68,20 +98,12 @@ export default function MinhaContaPage() {
         if (owned?.[0]) {
           const t = owned[0];
           setTenant(t);
-          setClaim({ tenant_id: t.id, role: "admin" }); // owner tratado como admin na UX
-
-          // lista de membros (user_claims) do mesmo tenant
-          const { data: tenantClaims } = await supabase
-            .from("user_claims")
-            .select("user_id, role, perms, created_at")
-            .eq("tenant_id", t.id)
-            .order("created_at", { ascending: true });
-
-          if (tenantClaims) setMembers(tenantClaims);
-          return; // ✅ fluxo resolvido via owner
+          setClaim({ tenant_id: t.id, role: "admin" }); // owner como admin na UX
+          await loadMembersByTenantId(t.id);
+          return; // fluxo resolvido
         }
 
-        // 2) Não é owner → segue via claim
+        // 2) Senão, via claim do usuário
         const { data: myClaims } = await supabase
           .from("user_claims")
           .select("tenant_id, role")
@@ -89,7 +111,7 @@ export default function MinhaContaPage() {
           .limit(1);
 
         if (!myClaims?.length) {
-          setClaim(null); // sem acesso
+          setClaim(null); // sem tenant
           return;
         }
 
@@ -104,35 +126,20 @@ export default function MinhaContaPage() {
 
         if (tenants?.[0]) setTenant(tenants[0]);
 
-        const { data: tenantClaims } = await supabase
-          .from("user_claims")
-          .select("user_id, role, perms, created_at")
-          .eq("tenant_id", myClaim.tenant_id)
-          .order("created_at", { ascending: true });
-
-        if (tenantClaims) setMembers(tenantClaims);
+        await loadMembersByTenantId(myClaim.tenant_id);
       } finally {
         setLoading(false);
       }
     })();
   }, []);
 
-  // -------------------------
-  // Helpers
-  // -------------------------
-  function onChangeField(key, value) {
-    setForm((prev) => ({ ...prev, [key]: value }));
-  }
-
+  // --------- Refresh após cadastro ----------
   async function refreshMembers(tenantId) {
-    const { data: tenantClaims } = await supabase
-      .from("user_claims")
-      .select("user_id, role, perms, created_at")
-      .eq("tenant_id", tenantId)
-      .order("created_at", { ascending: true });
-    if (tenantClaims) setMembers(tenantClaims);
+    if (!tenantId) return;
+    await loadMembersByTenantId(tenantId);
   }
 
+  // --------- Cadastrar usuário ----------
   async function handleCreateUser(e) {
     e?.preventDefault?.();
     setCreateMsg(null);
@@ -144,20 +151,12 @@ export default function MinhaContaPage() {
     try {
       setCreating(true);
 
-      // pegar access token atual (para Authorization: Bearer …)
       const { data: { session } } = await supabase.auth.getSession();
       const accessToken = session?.access_token;
-      // 👇 pega o tenant atual (owner → tenant.id ; admin → claim.tenant_id)
       const tenant_id = tenant?.id ?? claim?.tenant_id;
 
-      if (!accessToken) {
-        setCreateMsg("Sessão inválida. Faça login novamente.");
-        return;
-      }
-      if (!tenant_id) {
-        setCreateMsg("Tenant inválido na sessão.");
-        return;
-      }
+      if (!accessToken) { setCreateMsg("Sessão inválida. Faça login novamente."); return; }
+      if (!tenant_id)    { setCreateMsg("Tenant inválido na sessão."); return; }
 
       const res = await fetch("/api/admin/create-user", {
         method: "POST",
@@ -171,39 +170,31 @@ export default function MinhaContaPage() {
           name: form.name,
           phone: form.phone,
           cpf: form.cpf,
-          role: form.role,   // identificação livre
-          tenant_id,         // 👈 explícito
-          perms,             // 👈 envia as permissões selecionadas
+          role: form.role,
+          tenant_id,
+          perms,
         }),
       });
 
       const out = await res.json();
 
       if (!res.ok) {
-        if (res.status === 409) {
-          setCreateMsg("Este e-mail já está vinculado a outra escola. Use outro e-mail.");
-        } else {
-          setCreateMsg(out?.error || "Falha ao criar usuário.");
-        }
+        if (res.status === 409) setCreateMsg("Este e-mail já está vinculado a outra escola. Use outro e-mail.");
+        else setCreateMsg(out?.error || "Falha ao criar usuário.");
         return;
       }
 
-      if (out?.status === "already_member") {
-        setCreateMsg("Usuário já é membro desta escola.");
-      } else if (out?.status === "linked_existing") {
-        setCreateMsg("Usuário já existia. Vinculado a esta escola com sucesso.");
-      } else if (out?.status === "created_and_confirmed") {
-        setCreateMsg("Usuário criado com sucesso.");
-      } else {
-        setCreateMsg("Operação concluída.");
-      }
+      if (out?.status === "already_member")        setCreateMsg("Usuário já é membro desta escola.");
+      else if (out?.status === "linked_existing")   setCreateMsg("Usuário já existia. Vinculado a esta escola com sucesso.");
+      else if (out?.status === "created_and_confirmed") setCreateMsg("Usuário criado com sucesso.");
+      else setCreateMsg("Operação concluída.");
 
-      const tenantId = tenant?.id || claim?.tenant_id;
-      if (tenantId) await refreshMembers(tenantId);
+      await refreshMembers(tenant_id);
+
       setTimeout(() => {
         setShowCreateModal(false);
         setForm({ name: "", email: "", phone: "", cpf: "", password: "", role: "" });
-        setPerms({ classes: { read: true, write: false }, finance: { read: false, write: false } }); // reset
+        setPerms({ classes: { read: true, write: false }, finance: { read: false, write: false } });
         setCreateMsg(null);
       }, 800);
     } finally {
@@ -211,12 +202,8 @@ export default function MinhaContaPage() {
     }
   }
 
-  // -------------------------
-  // Render
-  // -------------------------
-  if (loading) {
-    return <div className="p-6">Carregando…</div>;
-  }
+  // --------- Render ----------
+  if (loading) return <div className="p-6">Carregando…</div>;
 
   if (!claim && !isOwner) {
     return (
@@ -236,17 +223,14 @@ export default function MinhaContaPage() {
         </span>
       </header>
 
-      {/* Badge do Proprietário */}
       {isOwner && (
         <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm mb-4">
           <div className="font-medium">🎛️ Você é o responsável pela conta</div>
-          <div className="opacity-75">
-            Como proprietário do tenant, você controla preferências e cobrança.
-          </div>
+          <div className="opacity-75">Como proprietário do tenant, você controla preferências e cobrança.</div>
         </div>
       )}
 
-      {/* Card: Dados do Tenant */}
+      {/* Dados do Tenant */}
       <section className="rounded-2xl border p-5 space-y-2">
         <h2 className="text-lg font-medium">Dados do Tenant</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
@@ -256,15 +240,13 @@ export default function MinhaContaPage() {
         </div>
       </section>
 
-      {/* Card: Custos (placeholder para próximo passo) */}
+      {/* Custos (placeholder) */}
       <section className="rounded-2xl border p-5 space-y-2">
         <h2 className="text-lg font-medium">Custos</h2>
-        <p className="text-sm opacity-70">
-          Em breve: plano, valor mensal, próximos vencimentos e consumo.
-        </p>
+        <p className="text-sm opacity-70">Em breve: plano, valor mensal, próximos vencimentos e consumo.</p>
       </section>
 
-      {/* Card: Área do Proprietário (mostra só para owner ou admin) */}
+      {/* Área do Proprietário / Admin */}
       {isAdminUI && (
         <section className="rounded-2xl border p-5 space-y-4">
           <div className="flex items-center justify-between">
@@ -272,7 +254,6 @@ export default function MinhaContaPage() {
             {!isOwner && <span className="text-xs opacity-70">Visível para admin</span>}
           </div>
 
-          {/* Sub-bloco: Equipe / Usuários */}
           <div className="space-y-3">
             <h3 className="text-sm font-medium">Equipe / Usuários</h3>
             <div className="flex items-center justify-between">
@@ -288,45 +269,66 @@ export default function MinhaContaPage() {
             </div>
           </div>
 
-          {/* Sub-bloco: Preferências do Tenant (placeholder) */}
+          {/* Preferências / Cobrança placeholders */}
           <div className="space-y-1 opacity-80">
             <h3 className="text-sm font-medium">Preferências do Tenant</h3>
             <p className="text-sm">Em breve: renomear tenant, branding (logo/cor), subdomínio.</p>
           </div>
-
-          {/* Sub-bloco: Cobrança (placeholder) */}
           <div className="space-y-1 opacity-80">
             <h3 className="text-sm font-medium">Cobrança</h3>
             <p className="text-sm">Em breve: plano, forma de pagamento e faturas.</p>
           </div>
 
-          {/* Lista de membros */}
+          {/* Membros */}
           <div className="pt-2">
             <h3 className="text-sm font-medium mb-2">Membros</h3>
+
+            {membersError && (
+              <div className="p-3 mb-2 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded">
+                {membersError}
+              </div>
+            )}
+
             <div className="text-sm rounded border divide-y">
-              {members.length === 0 && (
+              {members.length === 0 && !membersError && (
                 <div className="p-2 opacity-70">Sem membros cadastrados.</div>
               )}
-              {members.map(m => (
-                <div key={`${m.user_id}-${m.role}`} className="p-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                  <div>
-                    <div><span className="opacity-70">User:</span> <code>{m.user_id}</code></div>
-                    <div className="opacity-70 text-xs">Criado: {new Date(m.created_at).toLocaleString("pt-BR")}</div>
-                    {m.perms && (
-                      <div className="opacity-70 text-xs mt-1">
-                        {m.perms?.classes?.read ? "Turmas:R" : ""}
-                        {m.perms?.classes?.write ? "W " : " "}
-                        {m.perms?.finance?.read ? "• Financeiro:R" : ""}
-                        {m.perms?.finance?.write ? "W" : ""}
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    {/* m.role aqui é a identificação livre gravada na claim (ex. "teacher B", "adm Bruno") */}
-                    <span className="px-2 py-1 rounded bg-gray-100 text-xs">{m.role || "-"}</span>
-                  </div>
-                </div>
-              ))}
+
+{members.map((m) => (
+  <div
+    key={`${m.user_id}-${m.role}-${m.created_at}`}
+    className="p-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1"
+  >
+    <div className="min-w-0" title={m.user_id}>
+      <div className="font-medium truncate">
+        {m.display_name || m.user_id}
+      </div>
+      {m.display_email && (
+        <div className="text-xs text-slate-500 truncate">
+          {m.display_email}
+        </div>
+      )}
+      <div className="opacity-70 text-xs">
+        Criado: {new Date(m.created_at).toLocaleString("pt-BR")}
+      </div>
+      {m.perms && (
+        <div className="opacity-70 text-[11px] mt-1">
+          {m.perms?.classes?.read ? "Turmas:R" : ""}
+          {m.perms?.classes?.write ? "W " : " "}
+          {m.perms?.finance?.read ? "• Financeiro:R" : ""}
+          {m.perms?.finance?.write ? "W" : ""}
+        </div>
+      )}
+    </div>
+
+    <div className="shrink-0">
+      <span className="px-2 py-1 rounded bg-gray-100 text-xs">
+        {m.role || "-"}
+      </span>
+    </div>
+  </div>
+))}
+
             </div>
           </div>
 
@@ -482,21 +484,15 @@ export default function MinhaContaPage() {
                   </button>
                 </div>
 
-                {createMsg && (
-                  <div className="mt-3 text-sm">
-                    {createMsg}
-                  </div>
-                )}
+                {createMsg && <div className="mt-3 text-sm">{createMsg}</div>}
               </div>
             </div>
           )}
         </section>
       )}
 
-      {/* Navegação útil */}
       <div className="text-sm opacity-80">
-        Dicas rápidas:{" "}
-        <Link className="underline" href="/equipe">/equipe</Link>
+        Dicas rápidas: <Link className="underline" href="/equipe">/equipe</Link>
       </div>
     </div>
   );

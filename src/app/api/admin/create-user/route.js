@@ -36,7 +36,6 @@ function sanitizeIdentification(s) {
 async function findUserIdByEmail(email) {
   let page = 1;
   const perPage = 200;
-  // supabase-js v2: listUsers({ page, perPage })
   while (page < 20) {
     const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
     if (error) break;
@@ -52,33 +51,23 @@ async function findUserIdByEmail(email) {
 
 export async function POST(req) {
   try {
-    // 1) Quem chama
     const { user: caller, pub } = await getCaller(req);
 
-    // 2) Entrada
     const body = await req.json().catch(() => ({}));
-const { email, password, name, phone, cpf, tenant_id, perms } = body || {};
-  let { role } = body || {};
-  // Inicializa permsObj a partir de perms ou como objeto vazio
-  const permsObj = perms && typeof perms === 'object' ? { ...perms } : {};
-  // Coerção pétrea: schema exige 'admin' | 'user'
-  const systemRole = (String(role).toLowerCase() === 'admin') ? 'admin' : 'user';
-  // Opcional: guardar o rótulo livre dentro de perms até criarmos coluna 'label'
-  if (role && typeof role === 'string' && role.toLowerCase() !== 'admin') {
-    // mantém rótulo do front como identificação livre
-    permsObj.meta ??= {};
-    permsObj.meta.label = role;
-  }
+    const { email, password, name, phone, cpf, perms } = body || {};
+    let { role } = body || {};
 
-    if (!tenant_id) {
-      return NextResponse.json({ error: "tenant_id é obrigatório." }, { status: 400 });
+    const permsObj = perms && typeof perms === "object" ? { ...perms } : {};
+    const systemRole = (String(role).toLowerCase() === "admin") ? "admin" : "user";
+
+    // Guarda rótulo livre em perms.meta.label (até existir coluna própria)
+    if (role && typeof role === "string" && role.toLowerCase() !== "admin") {
+      permsObj.meta ??= {};
+      permsObj.meta.label = role;
     }
-    if (!email || !password) {
-      return NextResponse.json({ error: "Email e senha são obrigatórios." }, { status: 400 });
-    }
-    if (password.length < 8) {
-      return NextResponse.json({ error: "Senha deve ter ao menos 8 caracteres." }, { status: 400 });
-    }
+
+    if (!email || !password) return NextResponse.json({ error: "Email e senha são obrigatórios." }, { status: 400 });
+    if (password.length < 8) return NextResponse.json({ error: "Senha deve ter ao menos 8 caracteres." }, { status: 400 });
 
     role = sanitizeIdentification(role);
     if (!role || role.length < 3) {
@@ -88,64 +77,68 @@ const { email, password, name, phone, cpf, tenant_id, perms } = body || {};
       );
     }
 
-    // 3) Validar que o chamador controla este tenant:
-    //    (a) é owner do tenant OU (b) já tem claim 'admin' nesse tenant
-    const { data: ownerRow } = await pub
-      .from("tenants")
-      .select("id")
-      .eq("id", tenant_id)
-      .eq("owner_user_id", caller.id)
-      .limit(1);
-
-    let callerOk = !!ownerRow?.[0];
-
-    if (!callerOk) {
-      const { data: adminClaim } = await pub
-        .from("user_claims")
-        .select("user_id")
-        .eq("tenant_id", tenant_id)
-        .eq("user_id", caller.id)
-        .eq("role", "admin")
-        .limit(1);
-      callerOk = !!adminClaim?.[0];
-    }
-
-    if (!callerOk) {
-      return NextResponse.json({ error: "Acesso negado para este tenant." }, { status: 403 });
-    }
-
-    // 4) Tentar criar no Auth (política rígida: sem app_metadata; governança via user_claims)
+    // Valida que o chamador controla este tenant
+  // **Resolver tenant_id no server, a partir do chamador (owner/admin)**
+let tenant_id_server = null;
+// 1) Owner?
+{
+  const { data: owned, error: ownErr } = await pub
+    .from("tenants")
+    .select("id")
+    .eq("owner_user_id", caller.id)
+    .limit(1);
+  if (ownErr) return NextResponse.json({ error: ownErr.message || "Falha ao identificar tenant (owner)." }, { status: 500 });
+  if (owned?.[0]) tenant_id_server = owned[0].id;
+}
+// 2) Se não for owner, admin via claim
+if (!tenant_id_server) {
+  const { data: adminClaim, error: claimErr } = await pub
+    .from("user_claims")
+    .select("tenant_id")
+    .eq("user_id", caller.id)
+    .eq("role", "admin")
+    .limit(1);
+  if (claimErr) return NextResponse.json({ error: claimErr.message || "Falha ao identificar tenant (admin)." }, { status: 500 });
+  if (adminClaim?.[0]) tenant_id_server = adminClaim[0].tenant_id;
+}
+if (!tenant_id_server) {
+  return NextResponse.json({ error: "Sem tenant associado ao chamador (owner/admin)." }, { status: 403 });
+}
+    // Cria no Auth
     const { data: created, error: createErr } = await admin.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
-      user_metadata: { name, phone, cpf },
-      // ❗ NÃO definir app_metadata (evita sobrescrever tenant anterior)
+      user_metadata: { full_name: name, phone, cpf },
     });
 
-    // 4.a) Usuário novo criado → inserir claim com tenant_id explícito
+    // Usuário novo → insere claim com snapshots
     if (!createErr && created?.user?.id) {
       const newUserId = created.user.id;
 
-       // ⬇️ Usa SERVICE ROLE para não depender de RLS (já validamos owner/admin acima)
       const { error: insertErr } = await admin
         .from("user_claims")
-        .insert([{ user_id: newUserId, role: systemRole, tenant_id, perms: permsObj }]);
+        .insert([{
+          user_id: newUserId,
+          role: systemRole,
+          tenant_id: tenant_id_server,
+          perms: permsObj,
+         // snapshots corretos: nome no 'name', email no 'email'
+          user_name_snapshot: (name && name.trim()) || null,
+          user_email_snapshot: email,
+        }]);
 
       if (insertErr) {
         return NextResponse.json(
-           { error: "Usuário criado, mas falha ao registrar permissões.", detail: insertErr.message, code: insertErr.code },
+          { error: "Usuário criado, mas falha ao registrar permissões.", detail: insertErr.message, code: insertErr.code },
           { status: 207 }
         );
       }
 
-      return NextResponse.json(
-        { userId: newUserId, status: "created_and_confirmed" },
-        { status: 201 }
-      );
+      return NextResponse.json({ userId: newUserId, status: "created_and_confirmed" }, { status: 201 });
     }
 
-    // 5) E-mail já cadastrado no Auth → política rígida (bloqueia reuso)
+    // E-mail já existe → bloqueia reuso (política rígida)
     const msg = (createErr?.message || "").toLowerCase();
     if (createErr?.status === 422 && msg.includes("already been registered")) {
       const existingUserId = await findUserIdByEmail(email);
@@ -156,42 +149,27 @@ const { email, password, name, phone, cpf, tenant_id, perms } = body || {};
         );
       }
 
-      // Verifica se já é membro DESTE tenant (idempotência)
       const { data: existingClaims, error: claimsErr } = await admin
         .from("user_claims")
         .select("tenant_id")
         .eq("user_id", existingUserId);
 
       if (claimsErr) {
-        return NextResponse.json(
-          { error: "Falha ao checar vínculos do usuário." },
-          { status: 500 }
-        );
+        return NextResponse.json({ error: "Falha ao checar vínculos do usuário." }, { status: 500 });
       }
 
-      const isAlreadyMemberHere = (existingClaims || []).some(
-        (r) => r.tenant_id === tenant_id
-      );
-
+      const isAlreadyMemberHere = (existingClaims || []).some(r => r.tenant_id === tenant_id);
       if (isAlreadyMemberHere) {
-        return NextResponse.json(
-          { userId: existingUserId, status: "already_member" },
-          { status: 200 }
-        );
+        return NextResponse.json({ userId: existingUserId, status: "already_member" }, { status: 200 });
       }
 
-      // ✅ Política rígida: não permitir reuso de e-mail já existente no Auth
       return NextResponse.json(
         { error: "Este e-mail já está registrado na plataforma. Use outro e-mail." },
         { status: 409 }
       );
     }
 
-    // 6) Outro erro do Auth
-    return NextResponse.json(
-      { error: "Falha ao criar usuário no Auth." },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Falha ao criar usuário no Auth." }, { status: 500 });
   } catch (err) {
     return NextResponse.json(
       { error: err?.message || "Erro inesperado." },
