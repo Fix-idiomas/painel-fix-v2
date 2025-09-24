@@ -2,178 +2,183 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { supabase } from "@/lib/supabaseClient"; // <- usa o seu client anon
 
-const STORAGE_KEY = "pf.session";
+const STORAGE_KEY = "pf.session.ui"; // só prefs de UI; nada de perms/role "falsos"
 
 const FULL_PERMS = {
-   finance: { read: true, write: true },
-   classes: { read: true, write: true },
+  finance: { read: true, write: true },
+  classes: { read: true, write: true },
 };
 
-// migra/normaliza tenant e campos essenciais
-function normalizeSession(raw) {
-  const s = typeof raw === "object" && raw ? raw : {};
-  const tenantId = s.tenantId ?? null;
-  const role = s.role ?? "owner"; // default local pode ser owner para facilitar testes
-  const rawPerms = s.perms || {};
+// ---- Normalização a partir do DB (não inventa role/perms)
+function fromDbToSession({ user, tenantId, claim, isOwner, teacherId, tenantName }) {
+  const role = isOwner ? "owner" : (claim?.role ?? "member");
+  const perms = role === "owner" || role === "admin"
+    ? FULL_PERMS
+    : {
+        finance: {
+          read: !!claim?.perms?.finance?.read,
+          write: !!claim?.perms?.finance?.write,
+        },
+        classes: {
+          read: !!claim?.perms?.classes?.read,
+          write: !!claim?.perms?.classes?.write,
+        },
+      };
 
-  const perms =
-    role === "owner" || role === "admin"
-      ? FULL_PERMS
-      : {
-          finance: {
-            read: !!rawPerms?.finance?.read,
-            write: !!rawPerms?.finance?.write,
-          },
-          classes: {
-            read: !!rawPerms?.classes?.read,
-            write: !!rawPerms?.classes?.write,
-          },
-        };
-
-   return {
-    userId: s.userId ?? "dev-admin",
-    role,
-    teacherId: s.teacherId ?? null,
-    name: s.name ?? "Administrador (dev)",
-    tenantId,
-    tenantName: s.tenantName ?? "Fix Idiomas",
+  return {
+    userId: user?.id ?? null,
+    name: user?.user_metadata?.name ?? user?.email ?? "Usuário",
+    role, // "owner" | "admin" | "member"
+    teacherId: teacherId ?? null,
+    tenantId: tenantId ?? null,
+    tenantName: tenantName ?? "Fix Idiomas",
     perms,
   };
 }
 
-
-// ---------- Defaults ----------
-const DEFAULT_SESSION = normalizeSession({
-  userId: "dev-owner",
-  role: "owner",
+// ---------- Defaults (usados só até o DB responder) ----------
+const DEFAULT_SESSION = {
+  userId: null,
+  role: "member",
   teacherId: null,
-  name: "Owner (dev)",
+  name: "Usuário",
   tenantId: null,
   tenantName: "Fix Idiomas",
-});
+  perms: { finance: { read: false, write: false }, classes: { read: false, write: false } },
+};
 
 // ---------- Role presets (dev only) ----------
 const ROLE_PRESETS = {
-  owner: {
-    userId: "dev-owner",
-    role: "owner",
-    teacherId: null,
-    name: "Owner (dev)",
-  },
-  admin: {
-    userId: "dev-admin",
-    role: "admin",
-    teacherId: null,
-    name: "Administrador (dev)",
-  },
+  owner:  { role: "owner"  },
+  admin:  { role: "admin"  },
+  member: { role: "member" },
 };
+
 const SessionContext = createContext(null);
 
 export function SessionProvider({ children }) {
-  // SSR-safe: inicia null e hidrata no client
   const [session, setSession] = useState(null);
   const [ready, setReady] = useState(false);
 
-  // Hidratação do localStorage
+  // 1) Hidrata apenas preferências de UI (sem roles/perms falsos)
   useEffect(() => {
     try {
       const raw = typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
-      const parsed = raw ? JSON.parse(raw) : DEFAULT_SESSION;
-      setSession(normalizeSession(parsed));
+      const parsed = raw ? JSON.parse(raw) : {};
+      // Por enquanto só garantimos tenantName preferido (se você salva isso)
+      setSession({ ...DEFAULT_SESSION, tenantName: parsed.tenantName ?? DEFAULT_SESSION.tenantName });
     } catch {
-      setSession(DEFAULT_SESSION);
-    } finally {
-      setReady(true);
+      setSession({ ...DEFAULT_SESSION });
     }
   }, []);
 
-  // Persistência pós-hidratação
+  // 2) Carrega usuário + tenant + claim do DB (fonte da verdade)
   useEffect(() => {
-    if (!ready) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-    } catch {
-      /* noop */
-    }
-  }, [session, ready]);
-
-  // Promove admin → owner se o banco confirmar que este usuário é o owner do tenant
-  useEffect(() => {
-    if (!ready) return;
-    if (session?.role !== "admin") return;
-
     (async () => {
       try {
-        const { supabase } = await import("@/lib/supabaseClient");
-        const { data: ownerOk, error } = await supabase.rpc("is_owner");
-        if (!error && ownerOk === true) {
-          setSession((prev) => normalizeSession({ ...prev, role: "owner" }));
+        // 2.1 usuário
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) { setReady(true); return; }
+
+        // 2.2 tenant atual (sempre do DB)
+        const { data: tenantId } = await supabase.rpc("current_tenant_id");
+
+        // 2.3 claim do usuário no tenant
+        let claim = null;
+        if (tenantId) {
+          const { data: c } = await supabase
+            .from("user_claims")
+            .select("tenant_id, user_id, role, perms, user_email_snapshot, user_name_snapshot")
+            .eq("user_id", user.id)
+            .eq("tenant_id", tenantId)
+            .maybeSingle();
+          claim = c ?? null;
         }
-      } catch {
-        /* mantém como admin se falhar */
+
+        // 2.4 opcional: teacherId via função existente (se tiver)
+        let teacherId = null;
+        try {
+          const { data: tid } = await supabase.rpc("current_teacher_id");
+          teacherId = tid ?? null;
+        } catch { /* ignore */ }
+
+        // 2.5 opcional: owner
+        let isOwner = false;
+        try {
+          const { data: ownerOk } = await supabase.rpc("is_owner");
+          isOwner = ownerOk === true;
+        } catch { /* ignore */ }
+
+        const next = fromDbToSession({
+          user, tenantId, claim, isOwner, teacherId,
+          tenantName: session?.tenantName, // preserva label amigável se você usa
+        });
+
+        setSession(next);
+      } finally {
+        setReady(true);
       }
     })();
-  }, [ready, session?.role]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const value = useMemo(
-    () => ({
-      session,
+  // 3) Persistir só prefs de UI (ex.: tenantName). Nada de role/perms aqui.
+  useEffect(() => {
+    if (!ready || !session) return;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ tenantName: session.tenantName }));
+    } catch { /* noop */ }
+  }, [session, ready]);
+
+  const value = useMemo(() => {
+    const s = session ?? DEFAULT_SESSION;
+
+    // helpers calculados a partir da sessão já normalizada pelo DB
+    const isOwner = s.role === "owner";
+    const isAdmin = s.role === "owner" || s.role === "admin";
+    const perms = s.perms ?? {};
+
+    return {
+      session: s,
       ready,
       setSession,
 
-      // helpers prontos para a UI
-      isOwner: session?.role === "owner",
-      isAdmin: session?.role === "owner" || session?.role === "admin",
-      perms: session?.perms ?? {},
+      isOwner,
+      isAdmin,
+      perms,
 
-      // Troca de papel preservando tenant atual (dev only)
+      // Dev only: trocar "rótulo" de role para testes locais, sem afetar DB
       switchRole(next) {
+        if (process.env.NODE_ENV === "production") return; // no-op em prod
         const patch = ROLE_PRESETS[next] ?? ROLE_PRESETS.admin;
-        setSession((prev) => {
-          const base = normalizeSession(prev ?? DEFAULT_SESSION);
-          return normalizeSession({
-            ...base,
-            ...patch,
-            tenantId: base.tenantId,    // preserva
-            tenantName: base.tenantName // preserva
-          });
-        });
+        setSession((prev) => ({ ...(prev ?? DEFAULT_SESSION), ...patch }));
       },
 
-      // Aceita string UUID ou objeto { tenantId, tenantName }
+      // Troca de tenant (apenas label). O tenant *real* é do DB (current_tenant_id)
       switchTenant(nextTenant) {
         if (!nextTenant) return;
         setSession((prev) => {
-          const base = normalizeSession(prev ?? DEFAULT_SESSION);
-
+          const base = prev ?? DEFAULT_SESSION;
           if (typeof nextTenant === "string") {
-            return normalizeSession({
-              ...base,
-              tenantId: nextTenant,
-              tenantName: base.tenantName, // preserva se só veio id
-            });
+            return { ...base, tenantName: base.tenantName }; // id real vem do DB
           }
-
-          return normalizeSession({
+          return {
             ...base,
-            tenantId: nextTenant.tenantId ?? base.tenantId,
             tenantName: nextTenant.tenantName ?? base.tenantName,
-          });
+          };
         });
       },
 
-      // Utilitário opcional para reset rápido (dev)
       resetSession() {
-        setSession(DEFAULT_SESSION);
+        setSession({ ...DEFAULT_SESSION });
       },
-    }),
-    [session, ready]
-  );
+    };
+  }, [session, ready]);
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
-
 
 export function useSession() {
   const ctx = useContext(SessionContext);

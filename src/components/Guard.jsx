@@ -1,34 +1,82 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useSession } from "@/contexts/SessionContext";
 
 /**
- * Guard: restringe acesso com base em papéis (roles).
+ * Guard híbrido: pode usar roles (sessão) e/ou checagem assíncrona (DB-first).
  *
- * Uso:
- *   <Guard roles={["admin","financeiro"]}>
- *     <ConteudoRestrito />
+ * Uso clássico (compatível):
+ *   <Guard roles={["admin","financeiro"]}><Conteudo/></Guard>
+ *
+ * Uso DB-first (RPC):
+ *   <Guard
+ *     fallback={<AcessoNegado area="Gastos" />}
+ *     check={async () => {
+ *       // ex.: Supabase RPC que retorna boolean
+ *       const { supabase } = await import("@/lib/supabaseClient");
+ *       const { data, error } = await supabase.rpc("is_admin_or_finance_read", {});
+ *       if (error) throw error;
+ *       return !!data;
+ *     }}
+ *   >
+ *     <Conteudo/>
  *   </Guard>
  *
- * Props:
- * - roles: array de papéis permitidos (ex.: ["admin", "professor"])
- * - fallback: renderizado quando usuário não tem permissão (default: null)
- * - children: conteúdo a ser protegido
+ * Quando ambos são fornecidos (roles + check), exige PASSAR nos dois.
  */
-export default function Guard({ roles, fallback = null, children }) {
+export default function Guard({ roles, check, fallback = null, children }) {
   const { session } = useSession();
 
-  // Caso ainda não exista sessão (loading ou erro)
+  // 1) sessão ainda não carregou → não renderiza nada (evita flicker)
   if (!session) return null;
 
-  // Verifica se o papel atual está na lista de permitidos
-  const allowed = Array.isArray(roles) ? roles.includes(session.role) : true;
+  // 2) checagem por roles (opcional)
+  const allowedByRole = Array.isArray(roles) ? roles.includes(session.role) : true;
+
+  // 3) checagem assíncrona (opcional, DB-first)
+  const [checked, setChecked] = useState(!check);   // se não houver check, já consideramos ok
+  const [allowedByCheck, setAllowedByCheck] = useState(true);
+  const [checkError, setCheckError] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    if (!check) return; // não há checagem extra
+
+    (async () => {
+      try {
+        setCheckError(null);
+        const ok = await check(); // deve retornar boolean
+        if (!alive) return;
+        setAllowedByCheck(!!ok);
+      } catch (e) {
+        if (!alive) return;
+        // Em caso de erro na RPC, trate como negado (e exponha erro se quiser)
+        setAllowedByCheck(false);
+        setCheckError(e?.message || "Falha na verificação de permissão.");
+      } finally {
+        if (alive) setChecked(true);
+      }
+    })();
+
+    return () => { alive = false; };
+  }, [check]);
+
+  // 4) enquanto aguardamos a checagem DB-first, não renderizar children
+  if (!checked) return null;
+
+  // 5) decisão final: precisa passar em ambos quando ambos existem
+  const allowed = allowedByRole && allowedByCheck;
 
   if (!allowed) {
-    return fallback ?? (
-      <div className="p-4 text-sm text-gray-500">
-        Acesso não autorizado para este perfil.
-      </div>
+    // você pode optar por expor o erro de permissão aqui, se desejar:
+    // if (checkError) console.warn("Guard check error:", checkError);
+    return (
+      fallback ?? (
+        <div className="p-4 text-sm text-gray-500">
+          Acesso não autorizado para este perfil.
+        </div>
+      )
     );
   }
 
