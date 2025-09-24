@@ -56,25 +56,24 @@ async function deleteExpenseTemplate(id) {
 }
 
 async function listExpenseEntries({ ym, status = "all", cost_center = null } = {}) {
-  // O supabaseGateway já aplica filtro por mês e status
-  const out = await supabaseGateway.listExpenseEntries({ ym, status });
-  if (!cost_center || cost_center === "all") return out;
+  // Normaliza antes de descer pro gateway
+  const normalizedStatus =
+    status && status !== "all" ? String(status) : null;
+  const normalizedCenter =
+    cost_center && cost_center !== "all" ? String(cost_center).toUpperCase() : null;
 
-  const rows = (out?.rows || []).filter(
-    (r) => (r.cost_center || "PJ") === cost_center
-  );
-  const sum = (arr) => arr.reduce((a, b) => a + Number(b.amount || 0), 0);
+  const out = await supabaseGateway.listExpenseEntries({
+    ym,
+    status: normalizedStatus,
+    cost_center: normalizedCenter, // ⬅️ agora o gateway filtra no server
+  });
+
+  // Garante shape consistente
   return {
-    rows,
-    kpis: {
-      total:   sum(rows),
-      paid:    sum(rows.filter((r) => r.status === "paid")),
-      pending: sum(rows.filter((r) => r.status === "pending")),
-      overdue: sum(rows.filter((r) => r.status === "pending" && r.days_overdue > 0)),
-    },
+    rows: Array.isArray(out?.rows) ? out.rows : [],
+    kpis: out?.kpis ?? { total: 0, paid: 0, pending: 0, overdue: 0 },
   };
 }
-
 // --- ALIAS p/ compatibilidade com telas antigas ---
 async function createOneOffExpense({ date, amount, title, category = null, cost_center = "PJ" }) {
   return createExpenseEntry({

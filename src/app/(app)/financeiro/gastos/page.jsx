@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSession } from "@/contexts/SessionContext";  // ⬅️ NEW
+import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
 
-// Tradução de status para exibir na tabela
+
+// Tradução de status
 const statusLabels = {
   pending: "Pendente",
   paid: "Pago",
@@ -17,21 +18,59 @@ const fmtBRL = (n) =>
 const fmtBR = (s) => (s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-");
 
 export default function GastosPage() {
-  const { perms, isAdmin } = useSession();
-  const canFinanceRead  = isAdmin || !!perms?.finance?.read;
-  const canFinanceWrite = isAdmin || !!perms?.finance?.write;
+  // ---------- Sessão (somente para reagir a troca de usuário) ----------
+  const sess = useSession();
+  const ready = sess?.ready ?? true; // se não houver "ready" no contexto, segue true
 
+  // ---------- Permissões via DB (fonte da verdade) ----------
+  const [permChecked, setPermChecked] = useState(false);
+  const [canReadDB, setCanReadDB] = useState(false);
+  const [canWriteDB, setCanWriteDB] = useState(false);
 
+  useEffect(() => {
+    if (!ready) return;
+    let alive = true;
+    (async () => {
+      try {
+        const { supabase } = await import("@/lib/supabaseClient");
+        const { data: tenantId, error: tErr } = await supabase.rpc("current_tenant_id");
+        if (tErr) throw tErr;
+
+        const [rRead, rWrite] = await Promise.all([
+          supabase.rpc("is_admin_or_finance_read", { p_tenant: tenantId }),
+          supabase.rpc("is_admin_or_finance_write", { p_tenant: tenantId }),
+        ]);
+        if (!alive) return;
+
+        if (rRead.error) throw rRead.error;
+        if (rWrite.error) throw rWrite.error;
+
+        setCanReadDB(!!rRead.data);
+        setCanWriteDB(!!rWrite.data);
+      } catch (e) {
+        console.warn("perm check (gastos) failed:", e);
+        setCanReadDB(false);
+        setCanWriteDB(false);
+      } finally {
+        if (alive) setPermChecked(true);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [ready, sess?.user?.id]);
+
+  // ---------- Estado ----------
   const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
-  const [status, setStatus] = useState("all");      // all | pending | paid | canceled
+  const [status, setStatus] = useState("all"); // all | pending | paid | canceled
   const [costCenter, setCostCenter] = useState("all"); // all | PJ | PF
   const [updatingId, setUpdatingId] = useState(null);
-  // mês
+
   const [rows, setRows] = useState([]);
   const [kpis, setKpis] = useState({ total: 0, paid: 0, pending: 0, overdue: 0 });
   const [loading, setLoading] = useState(true);
 
-  // templates recorrentes
+  // Recorrentes
   const [templates, setTemplates] = useState([]);
   const [openEditTpl, setOpenEditTpl] = useState(false);
   const [savingTpl, setSavingTpl] = useState(false);
@@ -44,10 +83,10 @@ export default function GastosPage() {
     due_day: "5",
     due_month: "1",
     active: true,
-    cost_center: "PJ",     // PJ | PF
+    cost_center: "PJ", // PJ | PF
   });
 
-  // lançamento avulso
+  // Avulso
   const [openAvulso, setOpenAvulso] = useState(false);
   const [savingAvulso, setSavingAvulso] = useState(false);
   const [formAvulso, setFormAvulso] = useState({
@@ -55,26 +94,10 @@ export default function GastosPage() {
     title: "",
     category: "",
     amount: "",
-    cost_center: "PJ",     // PJ | PF
+    cost_center: "PJ", // PJ | PF
   });
-   useEffect(() => {
-   if (!canFinanceWrite) return; // usuário comum não carrega templates
-   loadTemplates();
- }, [canFinanceWrite, ym]);
 
-  // 🚫 Gate: sem permissão de leitura → bloqueia a página
- if (!canFinanceRead) {
-   return (
-     <main className="p-6">
-       <h1 className="text-xl font-semibold mb-2">Acesso negado</h1>
-       <p className="text-sm opacity-75">
-         Você não tem permissão para visualizar o Financeiro desta escola.
-       </p>
-     </main>
-   );
- }  
-  
-  // ====== Carregamentos ======
+  // ---------- Carregar dados do mês (somente com READ do banco) ----------
   async function load() {
     setLoading(true);
     const { rows, kpis } = await financeGateway.listExpenseEntries({
@@ -87,27 +110,62 @@ export default function GastosPage() {
     setLoading(false);
   }
 
+  useEffect(() => {
+    if (!permChecked || !canReadDB) return;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [permChecked, canReadDB, ym, status, costCenter]);
+
+  // ---------- Recorrentes (somente com WRITE do banco) ----------
   async function loadTemplates() {
     const list = await financeGateway.listExpenseTemplates();
     setTemplates(list);
   }
 
- 
- 
-  // ====== Ações do mês ======
+  useEffect(() => {
+    if (!permChecked || !canWriteDB) return;
+    loadTemplates();
+  }, [permChecked, canWriteDB, ym]);
+
+  // Se perder permissão de write, limpa UI
+  useEffect(() => {
+    if (!canWriteDB) {
+      setTemplates([]);
+      setOpenEditTpl(false);
+      setOpenAvulso(false);
+    }
+  }, [canWriteDB]);
+
+  // ---------- Gates ----------
+  if (!permChecked) {
+    return <main className="p-6">Carregando…</main>;
+  }
+  if (!canReadDB) {
+    return (
+      <main className="p-6">
+        <h1 className="text-xl font-semibold mb-2">Acesso negado</h1>
+        <p className="text-sm opacity-75">
+          Você não tem permissão para visualizar o Financeiro desta escola.
+        </p>
+      </main>
+    );
+  }
+
+  // ---------- Ações do mês ----------
   async function onPreview() {
+    if (!canWriteDB) {
+      alert("Você não tem permissão para gerar despesas.");
+      return;
+    }
     const prev = await financeGateway.previewGenerateExpenses({ ym });
-    if (prev.length === 0) {
+    if (!prev.length) {
       alert("Nada a gerar para este mês.");
       return;
     }
     const txt =
       "Prévia de geração:\n\n" +
       prev
-        .map(
-          (p) =>
-            `• ${p.title_snapshot} — ${fmtBRL(p.amount)} (venc. ${fmtBR(p.due_date)})`
-        )
+        .map((p) => `• ${p.title_snapshot} — ${fmtBRL(p.amount)} (venc. ${fmtBR(p.due_date)})`)
         .join("\n") +
       "\n\nDeseja GERAR esses lançamentos?";
     if (confirm(txt)) {
@@ -116,88 +174,98 @@ export default function GastosPage() {
     }
   }
 
-  // ====== Ações por item ======
- const markPaid = async (id) => {
-  try {
-    setUpdatingId(id);
-    if (financeGateway.updateExpenseEntry) {
-      await financeGateway.updateExpenseEntry(id, {
-        status: "paid",
-        paid_at: new Date().toISOString(),
-      });
-    } else {
-      const { supabase } = await import("@/lib/supabaseClient");
-      const { error } = await supabase
-        .from("expense_entries")
-        .update({ status: "paid", paid_at: new Date().toISOString() })
-        .eq("id", id);
-      if (error) throw error;
+  // ---------- Ações por item ----------
+  const markPaid = async (id) => {
+    if (!canWriteDB) {
+      alert("Você não tem permissão para marcar como pago.");
+      return;
     }
-    await load();
-  } finally {
-    setUpdatingId(null);
-  }
-};
-
-
-const reopen = async (id) => {
-  try {
-    setUpdatingId(id);
-    if (financeGateway.updateExpenseEntry) {
-      await financeGateway.updateExpenseEntry(id, {
-        status: "pending",
-        paid_at: null,
-      });
-    } else {
-      const { supabase } = await import("@/lib/supabaseClient");
-      const { error } = await supabase
-        .from("expense_entries")
-        .update({ status: "pending", paid_at: null })
-        .eq("id", id);
-      if (error) throw error;
+    try {
+      setUpdatingId(id);
+      if (financeGateway.updateExpenseEntry) {
+        await financeGateway.updateExpenseEntry(id, {
+          status: "paid",
+          paid_at: new Date().toISOString(),
+        });
+      } else {
+        const { supabase } = await import("@/lib/supabaseClient");
+        const { error } = await supabase
+          .from("expense_entries")
+          .update({ status: "paid", paid_at: new Date().toISOString() })
+          .eq("id", id);
+        if (error) throw error;
+      }
+      await load();
+    } finally {
+      setUpdatingId(null);
     }
-    await load();
-  } finally {
-    setUpdatingId(null);
-  }
-};
+  };
 
-const cancel = async (id) => {
-  try {
-    setUpdatingId(id);
-    const note = prompt("Motivo do cancelamento (opcional):") || "";
-    if (financeGateway.updateExpenseEntry) {
-      await financeGateway.updateExpenseEntry(id, {
-        status: "canceled",
-        paid_at: null,
-        // cancel_reason: note, // se existir
-      });
-    } else {
-      const { supabase } = await import("@/lib/supabaseClient");
-      const { error } = await supabase
-        .from("expense_entries")
-        .update({ status: "canceled", paid_at: null /*, cancel_reason: note */ })
-        .eq("id", id);
-      if (error) throw error;
+  const reopen = async (id) => {
+    if (!canWriteDB) {
+      alert("Você não tem permissão para reabrir.");
+      return;
     }
-    await load();
-  } finally {
-    setUpdatingId(null);
-  }
-};
+    try {
+      setUpdatingId(id);
+      if (financeGateway.updateExpenseEntry) {
+        await financeGateway.updateExpenseEntry(id, { status: "pending", paid_at: null });
+      } else {
+        const { supabase } = await import("@/lib/supabaseClient");
+        const { error } = await supabase
+          .from("expense_entries")
+          .update({ status: "pending", paid_at: null })
+          .eq("id", id);
+        if (error) throw error;
+      }
+      await load();
+    } finally {
+      setUpdatingId(null);
+    }
+  };
 
-const delEntry = async (id) => {
-  if (!confirm("Excluir lançamento?")) return;
-  await financeGateway.deleteExpenseEntry
-    ? financeGateway.deleteExpenseEntry(id)
-    : (await import("@/lib/supabaseClient")).supabase
-        .from("expense_entries")
-        .delete()
-        .eq("id", id);
-  await load();
-};
-  // ====== Templates ======
+  const cancel = async (id) => {
+    if (!canWriteDB) {
+      alert("Você não tem permissão para cancelar.");
+      return;
+    }
+    try {
+      setUpdatingId(id);
+      const note = prompt("Motivo do cancelamento (opcional):") || "";
+      if (financeGateway.updateExpenseEntry) {
+        await financeGateway.updateExpenseEntry(id, { status: "canceled", paid_at: null });
+      } else {
+        const { supabase } = await import("@/lib/supabaseClient");
+        const { error } = await supabase
+          .from("expense_entries")
+          .update({ status: "canceled", paid_at: null /*, cancel_reason: note */ })
+          .eq("id", id);
+        if (error) throw error;
+      }
+      await load();
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const delEntry = async (id) => {
+    if (!canWriteDB) {
+      alert("Você não tem permissão para excluir lançamentos.");
+      return;
+    }
+    if (!confirm("Excluir lançamento?")) return;
+    await financeGateway.deleteExpenseEntry
+      ? financeGateway.deleteExpenseEntry(id)
+      : (await import("@/lib/supabaseClient")).supabase.from("expense_entries").delete().eq("id", id);
+    await load();
+  };
+
+  // ---------- Templates (CRUD somente com canWriteDB) ----------
   function openCreateTpl() {
+    if (!canWriteDB) {
+      alert("Você não tem permissão para criar recorrentes.");
+      return;
+    }
     setTplId(null);
     setFormTpl({
       title: "",
@@ -213,6 +281,10 @@ const delEntry = async (id) => {
   }
 
   function openEditTplModal(t) {
+    if (!canWriteDB) {
+      alert("Você não tem permissão para editar recorrentes.");
+      return;
+    }
     setTplId(t.id);
     setFormTpl({
       title: t.title || "",
@@ -229,6 +301,10 @@ const delEntry = async (id) => {
 
   async function onSubmitTpl(e) {
     e?.preventDefault?.();
+    if (!canWriteDB) {
+      alert("Você não tem permissão para salvar recorrentes.");
+      return;
+    }
     try {
       setSavingTpl(true);
       const payload = {
@@ -256,13 +332,20 @@ const delEntry = async (id) => {
   }
 
   async function onDeleteTpl(t) {
+    if (!canWriteDB) {
+      alert("Você não tem permissão para excluir recorrentes.");
+      return;
+    }
     if (!confirm(`Excluir recorrente "${t.title}"?`)) return;
     await financeGateway.deleteExpenseTemplate(t.id);
     await loadTemplates();
   }
 
-  // ====== Avulso ======
   function openAvulsoModal() {
+    if (!canWriteDB) {
+      alert("Você não tem permissão para criar lançamentos avulsos.");
+      return;
+    }
     setFormAvulso({
       date: "",
       title: "",
@@ -275,6 +358,10 @@ const delEntry = async (id) => {
 
   async function onSubmitAvulso(e) {
     e?.preventDefault?.();
+    if (!canWriteDB) {
+      alert("Você não tem permissão para salvar lançamentos avulsos.");
+      return;
+    }
     try {
       setSavingAvulso(true);
       const payload = {
@@ -296,135 +383,133 @@ const delEntry = async (id) => {
     }
   }
 
+  // ---------- Render ----------
   return (
-       <main className="p-6 space-y-8">
-        {/* Header / Filtros */}
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold">Gastos</h1>
+    <main className="p-6 space-y-8">
+      {/* Header / Filtros */}
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-2xl font-bold">Gastos</h1>
 
-          <input
-            type="month"
-            value={ym}
-            onChange={(e) => setYm(e.target.value.slice(0, 7))}
-            className="border rounded px-2 py-1"
-          />
+        <input
+          type="month"
+          value={ym}
+          onChange={(e) => setYm(e.target.value.slice(0, 7))}
+          className="border rounded px-2 py-1"
+        />
 
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="border rounded px-2 py-1"
-          >
-            <option value="all">Todos</option>
-            <option value="pending">Pendentes</option>
-            <option value="paid">Pagos</option>
-            <option value="canceled">Cancelados</option>
-          </select>
+        <select
+          value={status}
+          onChange={(e) => setStatus(e.target.value)}
+          className="border rounded px-2 py-1"
+        >
+          <option value="all">Todos</option>
+          <option value="pending">Pendentes</option>
+          <option value="paid">Pagos</option>
+          <option value="canceled">Cancelados</option>
+        </select>
 
-          <select
-            value={costCenter}
-            onChange={(e) => setCostCenter(e.target.value)}
-            className="border rounded px-2 py-1"
-          >
-            <option value="all">Todos os centros</option>
-            <option value="PJ">PJ (Empresa)</option>
-            <option value="PF">PF (Pessoal)</option>
-          </select>
+        <select
+          value={costCenter}
+          onChange={(e) => setCostCenter(e.target.value)}
+          className="border rounded px-2 py-1"
+        >
+          <option value="all">Todos os centros</option>
+          <option value="PJ">PJ (Empresa)</option>
+          <option value="PF">PF (Pessoal)</option>
+        </select>
 
-          <button onClick={onPreview} className="border rounded px-3 py-2">
-            Prévia / Gerar
-          </button>
-          <button onClick={openAvulsoModal} className="border rounded px-3 py-2">
-            + Avulso
-          </button>
-        </div>
+        {canWriteDB && (
+          <>
+            <button onClick={onPreview} className="border rounded px-3 py-2">
+              Prévia / Gerar
+            </button>
+            <button onClick={openAvulsoModal} className="border rounded px-3 py-2">
+              + Avulso
+            </button>
+          </>
+        )}
+      </div>
 
-        {/* KPIs */}
-        <section className="grid sm:grid-cols-4 gap-3">
-          <KpiCard title="Total do mês" value={fmtBRL(kpis.total)} />
-          <KpiCard title="Pagos" value={fmtBRL(kpis.paid)} />
-          <KpiCard title="Pendentes" value={fmtBRL(kpis.pending)} />
-          <KpiCard title="Em atraso" value={fmtBRL(kpis.overdue)} />
-        </section>
+      {/* KPIs */}
+      <section className="grid sm:grid-cols-4 gap-3">
+        <KpiCard title="Total do mês" value={fmtBRL(kpis.total)} />
+        <KpiCard title="Pagos" value={fmtBRL(kpis.paid)} />
+        <KpiCard title="Pendentes" value={fmtBRL(kpis.pending)} />
+        <KpiCard title="Em atraso" value={fmtBRL(kpis.overdue)} />
+      </section>
 
-        {/* Lançamentos do mês */}
-        <section className="border rounded overflow-auto">
-          <div className="p-3 border-b font-semibold">Lançamentos do mês</div>
-          {loading ? (
-            <div className="p-4">Carregando…</div>
-          ) : rows.length === 0 ? (
-            <div className="p-4">Sem lançamentos para este filtro.</div>
-          ) : (
-            <table className="min-w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <Th>Vencimento</Th>
-                  <Th>Título</Th>
-                  <Th>Categoria</Th>
-                  <Th>Centro</Th>
-                  <Th>Valor</Th>
-                  <Th>Status</Th>
-                  <Th>Ações</Th>
+      {/* Lançamentos do mês */}
+      <section className="border rounded overflow-auto">
+        <div className="p-3 border-b font-semibold">Lançamentos do mês</div>
+        {loading ? (
+          <div className="p-4">Carregando…</div>
+        ) : rows.length === 0 ? (
+          <div className="p-4">Sem lançamentos para este filtro.</div>
+        ) : (
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <Th>Vencimento</Th>
+                <Th>Título</Th>
+                <Th>Categoria</Th>
+                <Th>Centro</Th>
+                <Th>Valor</Th>
+                <Th>Status</Th>
+                <Th>Ações</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-t">
+                  <Td>{fmtBR(r.due_date)}</Td>
+                  <Td>{r.title_snapshot}</Td>
+                  <Td>{r.category || "-"}</Td>
+                  <Td>{r.cost_center || "-"}</Td>
+                  <Td>{fmtBRL(r.amount)}</Td>
+                  <Td>{statusLabels[r.status] || r.status}</Td>
+                  <Td className="py-2">
+                    {canWriteDB ? (
+                      <div className="flex gap-2">
+                        {r.status === "pending" ? (
+                          <>
+                            <button
+                              onClick={() => markPaid(r.id)}
+                              className="px-2 py-1 border rounded"
+                              disabled={updatingId === r.id}
+                            >
+                              Marcar pago
+                            </button>
+                            <button
+                              onClick={() => cancel(r.id)}
+                              className="px-2 py-1 border rounded"
+                              disabled={updatingId === r.id}
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => reopen(r.id)}
+                            className="px-2 py-1 border rounded"
+                            disabled={updatingId === r.id}
+                          >
+                            Reabrir
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-500">—</span>
+                    )}
+                  </Td>
                 </tr>
-              </thead>
-             <tbody>
-  {rows.map((r) => (
-    <tr key={r.id} className="border-t">
-      <Td>{fmtBR(r.due_date)}</Td>
-      <Td>{r.title_snapshot}</Td>
-      <Td>{r.category || "-"}</Td>
-      <Td>{r.cost_center || "-"}</Td>
-      <Td>{fmtBRL(r.amount)}</Td>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
 
-      {/* ✅ Status traduzido */}
-      <Td>{statusLabels[r.status] || r.status}</Td>
-
-      <Td className="py-2">
-        <div className="flex gap-2">
-          {r.status === "pending" && (
-            <>
-              <button
-                onClick={() => markPaid(r.id)}
-                className="px-2 py-1 border rounded"
-              >
-                Marcar pago
-              </button>
-              <button
-                onClick={() => cancel(r.id)}
-                className="px-2 py-1 border rounded"
-              >
-                Cancelar
-              </button>
-            </>
-          )}
-
-          {r.status === "paid" && (
-            <button
-              onClick={() => reopen(r.id)}
-              className="px-2 py-1 border rounded"
-            >
-              Reabrir
-            </button>
-          )}
-
-          {r.status === "canceled" && (
-            <button
-              onClick={() => reopen(r.id)}
-              className="px-2 py-1 border rounded"
-            >
-              Reabrir
-            </button>
-          )}
-        </div>
-      </Td>
-    </tr>
-  ))}
-</tbody>
-
-            </table>
-          )}
-        </section>
-
-        {/* Recorrentes */}
+      {/* Recorrentes (somente se canWriteDB === true) */}
+      {canWriteDB && (
         <section className="border rounded overflow-auto">
           <div className="flex items-center justify-between p-3 border-b">
             <div className="font-semibold">Despesas recorrentes</div>
@@ -464,16 +549,10 @@ const delEntry = async (id) => {
                     <Td>{t.active ? "ativo" : "inativo"}</Td>
                     <Td className="py-2">
                       <div className="flex gap-2">
-                        <button
-                          onClick={() => openEditTplModal(t)}
-                          className="px-2 py-1 border rounded"
-                        >
+                        <button onClick={() => openEditTplModal(t)} className="px-2 py-1 border rounded">
                           Editar
                         </button>
-                        <button
-                          onClick={() => onDeleteTpl(t)}
-                          className="px-2 py-1 border rounded"
-                        >
+                        <button onClick={() => onDeleteTpl(t)} className="px-2 py-1 border rounded">
                           Excluir
                         </button>
                       </div>
@@ -484,8 +563,10 @@ const delEntry = async (id) => {
             </table>
           )}
         </section>
+      )}
 
-        {/* Modal: recorrente */}
+      {/* Modais */}
+      {canWriteDB && (
         <Modal
           open={openEditTpl}
           onClose={() => setOpenEditTpl(false)}
@@ -613,8 +694,9 @@ const delEntry = async (id) => {
             </div>
           </form>
         </Modal>
+      )}
 
-        {/* Modal: lançamento avulso */}
+      {canWriteDB && (
         <Modal
           open={openAvulso}
           onClose={() => setOpenAvulso(false)}
@@ -691,7 +773,8 @@ const delEntry = async (id) => {
             </div>
           </form>
         </Modal>
-      </main>
+      )}
+    </main>
   );
 }
 
