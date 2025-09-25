@@ -1,6 +1,6 @@
 "use client"
 import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { supabase } from "@/lib/supabaseClient"
 
 
@@ -11,6 +11,7 @@ export default function LoginPage() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(false)
   const router = useRouter()
+  const searchParams = useSearchParams() // 👈 (opcional)
 
 async function handleLogin(e) {
   e.preventDefault();
@@ -24,6 +25,7 @@ async function handleLogin(e) {
     setUser(null);
     return;
   }
+  
 
   // sessão criada com sucesso
   setUser(data.user);
@@ -48,9 +50,11 @@ async function handleLogin(e) {
     }
   }
 
-  setLoading(false);
-  router.push("/alunos");
-}
+  // ✅ pousar em Início (ou em ?next=...)
+    const next = searchParams?.get("next") || "/"; // ex.: /auth/callback?next=/agenda
+    router.replace(next);
+    router.refresh(); // (opcional) força re-render dos Server Components
+  }
 
 
   async function handleLogout() {

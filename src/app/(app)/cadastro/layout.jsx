@@ -1,14 +1,15 @@
+// app/(app)/cadastro/layout.jsx
 "use client";
 import Guard from "@/components/Guard";
 import { supabase } from "@/lib/supabaseClient";
 
-export default function AlunosLayout({ children }) {
- return (
+export default function CadastroLayout({ children }) {
+  return (
     <Guard
       check={async () => {
         const [{ data: canReg }, { data: isOwner }] = await Promise.all([
-          supabase.rpc("can_registry_read"),          // ✅ sem args
-          supabase.rpc("is_owner_current_tenant"),    // ✅ opcional
+          supabase.rpc("can_registry_read"),          // ✅ existe sem args
+          supabase.rpc("is_owner_current_tenant"),    // ✅ opcional: owner passa
         ]);
         return !!canReg || !!isOwner;
       }}
