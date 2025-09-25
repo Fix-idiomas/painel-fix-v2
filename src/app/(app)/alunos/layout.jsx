@@ -3,14 +3,13 @@ import Guard from "@/components/Guard";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function AlunosLayout({ children }) {
- return (
+  return (
     <Guard
       check={async () => {
-        const [{ data: canReg }, { data: isOwner }] = await Promise.all([
-          supabase.rpc("can_registry_read"),          // ✅ sem args
-          supabase.rpc("is_owner_current_tenant"),    // ✅ opcional
-        ]);
-        return !!canReg || !!isOwner;
+        const { data: tenant } = await supabase.rpc("current_tenant_id");
+        if (!tenant) return false;
+        const { data: ok } = await supabase.rpc("is_admin_or_registry_read", { p_tenant: tenant });
+        return !!ok;
       }}
       fallback={
         <main className="p-6">

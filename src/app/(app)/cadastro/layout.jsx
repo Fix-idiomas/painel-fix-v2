@@ -1,4 +1,3 @@
-// app/(app)/cadastro/layout.jsx
 "use client";
 import Guard from "@/components/Guard";
 import { supabase } from "@/lib/supabaseClient";
@@ -7,11 +6,15 @@ export default function CadastroLayout({ children }) {
   return (
     <Guard
       check={async () => {
-        const [{ data: canReg }, { data: isOwner }] = await Promise.all([
-          supabase.rpc("can_registry_read"),          // ✅ existe sem args
-          supabase.rpc("is_owner_current_tenant"),    // ✅ opcional: owner passa
-        ]);
-        return !!canReg || !!isOwner;
+        // checagem estrita por tenant
+        const { data: tenant } = await supabase.rpc("current_tenant_id");
+        if (!tenant) return false;
+        const { data: canReg } = await supabase.rpc("is_admin_or_registry_read", { p_tenant: tenant });
+        return !!canReg;
+
+        // Se quiser liberar também o "owner", (opcional) faça:
+        // const { data: isOwner } = await supabase.rpc("is_owner_current_tenant");
+        // return !!canReg || !!isOwner;
       }}
       fallback={
         <main className="p-6">
