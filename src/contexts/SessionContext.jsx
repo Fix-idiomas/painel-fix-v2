@@ -71,6 +71,34 @@ export function SessionProvider({ children }) {
       setSession({ ...DEFAULT_SESSION, tenantName: parsed.tenantName ?? DEFAULT_SESSION.tenantName });
     } catch {
       setSession({ ...DEFAULT_SESSION });
+  // Atualiza sessão ao mudar autenticação
+  useEffect(() => {
+    const { data: sub } = supabase.auth.onAuthStateChange(async () => {
+      setReady(false);
+      setSession(null);
+
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) { setReady(true); return; }
+        const { data: tenantId } = await supabase.rpc("current_tenant_id");
+        const { data: claim } = tenantId
+          ? await supabase.from("user_claims")
+              .select("tenant_id,user_id,role,perms,user_email_snapshot,user_name_snapshot")
+              .eq("user_id", user.id).eq("tenant_id", tenantId).maybeSingle()
+          : { data: null };
+        const { data: tid } = await supabase.rpc("current_teacher_id").catch(() => ({ data: null }));
+        const { data: ownerOk } = await supabase.rpc("is_owner").catch(() => ({ data: false }));
+
+        setSession(fromDbToSession({
+          user, tenantId, claim, isOwner: ownerOk === true, teacherId: tid ?? null,
+          tenantName: session?.tenantName,
+        }));
+      } finally {
+        setReady(true);
+      }
+    });
+    return () => sub.subscription?.unsubscribe();
+  }, []);
     }
   }, []);
 

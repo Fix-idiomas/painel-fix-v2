@@ -5,6 +5,7 @@ import { financeGateway, ADAPTER_NAME } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
 import Link from "next/link";
 
+
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 

@@ -73,9 +73,12 @@ export default function Guard({ roles, check, fallback = null, children }) {
     // if (checkError) console.warn("Guard check error:", checkError);
     return (
       fallback ?? (
-        <div className="p-4 text-sm text-gray-500">
-          Acesso não autorizado para este perfil.
-        </div>
+        <main className="p-6">
+        <h1 className="text-xl font-semibold mb-2">Acesso negado</h1>
+        <p className="text-sm opacity-75">
+          Você não tem permissão para acessar esta área.
+        </p>
+      </main>
       )
     );
   }
