@@ -87,7 +87,7 @@ export function SessionProvider({ children }) {
               .eq("user_id", user.id).eq("tenant_id", tenantId).maybeSingle()
           : { data: null };
         const { data: tid } = await supabase.rpc("current_teacher_id").catch(() => ({ data: null }));
-        const { data: ownerOk } = await supabase.rpc("is_owner").catch(() => ({ data: false }));
+        const { data: ownerOk } = await supabase.rpc("is_admin_or_owner").catch(() => ({ data: false }));
 
         setSession(fromDbToSession({
           user, tenantId, claim, isOwner: ownerOk === true, teacherId: tid ?? null,
@@ -135,7 +135,7 @@ export function SessionProvider({ children }) {
         // 2.5 opcional: owner
         let isOwner = false;
         try {
-          const { data: ownerOk } = await supabase.rpc("is_owner");
+          const { data: ownerOk } = await supabase.rpc("is_owner_current_tenant");
           isOwner = ownerOk === true;
         } catch { /* ignore */ }
 

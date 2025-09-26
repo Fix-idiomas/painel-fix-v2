@@ -9,7 +9,7 @@
 - Garantia de fallback para o campo time: se não houver time válido na regra, usa o horário padrão da turma ou "08:00".
 
 ## 3. Ajustes em page.jsx (Financeiro)
-- Alteração do key do <tr> em rows.map para usar r.payment_id || idx, evitando warning de chave duplicada/ausente no React.
+- Alteração do key do <tr> em rows.map para usar r.payment_id || isso tá errado idx, evitando warning de chave duplicada/ausente no React.
 
 ## 4. Correções de erros de referência
 - Adição das funções utilitárias hasFn e gwName em financeGateway.js para evitar ReferenceError.

@@ -944,7 +944,8 @@ async function listPayments({ ym, status }) {
           : 0;
 
       return {
-        payment_id: p.id,
+        id: p.id,
+        payment_id: p.id,    
         student_id: p.student_id,
         student_name,
         payer_id: p.payer_id,

@@ -93,7 +93,7 @@ export default function Page() {
         if (canReadFinance) {
           const { data, error } = await supabase
             .from("payments")
-            .select("id, payment_id, student_id, payer_id, student_name_snapshot, payer_name_snapshot, amount, due_date, status")
+            .select("id, student_id, payer_id, student_name_snapshot, payer_name_snapshot, amount, due_date, status")
             .eq("status", "pending")
             .gte("due_date", todayISO)
             .lte("due_date", endISO)
@@ -141,7 +141,7 @@ export default function Page() {
 
       const up = rows7
         .map((r) => ({
-          id: r.payment_id || r.id,
+          id: r.id,
           due_date: r.due_date,
           amount: Number(r.amount || 0),
           student_name: r.student_name_snapshot ?? studentNameById[r.student_id] ?? "—",

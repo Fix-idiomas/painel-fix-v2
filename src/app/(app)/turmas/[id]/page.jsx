@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Modal from "@/components/Modal";
@@ -10,6 +10,7 @@ import { financeGateway } from "@/lib/financeGateway";
 // troque para useContext(SessionContext).
 import { useSession } from "@/contexts/SessionContext";
 import { useSearchParams } from "next/navigation";
+
 
 
 const WEEKDAYS = [
@@ -89,8 +90,8 @@ const turmaId = Array.isArray(params?.id) ? params.id[0] : params?.id;
   const [formSess, setFormSess] = useState({ date: "", notes: "", duration_hours: "0.5" });
   const [attendanceDraft, setAttendanceDraft] = useState([]); // [{student_id, name, present, note}]
   const [allPresent, setAllPresent] = useState(false);
-  const searchParams = useSearchParams();
-  const [openedFromQuery, setOpenedFromQuery] = useState(false);
+
+
 
 
   // ---- membros (somente admin/financeiro)
@@ -110,6 +111,51 @@ const turmaId = Array.isArray(params?.id) ? params.id[0] : params?.id;
     if (byName?.id) return norm(byName.id);
     return null;
   }, [isProfessor, teacherId, teachers, session?.userId, session?.name]);
+
+const openOnceRef = useRef(false);
+
+useEffect(() => {
+  const wantsNew = search?.get("modal") === "criar";
+  // Aguarda: query presente + membros carregados + ainda não abriu
+  if (!wantsNew || openOnceRef.current || !Array.isArray(members) || members.length === 0) return;
+
+  const dateQS  = (search.get("date") || "").slice(0, 10);
+  const durQS   = Number(search.get("duration_hours"));
+  const notesQS = search.get("notes") || "";
+
+  const duration_hours =
+    Number.isFinite(durQS) && durQS >= 0.5
+      ? durQS
+      : Number(turma?.meeting_duration_default ?? 0.5);
+
+  // 1) Draft de presença baseado nos membros já carregados
+  //    (cada aluno começa sem presença marcada e sem nota individual)
+  setAttendanceDraft(
+    members.map((m) => ({
+      student_id: m.id,
+      name: m.name,
+      present: false,
+      note: "",
+    }))
+  );
+
+  // 2) Prefill do formulário da sessão
+  setEditingSessId(null);
+  setFormSess({
+    date: dateQS,
+    notes: notesQS,
+    duration_hours: String(duration_hours),
+  });
+
+  // 3) Abre o modal
+  setOpenSess(true);
+  openOnceRef.current = true;
+
+  // 4) Limpa a query para não reabrir em refresh/back
+  const url = new URL(window.location.href);
+  ["modal", "date", "duration_hours", "notes"].forEach((k) => url.searchParams.delete(k));
+  window.history.replaceState({}, "", url);
+}, [search, turma?.meeting_duration_default, members]);
 
   async function loadAll() {
     setLoading(true);
@@ -219,22 +265,39 @@ const turmaId = Array.isArray(params?.id) ? params.id[0] : params?.id;
     setAllPresent(nextDraft.length > 0 && nextDraft.every((r) => !!r.present));
   }
   function openCreateSession() {
-    setEditingSessId(null);
-    setFormSess({
-      date: "",
-      notes: "",
-      duration_hours: String(turma?.meeting_duration_default ?? "0.5"),
-    });
-    const draft = members.map((m) => ({
-      student_id: m.id,
-      name: m.name,
-      present: false, // por padrão AUSENTE
-      note: "",
-    }));
-    setAttendanceDraft(draft);
-    setAllPresent(computeAllPresent(draft));
-    setOpenSess(true);
-  }
+  setEditingSessId(null);
+
+  // ↓ Horário padrão da turma (se houver): meeting_time OU primeiro meeting_rules[].time
+  const ruleTime =
+    Array.isArray(turma?.meeting_rules)
+      ? (turma.meeting_rules.find((r) => r && r.time)?.time || "")
+      : "";
+  const defaultTime = (turma?.meeting_time || ruleTime || "").trim(); // "HH:mm" ou ""
+
+  // Monta as notas com o horário (apenas se existir)
+  const baseNotes = "";
+  const notesWithTime = defaultTime
+    ? [baseNotes, `Horário padrão da turma: ${defaultTime}`].filter(Boolean).join("\n")
+    : baseNotes;
+
+  setFormSess({
+    date: "", // input date do modal continua aceitando YYYY-MM-DD
+    notes: notesWithTime,
+    duration_hours: String(turma?.meeting_duration_default ?? "0.5"),
+  });
+
+  // Preserva integralmente o draft de attendance e o fluxo de observações individuais
+  const draft = (members || []).map((m) => ({
+    student_id: m.id,
+    name: m.name,
+    present: false, // por padrão AUSENTE
+    note: "",
+  }));
+  setAttendanceDraft(draft);
+  setAllPresent(computeAllPresent(draft));
+  setOpenSess(true);
+}
+
   async function openEditSession(s) {
     setEditingSessId(s.id);
     setFormSess({

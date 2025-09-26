@@ -639,7 +639,7 @@ console.log("claim object:", session?.claim);
                 </tr>
               )}
               {rows.map((r) => {
-                const id = r.payment_id || r.id; // compat: mock x supabase
+                const id = r.id; 
                 return (
                   <tr key={id} className="border-t">
                     <Td>{r.student_name_snapshot || r.student_name || "—"}</Td>
