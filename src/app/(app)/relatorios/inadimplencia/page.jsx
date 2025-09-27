@@ -86,7 +86,7 @@ export default function RelatorioInadimplenciaPage() {
     const csvRows = rows.map((r) => ({
       aluno: r.student_name || r.student_name_snapshot || r.student_id,
       pagador: r.payer_name || r.payer_name_snapshot || r.payer_id,
-      competencia: String(r.competence_month || "").slice(0, 7),
+      competencia: String(r.due_date || "").slice(0, 7),
       vencimento: r.due_date,
       valor: String(r.amount || 0).replace(".", ","),
       dias_em_atraso: r.days_overdue || 0,
@@ -151,7 +151,7 @@ export default function RelatorioInadimplenciaPage() {
                   <tr key={r.id} className="border-t">
                     <Td>{r.student_name || r.student_name_snapshot || "—"}</Td>
                     <Td>{r.payer_name || r.payer_name_snapshot || "—"}</Td>
-                    <Td>{String(r.competence_month || "").slice(0, 7)}</Td>
+                    <Td>{String(r.due_date || "").slice(0, 7)}</Td>
                     <Td>{fmtDateBR(r.due_date)}</Td>
                     <Td className="text-right">{fmtBRL(r.amount)}</Td>
                     <Td className="text-right">{r.days_overdue || 0}d</Td>

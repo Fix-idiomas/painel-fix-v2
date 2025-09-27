@@ -961,7 +961,7 @@ async function listPayments({ ym, status }) {
         created_at: p.created_at,
       };
     })
-    .filter((r) => (monthStart ? r.competence_month === monthStart : true))
+    .filter((r) => (monthStart ? r.due_date?.slice(0, 7) === monthStart.slice(0, 7) : true))
     .filter((r) => (status && status !== "all" ? r.status === status : true));
 
   const sum = (arr) => arr.reduce((a, b) => a + Number(b.amount || 0), 0);

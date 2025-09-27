@@ -365,7 +365,7 @@ export default function GastosPage() {
     try {
       setSavingAvulso(true);
       const payload = {
-        date: formAvulso.date,
+        due_date: formAvulso.date,
         title: formAvulso.title.trim(),
         category: formAvulso.category.trim() || null,
         amount: Number(formAvulso.amount || 0),

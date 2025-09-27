@@ -1359,7 +1359,7 @@ async listPayments({ ym, status = "all", page = 1, pageSize = 50 } = {}) {
   // ==============================
   // DESPESAS — Entries
   // ==============================
-  async listExpenseEntries({ ym, status = "all" } = {}) {
+  async listExpenseEntries({ ym, status = "all", cost_center = null } = {}) {
     const monthStart = monthStartOf(ym);
 
     let q = supabase
@@ -1370,6 +1370,10 @@ async listPayments({ ym, status = "all", page = 1, pageSize = 50 } = {}) {
       .eq("competence_month", monthStart)
       .order("due_date", { ascending: true })
       .order("created_at", { ascending: true });
+
+    if (cost_center && cost_center !== "all") {
+      q = q.eq("cost_center", cost_center);
+    }
 
     if (status && status !== "all") q = q.eq("status", status);
 
