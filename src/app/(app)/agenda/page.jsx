@@ -3,6 +3,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseGateway as gw } from "@/lib/supabaseGateway";
 import { useRouter } from "next/navigation";
+import WeekGrid from "@/components/WeekGrid";
+
 
 // YYYY-MM-DD (fuso São Paulo)
 function todayISO() {
@@ -204,22 +206,35 @@ export default function AgendaPage() {
 
   // Navega para Turmas › [id] com query abrindo o modal lá
   function goToCreateSession(ev) {
+    console.log("[Agenda] Card clicado:", ev); // debug rápido no console
   // ev (planned): { turma_id, date:"YYYY-MM-DD", time:"HH:mm", duration_hours:number, ... }
-  const turmaId = String(ev?.turma_id ?? "");
-  if (!turmaId) return;
+  const turmaId =
+    String(ev?.turma_id ?? ev?.turmaId ?? ev?.turma?.id ?? "").trim();
+  if (!turmaId) {
+    alert("Não consegui identificar a turma deste card.");
+    return;
+  }
 
   const date = String(ev?.date ?? "").slice(0, 10);
   const durationHours = Number.isFinite(ev?.duration_hours)
     ? Math.max(0.5, Number(ev.duration_hours))
     : 0.5;
 
-  const notes = ev?.time ? `Criado via Agenda às ${ev.time}` : "";
+  // resolve HH:mm (ev.time -> ev.time_from_rule -> extrai de date ISO)
+  const hhmm = (() => {
+    if (ev?.time) return String(ev.time).slice(0, 5);
+    if (ev?.time_from_rule) return String(ev.time_from_rule).slice(0, 5);
+    const s = String(ev?.date || "");
+    return (s.length > 10 && s[10] === "T") ? s.slice(11, 16) : "";
+  })();
+  const notes = hhmm ? `Criado via Agenda às ${hhmm}` : "";
 
   const qs = new URLSearchParams();
   qs.set("modal", "criar");
   if (date) qs.set("date", date);
   qs.set("duration_hours", String(durationHours));
   if (notes) qs.set("notes", notes);
+  if (hhmm) qs.set("time", hhmm);
 
   router.push(`/turmas/${turmaId}?${qs.toString()}`);
 }
@@ -240,6 +255,72 @@ function goThisWeek() {
 function goFullWeek() {
   setSelectedDay(null);
 }
+// ⬆️ COLOQUE ESTES HELPERS LOGO ACIMA DO `return`:
+const groupsByDay = useMemo(() => {
+  const map = new Map(); // ymd -> [events]
+
+  for (const ev of (items || [])) {
+    const ymd = String(ev.date).slice(0, 10);
+
+    // ⛔️ pula DOMINGO (getDay() === 0)
+    const wd = new Date(`${ymd}T00:00:00`).getDay(); // 0..6 (0=Dom)
+    if (wd === 0) continue;
+
+    if (!map.has(ymd)) map.set(ymd, []);
+    map.get(ymd).push(ev);
+  }
+
+  // ordena eventos por horário dentro do dia
+  const toHHMM = (ev) => {
+    if (ev.time) return ev.time;
+    if (ev.time_from_rule) return ev.time_from_rule;
+    if (String(ev.date).length > 10) {
+      const d = new Date(ev.date);
+      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    }
+    return "00:00";
+  };
+
+  return Array.from(map.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([ymd, dayEvents]) => [ymd, dayEvents.sort((a, b) => toHHMM(a).localeCompare(toHHMM(b)))]);
+}, [items]);
+
+const weekdayShort = (ymd) => {
+  const d = new Date(`${ymd}T00:00:00`);
+  return ["dom","seg","ter","qua","qui","sex","sáb"][d.getDay()];
+};
+const daysOfWeek = useMemo(() => {
+  // já temos weekStart (segunda). Mantém padrão Seg→Sáb (6 colunas).
+  return Array.from({ length: 6 }, (_, i) => addDaysISO(weekStart, i));
+}, [weekStart]);
+
+// 👇 Normaliza eventos para o WeekGrid (garante turma_id, hhmm, duration_min)
+ const eventsForGrid = useMemo(() => {
+   const toHHMM = (ev) => {
+     if (ev?.time) return String(ev.time).slice(0, 5);
+     if (ev?.time_from_rule) return String(ev.time_from_rule).slice(0, 5);
+     const s = String(ev?.date || "");
+     return (s.length > 10 && s[10] === "T") ? s.slice(11, 16) : "00:00";
+   };
+   return (items || []).map((ev, i) => {
+     const ymd = String(ev.date).slice(0, 10);
+     const turmaId =
+       ev?.turma_id ?? ev?.turmaId ?? ev?.turma?.id ?? null;
+     const hhmm = toHHMM(ev);
+    const durationMin = Math.round((Number(ev?.duration_hours ?? 0.5) || 0.5) * 60);
+     return {
+       id: ev.id ?? `ev-${ymd}-${turmaId ?? "noTurma"}-${hhmm}-${i}`,
+       turma_id: turmaId,
+      turma_name: ev.turma_name,
+       date: ymd,
+      hhmm,
+       duration_min: durationMin,
+       type: ev.type,
+       has_attendance: ev.has_attendance,
+     };
+   });
+}, [items]);
 
 if (error) {
   return (
@@ -250,131 +331,71 @@ if (error) {
   );
 }
 
-  return (
-    <div className="p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="font-semibold text-lg">Agenda</h1>
-          <button onClick={showClaims} className="px-2 py-1 border rounded bg-yellow-50 hover:bg-yellow-100 text-yellow-900">Ver claims</button>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={goPrevWeek} className="px-2 py-1 border rounded" disabled={!!selectedDay}>◀ Semana</button>
-          <span className="text-sm text-gray-600">{selectedDay ? `Dia ${selectedDay}` : weekLabel}</span>
-          <button onClick={goNextWeek} className="px-2 py-1 border rounded" disabled={!!selectedDay}>Semana ▶</button>
-          {!selectedDay ? (
-            <button onClick={goThisWeek} className="px-2 py-1 border rounded ml-2">Hoje</button>
-          ) : (
-            <button onClick={goFullWeek} className="px-2 py-1 border rounded ml-2">Semana</button>
-          )}
-        </div>
-      </div>
-
-      {loading ? (
-        <p className="text-sm text-gray-500">Carregando…</p>
-      ) : (
-        <ul className="space-y-2">
-          {items.map((ev0, idx) => {
-            // 1) injeta horário da regra quando a sessão real está com 00:00
-            // (se tiver o array `turmas` no escopo; senão, deixe `turma = null`)
-             const turma =
-                Array.isArray(turmas)
-                   ? turmas.find(t => String(t.id) === String(ev0.turma_id))
-                   : null;
-
-             const ev = ev0;
-            
-             const ymd = String(ev.date).slice(0, 10);
-
-           // HH:mm seguro (sem toISOString para não aplicar UTC shift)
-          let hhmm = "00:00";
-          if (ev.time) hhmm = ev.time;
-          else if (ev.time_from_rule) hhmm = ev.time_from_rule;
-          else if (String(ev.date).length > 10) {
-            const d = new Date(ev.date);
-            const hh = String(d.getHours()).padStart(2, "0");
-            const mm = String(d.getMinutes()).padStart(2, "0");
-            hhmm = `${hh}:${mm}`;
-          }// 🔒 Correção: se for sessão real e ainda ficou 00:00,
-  // força horário da rule (weekday) ou meeting_time ou 08:00
-  if (ev.type === "session" && hhmm === "00:00") {
-    const [Y, M, D] = ymd.split("-").map(Number);
-    const wd = new Date(Date.UTC(Y, M - 1, D)).getUTCDay(); // 0..6 (UTC)
-    const rules = Array.isArray(turma?.meeting_rules) ? turma.meeting_rules : [];
-    const rule = rules.find(r => Number(r.weekday) === wd);
-    hhmm = (rule?.time || turma?.meeting_time || "08:00").trim();
-  }
-           // ⬇️ usa os helpers que você adicionou
-           const today = isToday(ymd);
-           const todayCls = today ? "bg-amber-50/40 border-amber-300" : "";
-          
-           // 🔎 NOVO: rótulo e regra do botão
-           let displayLabel = ev.label;
-          if (ev.type === "session") {
-          displayLabel = ev.has_attendance ? "Sessão (com presença)" : "Sessão (registrada)";
-       }
-          const canRegister =
-          ev.type === "planned" || (ev.type === "session" && !ev.has_attendance);
-         
-         // --- normalizações de status ---
-const hasAttendanceStrict =
-  ev.has_attendance === true ||
-  ev.has_attendance === "true" ||
-  ev.has_attendance === "t" ||
-  ev.has_attendance === 1;
-
-// badge (único)
-let statusText = "Registrada";
-let statusCls = "border-slate-300 bg-slate-100 text-slate-700";
-if (ev.type === "planned") {
-  statusText = "Planejada";
-  statusCls = "border-amber-300 bg-amber-50 text-amber-800";
-} else if (hasAttendanceStrict) {
-  statusText = "Com presença";
-  statusCls = "border-emerald-300 bg-emerald-50 text-emerald-800";
-}
- const showLabelText = ev.type === "session" && !hasAttendanceStrict; // só para “registrada”
 return (
-           <li key={`${ymd}-${idx}`} className={`p-3 border rounded ${todayCls}`}>
-    <div className="flex items-center justify-between">
-      <div>
-        {/* TÍTULO — só nome e (opcional) HOJE */}
-        <div className="font-medium">
-          {ev.turma_name}
-          {today && (
-            <span className="ml-2 align-middle rounded px-1.5 py-0.5 text-xs border border-amber-300 bg-amber-100 text-amber-800">
-              HOJE
-            </span>
-          )}
+  <div className="p-4 space-y-4">
+    {/* Toolbar topo — conforme combinado */}
+    <div className="flex flex-wrap items-center justify-between gap-4">
+      <h1 className="text-2xl font-bold tracking-tight">Agenda</h1>
+
+      <div className="flex items-center gap-2">
+        {/* Semana anterior / próxima */}
+        <button
+          onClick={goPrevWeek}
+          className="px-3 py-1.5 border rounded-md shadow-sm bg-white hover:bg-slate-50 disabled:opacity-50"
+          disabled={!!selectedDay}
+          aria-label="Semana anterior"
+        >
+          ◀
+        </button>
+
+        <span className="text-sm text-slate-600 w-[200px] text-center">
+          {selectedDay ? `Dia ${selectedDay}` : weekLabel}
+        </span>
+
+        <button
+          onClick={goNextWeek}
+          className="px-3 py-1.5 border rounded-md shadow-sm bg-white hover:bg-slate-50 disabled:opacity-50"
+          disabled={!!selectedDay}
+          aria-label="Próxima semana"
+        >
+          ▶
+        </button>
+
+        {/* Hoje */}
+        <button
+          onClick={goThisWeek}
+          className="px-3 py-1.5 border rounded-md shadow-sm bg-white hover:bg-slate-50 ml-2"
+        >
+          Hoje
+        </button>
+
+        {/* Toggle Semana/Dia (pílulas) */}
+        <div className="ml-2 inline-flex border rounded-lg overflow-hidden shadow-sm">
+          <button
+            onClick={() => setSelectedDay(null)}
+            className={`px-3 py-1.5 text-sm ${!selectedDay ? "bg-slate-900 text-white" : "bg-white"}`}
+          >
+            Semana
+          </button>
+          <button
+            onClick={() => setSelectedDay(todayISO())}
+            className={`px-3 py-1.5 text-sm ${selectedDay ? "bg-slate-900 text-white" : "bg-white"}`}
+          >
+            Dia
+          </button>
         </div>
-
-        {/* LINHA DE DATA — data • hora + (opcional) texto da sessão + badge de status */}
-       <div className="text-sm text-gray-600">
-  {fmtBRDateDots ? fmtBRDateDots(ymd) : ymd} • {hhmm}
-  {showLabelText && <> — Sessão (registrada)</>}
-  <span className={`ml-2 align-middle rounded px-1.5 py-0.5 text-xs border ${statusCls}`}>
-    {statusText}
-  </span>
-</div>
       </div>
-
-      {canRegister && (
-                   <button
-                    onClick={() => goToCreateSession(ev)}
-                    className="text-xs px-2 py-1 border rounded hover:bg-gray-50"
-                    title="Abrir criação de sessão na página da turma"
-                  >
-                    Registrar aula
-                  </button>
-                )}
-              </div>
-            </li>
-          );
-        })}
-          {items.length === 0 && (
-            <li className="text-sm text-gray-500">Nenhum item nesta semana.</li>
-          )}
-        </ul>
-      )}
     </div>
-  );
-}
+
+    {loading ? (
+      <p className="text-sm text-gray-500">Carregando…</p>
+    ) : (
+      <WeekGrid
+        days={daysOfWeek}
+        events={eventsForGrid}
+        fmtBRDateDots={fmtBRDateDots}
+        onOpen={goToCreateSession}
+      />
+    )}
+  </div>
+)}
