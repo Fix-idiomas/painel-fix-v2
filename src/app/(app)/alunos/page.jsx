@@ -32,6 +32,9 @@ export default function AlunosPage() {
     monthly_value: "",
     due_day: "5",
     birth_date: "",
+    email: "",
+    endereco: "",
+    cpf: "",
   });
   const [payerMode, setPayerMode] = useState(PAYER_MODE.SELF);
   const [payerId, setPayerId] = useState("");
@@ -48,6 +51,9 @@ export default function AlunosPage() {
     monthly_value: "",
     due_day: "5",
     birth_date: "",
+    email: "",
+    endereco: "",
+    cpf: "",
   });
 
   // pagador no EDIT
@@ -122,6 +128,9 @@ export default function AlunosPage() {
       monthly_value: String(s?.monthly_value ?? ""),
       due_day: String(s?.due_day ?? ""),
       birth_date: s?.birth_date || "",
+      email: s?.email ?? "",
+      endereco: s?.endereco ?? "",
+      cpf: s?.cpf ?? "",
     });
     // inicializa pagador no modo correto
     if (s?.payer_id) {
@@ -169,6 +178,9 @@ export default function AlunosPage() {
         monthly_value: Number(formEdit.monthly_value || 0),
         due_day: newDueDay,
         birth_date: formEdit.birth_date || null,
+        email: formEdit.email || null,
+        endereco: formEdit.endereco || null,
+        cpf: formEdit.cpf || null,
         payer_id: chosenPayerId,
       };
 
@@ -379,6 +391,31 @@ export default function AlunosPage() {
               className="border rounded px-3 py-2 w-full"
             />
           </div>
+          <div>
+  <label className="block text-sm mb-1">E-mail</label>
+  <input
+    type="email"
+    value={formCreate.email}
+    onChange={e => setFormCreate(f => ({ ...f, email: e.target.value }))}
+    className="border rounded px-3 py-2 w-full"
+  />
+</div>
+<div>
+  <label className="block text-sm mb-1">Endereço</label>
+  <input
+    value={formCreate.endereco}
+    onChange={e => setFormCreate(f => ({ ...f, endereco: e.target.value }))}
+    className="border rounded px-3 py-2 w-full"
+  />
+</div>
+<div>
+  <label className="block text-sm mb-1">CPF</label>
+  <input
+    value={formCreate.cpf}
+    onChange={e => setFormCreate(f => ({ ...f, cpf: e.target.value }))}
+    className="border rounded px-3 py-2 w-full"
+  />
+</div>
 
           {/* Pagador (cadastro) */}
           <div className="sm:col-span-2 mt-2">
@@ -498,6 +535,31 @@ export default function AlunosPage() {
               type="date"
               value={formEdit.birth_date}
               onChange={(e) => setFormEdit((f) => ({ ...f, birth_date: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">E-mail</label>
+            <input
+              type="email"
+              value={formEdit.email}
+              onChange={e => setFormEdit(f => ({ ...f, email: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Endereço</label>
+            <input
+              value={formEdit.endereco}
+              onChange={e => setFormEdit(f => ({ ...f, endereco: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">CPF</label>
+            <input
+              value={formEdit.cpf}
+              onChange={e => setFormEdit(f => ({ ...f, cpf: e.target.value }))}
               className="border rounded px-3 py-2 w-full"
             />
           </div>
