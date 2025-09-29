@@ -270,14 +270,22 @@ async function loadMembersByTenantId(tenantId) {
           </div>
 
           {/* Preferências / Cobrança placeholders */}
-          <div className="space-y-1 opacity-80">
-            <h3 className="text-sm font-medium">Preferências do Tenant</h3>
-            <p className="text-sm">Em breve: renomear tenant, branding (logo/cor), subdomínio.</p>
-          </div>
-          <div className="space-y-1 opacity-80">
-            <h3 className="text-sm font-medium">Cobrança</h3>
-            <p className="text-sm">Em breve: plano, forma de pagamento e faturas.</p>
-          </div>
+<div className="space-y-1">
+  <div className="flex items-center justify-between">
+    <h3 className="text-sm font-medium">Preferências do Tenant</h3>
+    <Link
+      href="/configuracoes"
+      className="rounded-lg border px-3 py-1.5 text-sm hover:bg-neutral-50"
+      title="Abrir Configurações"
+    >
+      Abrir Configurações
+    </Link>
+  </div>
+  <p className="text-sm text-neutral-600">
+    Gerencie logo, nome da marca, layout de navegação e tema.
+  </p>
+</div>
+
 
           {/* Membros */}
           <div className="pt-2">

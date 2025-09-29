@@ -10,13 +10,15 @@
  */
 
 export const NAV_ITEMS = [
-  { key: "home",       label: "Início",      href: "/" },
-  { key: "cadastro",   label: "Cadastro",    href: "/cadastro",   perm: { area: "registry",  action: "read" } },
-  { key: "turmas",     label: "Turmas",      href: "/turmas",     perm: { area: "classes",   action: "read" } },
-  { key: "agenda",     label: "Agenda",      href: "/agenda",     perm: { area: "classes",   action: "read" } },
-  { key: "relatorios", label: "Relatórios",  href: "/relatorios" },
-  { key: "financeiro", label: "Financeiro",  href: "/financeiro", perm: { area: "finance",   action: "read" } },
-  { key: "config",     label: "Configurações", href: "/config",   perm: { area: "admin",     action: "read" }, meta: { icon: "settings" } },
+  { key: "home",       label: "Início",      href: "/",              meta: { icon: "home" } },
+  { key: "cadastro",   label: "Cadastro",    href: "/cadastro",      perm: { area: "registry",  action: "read" }, meta: { icon: "folder" } },
+  { key: "turmas",     label: "Turmas",      href: "/turmas",        perm: { area: "classes",   action: "read" }, meta: { icon: "teacher" } },
+  { key: "agenda",     label: "Agenda",      href: "/agenda",        perm: { area: "classes",   action: "read" }, meta: { icon: "calendar" } },
+  { key: "relatorios", label: "Relatórios",  href: "/relatorios",    meta: { icon: "chart" } },
+  { key: "financeiro", label: "Financeiro",  href: "/financeiro",    perm: { area: "finance",   action: "read" }, meta: { icon: "money" } },
+
+  // 🔒 Admin-only (owner/admin) — aponta para /configuracoes
+  { key: "config",     label: "Configurações", href: "/configuracoes", requireAdmin: true, meta: { icon: "settings" } },
 ];
 
 /** Decide se um item é visível dado isAdmin e perms do SessionContext. */
@@ -32,7 +34,16 @@ export function isItemVisible(item, { isAdmin, perms }) {
 }
 
 /** Retorna a lista já filtrada, mantendo a ordem. */
-export function getVisibleNav(sessionContext) {
-  const { isAdmin, perms } = sessionContext || {};
-  return NAV_ITEMS.filter((it) => isItemVisible(it, { isAdmin, perms }));
+export function getVisibleNav({ isAdmin, perms }) {
+  return NAV_ITEMS.filter((it) => {
+    // Admin-only
+    if (it.requireAdmin) return !!isAdmin;
+
+    // Itens sem permissão específica
+    if (!it.perm) return true;
+
+    // Itens baseados em permissões (ex.: classes.read, finance.read, etc.)
+    const { area, action } = it.perm;
+    return !!perms?.[area]?.[action];
+  });
 }

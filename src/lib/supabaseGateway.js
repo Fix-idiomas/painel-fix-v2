@@ -1028,7 +1028,57 @@ async upsertAttendance(sessionId, studentId, { present, note }) {
 
     return { generated, pruned, start, end };
   },
+ // --- TENANT SETTINGS (usa RPCs reais) ---
+async getTenantSettings() {
+  const { data, error } = await supabase.rpc("get_tenant_settings");
+  if (error) throw new Error(`getTenantSettings: ${error.message}`);
+  // A função retorna o registro inteiro de tenant_settings como JSONB (ou {}).
+  // Normalizamos com defaults seguros na ponta.
+  return data || {};
+},
 
+async upsertTenantSettings(payload = {}) {
+  // Sanitiza/normaliza apenas campos aceitos pela função:
+  // brand_name, logo_url, subtitle, nav_layout, sidebar_width, header_density,
+  // theme (json), nav_overrides (json)
+  const clean = {};
+  if (payload.brand_name !== undefined)   clean.brand_name = String(payload.brand_name || "").trim() || null;
+  if (payload.logo_url !== undefined)     clean.logo_url = String(payload.logo_url || "").trim() || null;
+  if (payload.subtitle !== undefined)     clean.subtitle = String(payload.subtitle || "").trim() || null;
+
+  if (payload.nav_layout !== undefined) {
+    // a função espera string; padrão no SQL é 'vertical'
+    const v = String(payload.nav_layout || "").trim().toLowerCase();
+    clean.nav_layout = v || null; // ex.: 'vertical' | 'horizontal'
+  }
+
+  if (payload.sidebar_width !== undefined) {
+    const n = Number(payload.sidebar_width);
+    clean.sidebar_width = Number.isFinite(n) ? Math.max(160, Math.min(400, Math.trunc(n))) : null;
+  }
+
+  if (payload.header_density !== undefined) {
+    // no SQL padrão é 'regular' (poderia ser 'compact', etc)
+    const d = String(payload.header_density || "").trim().toLowerCase();
+    clean.header_density = d || null;
+  }
+
+  if (payload.theme !== undefined) {
+    // deve ser JSON (obj)
+    const t = payload.theme;
+    clean.theme = (t && typeof t === "object") ? t : {};
+  }
+
+  if (payload.nav_overrides !== undefined) {
+    // deve ser JSON (array)
+    const n = payload.nav_overrides;
+    clean.nav_overrides = Array.isArray(n) ? n : [];
+  }
+
+  const { error } = await supabase.rpc("upsert_tenant_settings", { payload: clean });
+  if (error) throw new Error(`upsertTenantSettings: ${error.message}`);
+  return true;
+},
   // ==============================
   // FINANCEIRO — Mensalidades
   // ==============================
