@@ -1,41 +1,54 @@
 "use client";
 
-import Tabs from "@/components/Tabs";
-import Sidebar from "@/components/Sidebar";
+import { useState } from "react";
 import { SessionProvider } from "@/contexts/SessionContext";
+import Sidebar from "@/components/Sidebar";
 
 export default function AppLayout({ children }) {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   return (
     <SessionProvider>
-      <div className="flex min-h-screen bg-[var(--fix-bg)]">
-        {/* Lateral esquerda */}
-        <Sidebar />
+      {/* Overlay (mobile) */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
 
-        {/* Coluna direita: header + conteúdo */}
+      <div className="min-h-screen md:flex">
+        {/* Sidebar: fixa no desktop, drawer no mobile */}
+        <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+
+        {/* Conteúdo */}
         <div className="flex min-h-screen flex-1 flex-col">
-           <header className="border-b border-[var(--fix-border)] bg-[var(--fix-surface)]">
-            <div className="mx-auto flex max-w-5xl flex-col px-4 py-3">
-              <div className="flex items-center justify-between gap-4">
-                <a href="/" className="font-semibold">Painel Fix v2</a>
-
-                {/* Mock logout (opcional) */}
-                <form action="/api/mock-logout" method="post">
-                  <button type="submit" className="text-sm underline">
-                    Sair
-                  </button>
-                </form>
+          {/* Header simples com hambúrguer (mobile) */}
+          <header className="sticky top-0 z-30 border-b bg-white">
+            <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <button
+                  className="md:hidden inline-flex h-9 w-9 items-center justify-center rounded border"
+                  aria-label="Abrir menu"
+                  onClick={() => setSidebarOpen(true)}
+                >
+                  <span className="i-lucide-menu h-5 w-5" />
+                </button>
+                <span className="font-semibold">Painel Fix v2</span>
               </div>
 
-              {/* Tabs + seletor de papéis (vem de <Tabs />) */}
-              <div className="mt-3">
-                <Tabs />
-              </div>
+              {/* Mock logout, como já estava */}
+              <form action="/api/mock-logout" method="post">
+                <button type="submit" className="text-sm underline">
+                  Sair
+                </button>
+              </form>
             </div>
           </header>
 
-          <main className="mx-auto w-full max-w-5xl p-4">
-            {children}
-          </main>
+          {/* Main */}
+          <main className="mx-auto w-full max-w-6xl flex-1 p-4">{children}</main>
         </div>
       </div>
     </SessionProvider>
