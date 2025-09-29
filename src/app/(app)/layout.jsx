@@ -7,13 +7,13 @@ import { SessionProvider } from "@/contexts/SessionContext";
 export default function AppLayout({ children }) {
   return (
     <SessionProvider>
-      <div className="flex min-h-screen bg-gray-50">
+      <div className="flex min-h-screen bg-[var(--fix-bg)]">
         {/* Lateral esquerda */}
         <Sidebar />
 
         {/* Coluna direita: header + conteúdo */}
         <div className="flex min-h-screen flex-1 flex-col">
-          <header className="border-b bg-white">
+           <header className="border-b border-[var(--fix-border)] bg-[var(--fix-surface)]">
             <div className="mx-auto flex max-w-5xl flex-col px-4 py-3">
               <div className="flex items-center justify-between gap-4">
                 <a href="/" className="font-semibold">Painel Fix v2</a>

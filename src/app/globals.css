@@ -1,2 +1,41 @@
 @import "tailwindcss";
-/* pode deixar vazio por enquanto; sem @apply */
+
+/* === Paleta Fix (tokens) === */
+:root {
+  /* Vinho/avermelhado da logo */
+  --fix-primary:        #8B1C2C; /* principal */
+  --fix-primary-600:    #7a1927;
+  --fix-primary-700:    #681522;
+
+  /* Acentos complementares */
+  --fix-accent:         #E94F37; /* laranja-avermelhado */
+  --fix-accent-600:     #d24732;
+
+  /* Neutros (fundos/bordas/texto) */
+  --fix-bg:             #F7F7F8;
+  --fix-surface:        #FFFFFF;
+  --fix-border:         #E5E7EB;
+  --fix-text:           #0F172A;
+  --fix-text-muted:     #475569;
+
+  /* Estados */
+  --fix-success:        #10B981;
+  --fix-warning:        #F59E0B;
+  --fix-danger:         #EF4444;
+}
+
+/* Helpers leves (opcionais) */
+.bg-fix      { background-color: var(--fix-bg); }
+.text-fix    { color: var(--fix-text); }
+.text-muted  { color: var(--fix-text-muted); }
+.border-fix  { border-color: var(--fix-border); }
+.bg-surface  { background-color: var(--fix-surface); }
+
+/* Botão primário base (para futura padronização) */
+.btn-fix {
+  background-color: var(--fix-primary);
+  color: #fff;
+}
+.btn-fix:hover {
+  background-color: var(--fix-primary-600);
+}

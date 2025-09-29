@@ -59,19 +59,19 @@ export default function Sidebar() {
 
   return (
     <aside
-      className={`h-screen border-r bg-white transition-all duration-200
-        ${collapsed ? "w-14" : "w-60"}`}
+      className={`h-screen border-r border-[var(--fix-border)] bg-[var(--fix-surface)] transition-all duration-200
+         ${collapsed ? "w-14" : "w-60"}`}
       aria-label="Menu lateral de navegação"
     >
       {/* topo: logo/nome + botão de colapso */}
-      <div className="flex items-center justify-between gap-2 border-b px-3 py-3">
-        <div className={`font-semibold truncate ${collapsed ? "opacity-0 pointer-events-none" : ""}`}>
+     <div className="flex items-center justify-between gap-2 border-b border-[var(--fix-border)] px-3 py-3">
+         <div className={`font-semibold truncate text-[var(--fix-text)] ${collapsed ? "opacity-0 pointer-events-none" : ""}`}>
           Painel Fix
         </div>
         <button
           type="button"
           aria-label={collapsed ? "Expandir menu" : "Recolher menu"}
-          className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
+          className="rounded border border-[var(--fix-border)] px-2 py-1 text-xs text-[var(--fix-text)] hover:bg-gray-100"
           onClick={() => setCollapsed((v) => !v)}
         >
           {collapsed ? "›" : "‹"}
@@ -89,8 +89,8 @@ export default function Sidebar() {
               className={[
                 "group flex items-center gap-3 rounded-md px-2 py-2 text-sm",
                 active
-                  ? "bg-gray-900 text-white"
-                  : "text-gray-700 hover:bg-gray-100",
+                 ? "bg-[var(--fix-primary)] text-white"
+                  : "text-[var(--fix-text)] hover:bg-gray-100",
               ].join(" ")}
               title={collapsed ? it.label : undefined}
             >
@@ -104,7 +104,7 @@ export default function Sidebar() {
       </nav>
 
       {/* rodapé opcional do rail */}
-      <div className="mt-auto px-2 py-3 text-[11px] text-gray-400">
+      <div className="mt-auto px-2 py-3 text-[11px] text-[var(--fix-text-muted)]">
         <div className={`truncate ${collapsed ? "opacity-0 pointer-events-none" : ""}`}>
           v2 • Fix Idiomas
         </div>
