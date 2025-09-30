@@ -1,20 +1,23 @@
 // src/app/(app)/configuracoes/page.jsx
 "use client";
-
 import { useEffect, useState, useMemo } from "react";
 import Guard from "@/components/Guard";
 import { supabaseGateway } from "@/lib/supabaseGateway";
+import { supabase } from "@/lib/supabaseClient";
+import { useSession } from "@/contexts/SessionContext";
 
-// Campos reais aceitos por upsert_tenant_settings(payload jsonb)
 const DEFAULTS = {
+  // branding
   brand_name: "",
-  logo_url: "",
+  brand_logo_url: "", // ← interno (preview/envio), sem input de texto
   subtitle: "",
-  nav_layout: "vertical",        // 'vertical' | 'horizontal'
-  sidebar_width: 256,            // 160..400 (guard no gateway)
-  header_density: "regular",     // 'regular' | 'compact' (livre)
-  theme: {},                     // json object
-  nav_overrides: [],             // json array
+  // navegação/layout
+  nav_layout: "vertical",     // "vertical" | "horizontal"
+  sidebar_width: 256,         // px
+  header_density: "regular",  // "regular" | "compact"
+  // tema/overrides
+  theme: {},                  // objeto
+  nav_overrides: [],          // array
 };
 
 export default function ConfiguracoesPage() {
@@ -22,6 +25,11 @@ export default function ConfiguracoesPage() {
   const [saving, setSaving]   = useState(false);
   const [err, setErr]         = useState(null);
   const [ok, setOk]           = useState(null);
+
+  const { session } = useSession();
+
+  const [logoFile, setLogoFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
 
   // Estado do form (campos reais)
   const [form, setForm] = useState(DEFAULTS);
@@ -45,14 +53,16 @@ export default function ConfiguracoesPage() {
         if (!alive) return;
 
         const next = {
-          brand_name: data?.brand_name ?? DEFAULTS.brand_name,
-          logo_url: data?.logo_url ?? DEFAULTS.logo_url,
-          subtitle: data?.subtitle ?? DEFAULTS.subtitle,
-          nav_layout: data?.nav_layout ?? DEFAULTS.nav_layout,
-          sidebar_width: Number(data?.sidebar_width ?? DEFAULTS.sidebar_width),
+          brand_name:     data?.brand_name ?? DEFAULTS.brand_name,
+          brand_logo_url: data?.logo_url ?? DEFAULTS.brand_logo_url, // ← mapeia aqui
+          subtitle:       data?.subtitle ?? DEFAULTS.subtitle,
+
+          nav_layout:     data?.nav_layout ?? DEFAULTS.nav_layout,
+          sidebar_width:  Number(data?.sidebar_width ?? DEFAULTS.sidebar_width),
           header_density: data?.header_density ?? DEFAULTS.header_density,
-          theme: (data?.theme && typeof data.theme === "object") ? data.theme : {},
-          nav_overrides: Array.isArray(data?.nav_overrides) ? data.nav_overrides : [],
+
+          theme:          (data?.theme && typeof data.theme === "object") ? data.theme : {},
+          nav_overrides:  Array.isArray(data?.nav_overrides) ? data.nav_overrides : [],
         };
 
         setForm(next);
@@ -107,14 +117,14 @@ export default function ConfiguracoesPage() {
         throw new Error("Corrija os erros de JSON antes de salvar.");
       }
       await supabaseGateway.upsertTenantSettings({
-        brand_name: form.brand_name || null,
-        logo_url: form.logo_url || null,
-        subtitle: form.subtitle || null,
-        nav_layout: form.nav_layout || null,
-        sidebar_width: Number(form.sidebar_width || 256),
+        brand_name:     form.brand_name || null,
+        logo_url:       form.brand_logo_url || null, // ← mapeia de volta
+        subtitle:       form.subtitle || null,
+        nav_layout:     form.nav_layout || null,
+        sidebar_width:  Number(form.sidebar_width || 256),
         header_density: form.header_density || null,
-        theme: form.theme || {},
-        nav_overrides: form.nav_overrides || [],
+        theme:          form.theme || {},
+        nav_overrides:  form.nav_overrides || [],
       });
       setOk("Configurações salvas.");
     } catch (e) {
@@ -127,13 +137,57 @@ export default function ConfiguracoesPage() {
   // Preview simples do branding
   const brandPreview = useMemo(() => {
     return {
-      name: form.brand_name?.trim() || "Sua marca",
-      logo: form.logo_url?.trim() || "",
+      name:     form.brand_name?.trim() || "Sua marca",
+      logo:     form.brand_logo_url?.trim() || "", // ← usa o campo correto do form
       subtitle: form.subtitle?.trim() || "",
     };
   }, [form]);
 
-  // Proteção de rota via RPC real (admin/owner)
+  // Upload de logo → bucket `branding` (público), salva URL nas settings (logo_url)
+  async function uploadLogo() {
+    if (!logoFile) return;
+    try {
+      setUploading(true);
+
+      // tenta obter tenantId da sessão; se não tiver, busca por RPC
+      let tenantId = session?.tenantId;
+      if (!tenantId) {
+        const { data: t, error: te } = await supabase.rpc("current_tenant_id");
+        if (te) throw te;
+        tenantId = t;
+      }
+      if (!tenantId) throw new Error("Tenant ausente na sessão.");
+
+      // caminho do arquivo: branding/{tenant}/logo-{timestamp}.{ext}
+      const ext  = logoFile.name.split(".").pop()?.toLowerCase() || "png";
+      const path = `${tenantId}/logo-${Date.now()}.${ext}`;
+
+      const { error: upErr } = await supabase.storage
+        .from("branding")
+        .upload(path, logoFile, { upsert: true, cacheControl: "3600" });
+      if (upErr) throw upErr;
+
+      const { data } = supabase.storage.from("branding").getPublicUrl(path);
+      const publicUrl = data?.publicUrl;
+      if (!publicUrl) throw new Error("Falha ao obter URL pública.");
+
+      // atualiza estado local e persiste no settings (logo_url)
+      setForm((f) => ({ ...f, brand_logo_url: publicUrl }));
+
+      await supabaseGateway.upsertTenantSettings({
+        logo_url: publicUrl, // ← apenas o que mudou já basta
+      });
+
+      setOk("Logo enviada e salva.");
+    } catch (e) {
+      setErr(e?.message || "Falha ao enviar logo.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+
+// Proteção de rota via RPC real (admin/owner)
   return (
     <Guard
       fallback={
@@ -172,18 +226,41 @@ export default function ConfiguracoesPage() {
                     onChange={(e) => setField("brand_name", e.target.value)}
                     placeholder="Fix Idiomas"
                   />
+                  <div className="mt-3 grid gap-2">
+  <label className="block text-xs font-medium">Upload de logo (PNG/JPG/SVG)</label>
+  <div className="flex items-center gap-2">
+    <input
+      type="file"
+      accept=".png,.jpg,.jpeg,.svg"
+      onChange={(e) => setLogoFile(e.target.files?.[0] ?? null)}
+      className="w-full rounded border px-3 py-2 text-sm"
+    />
+    <button
+      type="button"
+      onClick={uploadLogo}
+      disabled={!logoFile || uploading}
+      className="rounded border px-3 py-2 text-sm hover:bg-neutral-50 disabled:opacity-50"
+      title="Enviar para o Storage"
+    >
+      {uploading ? "Enviando…" : "Enviar"}
+    </button>
+  </div>
+
+  {/* Preview opcional */}
+  {form.brand_logo_url && (
+    <div className="mt-2">
+      <span className="block text-[11px] text-slate-500 mb-1">Pré-visualização</span>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={form.brand_logo_url}
+        alt="Logo do tenant"
+        className="h-10 object-contain"
+      />
+    </div>
+  )}
+</div>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1">Logo (URL)</label>
-                  <input
-                    type="url"
-                    className="w-full rounded border px-3 py-2 text-sm"
-                    value={form.logo_url}
-                    onChange={(e) => setField("logo_url", e.target.value)}
-                    placeholder="https://…/logo.png"
-                  />
                 </div>
-              </div>
               <div>
                 <label className="block text-xs font-medium mb-1">Subtítulo</label>
                 <input
