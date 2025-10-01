@@ -62,24 +62,16 @@ export default function AppLayout({ children }) {
           <header className="sticky top-0 z-30 border-b bg-white">
             <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-4 py-3">
               <div className="flex items-center gap-2">
-                <button
-                  className="md:hidden inline-flex h-9 w-9 items-center justify-center rounded border"
-                  aria-label="Abrir menu"
-                  onClick={() => setSidebarOpen(true)}
-                >
-                  <span className="i-lucide-menu h-5 w-5" />
-                </button>
-                {brandLogoUrl ? (
-                   <img
-      src={brandLogoUrl}
-      alt={brandName || "Logo"}
-      className="h-7 md:h-8 w-auto max-h-8 md:max-h-9 object-contain"
-      draggable={false}
-    />
-  ) : (
-                <span className="font-semibold">{brandName}</span>
-                )}
-              </div>
+  <button
+    className="md:hidden inline-flex h-9 w-9 items-center justify-center rounded border"
+    aria-label="Abrir menu"
+    onClick={() => setSidebarOpen(true)}
+  >
+    <span className="i-lucide-menu h-5 w-5" />
+  </button>
+  {/* escondemos totalmente brand no header */}
+  <span className="sr-only">Painel</span>
+</div>
 
               {/* Mock logout, como já estava */}
               <form action="/api/mock-logout" method="post">

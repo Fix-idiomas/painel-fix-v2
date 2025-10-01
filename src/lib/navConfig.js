@@ -11,7 +11,7 @@
 
 export const NAV_ITEMS = [
   { key: "home",       label: "Início",      href: "/",              meta: { icon: "home" } },
-  { key: "cadastro",   label: "Cadastro",    href: "/cadastro",      perm: { area: "registry",  action: "read" }, meta: { icon: "folder" } },
+  
   { key: "turmas",     label: "Turmas",      href: "/turmas",        perm: { area: "classes",   action: "read" }, meta: { icon: "teacher" } },
   { key: "agenda",     label: "Agenda",      href: "/agenda",        perm: { area: "classes",   action: "read" }, meta: { icon: "calendar" } },
   { key: "relatorios", label: "Relatórios",  href: "/relatorios",    meta: { icon: "chart" } },
@@ -19,7 +19,9 @@ export const NAV_ITEMS = [
 
   // 🔒 Admin-only (owner/admin) — aponta para /configuracoes
   { key: "config",     label: "Configurações", href: "/configuracoes", requireAdmin: true, meta: { icon: "settings" } },
+  { key: "cadastro",   label: "Cadastro",    href: "/cadastro",      requireAdmin: true, meta: { icon: "folder" } },
 ];
+
 
 /** Decide se um item é visível dado isAdmin e perms do SessionContext. */
 export function isItemVisible(item, { isAdmin, perms }) {
