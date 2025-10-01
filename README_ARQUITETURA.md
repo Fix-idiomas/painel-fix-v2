@@ -1,4 +1,4 @@
-# 📘 README — Arquitetura e Funcionamento do Site (Fix Flow / Painel Fix)
+# 📘 README — Arquitetura, Rotas, Componentes e Libs (Fix Flow / Painel Fix)
 
 ## 1. Arquitetura em Camadas
 
@@ -27,6 +27,119 @@
   - Cada tabela tem coluna `tenant_id uuid not null default current_tenant_id()`.
   - Policies sempre incluem `tenant_id = current_tenant_id()`.
   - Usuário **nunca** envia `tenant_id` → banco preenche sozinho.
+
+---
+
+## 1. Estrutura de Pastas e Rotas
+
+
+### Rotas Públicas (App Router)
+
+**src/app/(auth)/**
+
+```
+layout.jsx
+login/
+  page.jsx
+signup/
+  page.jsx
+```
+
+**src/app/(public)/**
+*Pasta não encontrada no projeto atual, mas normalmente incluiria:*
+  - login/page.jsx
+  - signup/page.jsx
+  - accept-invite/page.jsx
+  - onboarding/page.jsx
+
+### Rotas Privadas (App Router)
+
+**src/app/(app)/**
+
+```
+accept-invite/
+  page.jsx
+agenda/
+  page.jsx
+alunos/
+  layout.jsx
+  page.jsx
+  [id]/
+    evolucao/
+      page.jsx
+cadastro/
+  layout.jsx
+  page.jsx
+conta/
+  page.jsx
+debug/
+  claims/
+    page.jsx
+financeiro/
+  gastos/
+    page.jsx
+  layout.jsx
+  mensalidades/
+    page.jsx
+  page.jsx
+gastos/
+  page.jsx
+pagadores/
+  page.jsx
+professores/
+  page.jsx
+relatorios/
+  assiduidade/
+    page.jsx
+  inadimplencia/
+    page.jsx
+  page.jsx
+teste-email/
+  page.jsx
+turmas/
+  page.jsx
+  [id]/
+    page.jsx
+layout.jsx
+page.jsx
+```
+
+---
+
+## 2. Componentes
+
+**src/components/**
+
+```
+EmailModal.jsx
+Guard.jsx
+Kpi.jsx
+Modal.jsx
+ResumoDoMes.jsx
+Tabs.jsx
+WeekGrid.jsx
+```
+
+---
+
+## 3. Bibliotecas (Libs)
+
+**src/lib/**
+
+```
+agendaUtils.js
+finance/
+  dates.js
+  helpers.js
+  index.js
+  status.js
+financeGateway.js
+financeGateway.mock.js
+perms.js
+sendMailClient.js
+supabaseClient.js
+supabaseGateway.js
+```
 
 ---
 

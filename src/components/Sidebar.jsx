@@ -77,6 +77,7 @@ export default function Sidebar({ open = false, onClose }) {
       case "relatorios":  return "📊";
       case "financeiro":  return "💰";
       case "config":      return "⚙️";
+      case "dashboard":   return "📈";
       default:            return "•";
     }
   };
@@ -96,47 +97,55 @@ export default function Sidebar({ open = false, onClose }) {
         "transition-transform duration-200",
       ].join(" ")}
     >
-      {/* topo: logo + nome (colapsado mostra só a marca) */}
-      <div className="flex items-center justify-between gap-2 border-b border-[var(--fix-border)] px-3 py-3">
-        <div className="flex items-center gap-2 min-w-0">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          {brandLogoUrl ? (
-            <img
-              src={brandLogoUrl}
-              alt={brandName || "Logo"}
-              className={[
-                "object-contain",
-                // tamanho muda conforme estado
-                railCollapsed ? "h-12 w-12 mx-auto" : "h-15 w-auto",
-              ].join(" ")}
-              draggable={false}
-            />
-          ) : (
-            <div className={["rounded bg-gray-200", railCollapsed ? "h-12 w-12" : "h-12 w-12"].join(" ")} />
-          )}
-
-          {/* nome só quando expandido */}
+     {/* topo: logo > nome > fallback */}
+<div className="flex items-center justify-between gap-2 border-b border-[var(--fix-border)] px-3 py-3">
+  <div className="flex items-center gap-2 min-w-0">
+    {(() => {
+      const logo = (brandLogoUrl || "").trim();
+      const name = (brandName || "").trim();
+      if (logo) {
+        return (
+          <img
+            src={logo}
+            alt={name || "Logo"}
+            className={["object-contain", railCollapsed ? "h-10 w-10 mx-auto" : "h-10 w-auto"].join(" ")}
+            draggable={false}
+          />
+        );
+      }
+      if (name) {
+        return (
           <div
             className={[
               "font-semibold truncate text-[var(--fix-text)]",
               railCollapsed ? "opacity-0 pointer-events-none w-0" : "opacity-100",
             ].join(" ")}
-            title={brandName}
+            title={name}
           >
-            {brandName}
+            {name}
           </div>
-        </div>
+        );
+      }
+      return (
+        <img
+          src="/logo.png"
+          alt="Logo padrão"
+          className={["object-contain", railCollapsed ? "h-10 w-10 mx-auto" : "h-10 w-auto"].join(" ")}
+          draggable={false}
+        />
+      );
+    })()}
+  </div>
 
-        {/* botão recolher/expandir no desktop */}
-        <button
-          type="button"
-          aria-label={railCollapsed ? "Expandir menu" : "Recolher menu"}
-          className="rounded border border-[var(--fix-border)] px-2 py-1 text-xs text-[var(--fix-text)] hover:bg-gray-100"
-          onClick={() => setCollapsed((v) => !v)}
-        >
-          {railCollapsed ? "›" : "‹"}
-        </button>
-      </div>
+  <button
+    type="button"
+    aria-label={railCollapsed ? "Expandir menu" : "Recolher menu"}
+    className="rounded border border-[var(--fix-border)] px-2 py-1 text-xs text-[var(--fix-text)] hover:bg-gray-100"
+    onClick={() => setCollapsed((v) => !v)}
+  >
+    {railCollapsed ? "›" : "‹"}
+  </button>
+</div>
 
       {/* navegação */}
       <nav className="mt-2 flex flex-col gap-1 px-2" role="navigation">

@@ -50,10 +50,10 @@ async function handleLogin(e) {
     }
   }
 
-  // ✅ pousar em Início (ou em ?next=...)
-    const next = searchParams?.get("next") || "/"; // ex.: /auth/callback?next=/agenda
-    router.replace(next);
-    router.refresh(); // (opcional) força re-render dos Server Components
+  // ✅ pousar em Recepção (ou em ?next=...)
+  const next = searchParams?.get("next") || "/recepcao"; // ex.: /auth/callback?next=/agenda
+  router.replace(next);
+  router.refresh(); // (opcional) força re-render dos Server Components
   }
 
 

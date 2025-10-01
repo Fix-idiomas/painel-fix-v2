@@ -395,151 +395,164 @@ console.log("claim object:", session?.claim);
   }
 
   // ---------- Componente: quitação em lote por pagador (só para write) ----------
-  function BulkPayByPayer({ rows, ym, onDone }) {
-    const [open, setOpen] = useState(false);
-    const [payerId, setPayerId] = useState("");
-    const [busy, setBusy] = useState(false);
-    const [payerOptions, setPayerOptions] = useState([]);
+  // ---------- Componente: quitação em lote por pagador (só para write) ----------
+function BulkPayByPayer({ rows, ym, onDone }) {
+  const [open, setOpen] = useState(false);
+  const [payerId, setPayerId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [payerOptions, setPayerOptions] = useState([]);
 
-    useEffect(() => {
-      (async () => {
-        if (!open) {
-          setPayerOptions([]);
-          return;
-        }
-        const { supabase } = await import("@/lib/supabaseClient");
-
-        // tentar ordenar por 'name' e, se não houver, cair para 'full_name'
-        let payers = [];
-        let q1 = await supabase.from("payers").select("id, name").order("name", { ascending: true });
-        if (q1.error) {
-          const q2 = await supabase
-            .from("payers")
-            .select("id, full_name")
-            .order("full_name", { ascending: true });
-          payers = q2.data || [];
-        } else {
-          payers = q1.data || [];
-        }
-
-        const opts = (payers || [])
-          .map((p) => ({
-            value: p.id,
-            label: p.name ?? p.full_name ?? `Pagador ${String(p.id).slice(0, 6)}`,
-          }))
-          .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
-
-        setPayerOptions(opts);
-      })();
-    }, [open]);
-
-    function monthRange(ymStr) {
-      const start = `${ymStr}-01`;
-      const d = new Date(`${ymStr}-01T00:00:00Z`);
-      d.setUTCMonth(d.getUTCMonth() + 1);
-      const end = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
-      return { start, end };
-    }
-
-    async function confirmBulkPay() {
-      if (!payerId) {
-        alert("Selecione um pagador.");
+  useEffect(() => {
+    (async () => {
+      if (!open) {
+        setPayerOptions([]);
         return;
       }
-      if (!canFinanceWrite) {
-        alert("Você não tem permissão para quitar em lote.");
-        return;
+      const { supabase } = await import("@/lib/supabaseClient");
+
+      // tentar ordenar por 'name' e, se não houver, cair para 'full_name'
+      let payers = [];
+      let q1 = await supabase.from("payers").select("id, name").order("name", { ascending: true });
+      if (q1.error) {
+        const q2 = await supabase
+          .from("payers")
+          .select("id, full_name")
+          .order("full_name", { ascending: true });
+        payers = q2.data || [];
+      } else {
+        payers = q1.data || [];
       }
-      setBusy(true);
-      try {
-        const { supabase } = await import("@/lib/supabaseClient");
-        const { start, end } = monthRange(ym);
 
-        const q = supabase
-          .from("payments")
-          .update({ status: "paid", paid_at: new Date().toISOString() })
-          .eq("payer_id", payerId)
-          .eq("status", "pending")
-          .gte("due_date", start)
-          .lt("due_date", end)
-          .select("id", { count: "exact" });
+      const opts = (payers || [])
+        .map((p) => ({
+          value: p.id,
+          label: p.name ?? p.full_name ?? `Pagador ${String(p.id).slice(0, 6)}`,
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
 
-        const { data, error, count } = await q;
-        if (error) throw error;
+      setPayerOptions(opts);
+    })();
+  }, [open]);
 
-        setOpen(false);
-        setPayerId("");
-        await onDone?.();
-        alert(`Pagamentos marcados como pagos: ${count ?? (Array.isArray(data) ? data.length : 0)}`);
-      } catch (e) {
-        alert(e?.message || String(e));
-      } finally {
-        setBusy(false);
-      }
+  function monthRange(ymStr) {
+    const start = `${ymStr}-01`;
+    const d = new Date(`${ymStr}-01T00:00:00Z`);
+    d.setUTCMonth(d.getUTCMonth() + 1);
+    const end = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
+    return { start, end };
+  }
+
+  async function confirmBulkPay() {
+    if (!payerId) {
+      alert("Selecione um pagador.");
+      return;
     }
+    if (!canFinanceWrite) {
+      alert("Você não tem permissão para quitar em lote.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { supabase } = await import("@/lib/supabaseClient");
+      const { start, end } = monthRange(ym);
 
-    if (!canFinanceWrite) return null; // não renderiza para quem não pode escrever
+      const q = supabase
+        .from("payments")
+        .update({ status: "paid", paid_at: new Date().toISOString() })
+        .eq("payer_id", payerId)
+        .eq("status", "pending")
+        .gte("due_date", start)
+        .lt("due_date", end)
+        .select("id", { count: "exact" });
 
-    return (
-      <div className="w-full">
-        {/* Botão para abrir o painel */}
-        <div className="flex justify-end">
-          <button
-            onClick={() => setOpen((v) => !v)}
-            className="border rounded px-3 py-2"
-            title="Quita várias mensalidades de um mesmo pagador"
-            aria-label="Pagar mais de um aluno"
-          >
-            Pagar + de um aluno
-          </button>
-        </div>
+      const { data, error, count } = await q;
+      if (error) throw error;
 
-        {/* Painel inline (sem Modal) */}
-        {open && (
-          <div className="mt-3 rounded border p-3">
-            <div className="grid gap-3 sm:grid-cols-[1fr_auto] items-end">
-              <div>
-                <label className="block text-sm mb-1">Selecione o pagador</label>
-                <select
-                  value={payerId}
-                  onChange={(e) => setPayerId(e.target.value)}
-                  className="border rounded px-3 py-2 w-full"
-                >
-                  <option value="">Selecione…</option>
-                  {payerOptions.map((p) => (
-                    <option key={p.value} value={p.value}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-                {payerOptions.length === 0 && (
-                  <p className="mt-1 text-xs text-slate-500">Nenhum pagador com pendências em {ym}.</p>
-                )}
-              </div>
+      setOpen(false);
+      setPayerId("");
+      await onDone?.();
+      alert(`Pagamentos marcados como pagos: ${count ?? (Array.isArray(data) ? data.length : 0)}`);
+    } catch (e) {
+      alert(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
-              <div className="flex gap-2">
-                <button onClick={() => setOpen(false)} className="border rounded px-3 py-2" disabled={busy}>
-                  Cancelar
-                </button>
-                <button
-                  onClick={confirmBulkPay}
-                  className="border rounded px-3 py-2 bg-emerald-600 text-white disabled:opacity-50"
-                  disabled={busy || !payerId}
-                >
-                  {busy ? "Processando…" : "Confirmar pagamento"}
-                </button>
-              </div>
+  if (!canFinanceWrite) return null; // não renderiza para quem não pode escrever
+
+  return (
+    <div className="w-full">
+      {/* Botão proeminente alinhado à direita */}
+      <div className="flex justify-end">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className={[
+            "inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium",
+            "border border-emerald-600 bg-emerald-600 text-white",
+            "hover:bg-emerald-700 hover:border-emerald-700",
+            "focus:outline-none focus:ring-2 focus:ring-emerald-400",
+            "shadow-sm"
+          ].join(" ")}
+          title="Quitar várias mensalidades de um mesmo pagador"
+          aria-label="Pagar +  de um aluno"
+        >
+          <span className="i-lucide-users h-4 w-4" />
+          Pagar + de um aluno
+          <span className={`i-lucide-chevron-down h-4 w-4 transition ${open ? "rotate-180" : ""}`} />
+        </button>
+      </div>
+
+      {/* Painel inline (sem Modal) */}
+      {open && (
+        <div className="mt-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto] items-end">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Selecione o pagador</label>
+              <select
+                value={payerId}
+                onChange={(e) => setPayerId(e.target.value)}
+                className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              >
+                <option value="">Selecione…</option>
+                {payerOptions.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+              {payerOptions.length === 0 && (
+                <p className="mt-1 text-xs text-slate-500">Nenhum pagador com pendências em {ym}.</p>
+              )}
             </div>
 
-            <p className="mt-2 text-xs text-slate-600">
-              Todos os pagamentos <strong>pendentes</strong> dos <u>alunos deste pagador</u> em {ym} serão
-              marcados como <strong>pagos</strong>.
-            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setOpen(false)}
+                className="rounded-md border px-3 py-2 text-sm hover:bg-neutral-50"
+                disabled={busy}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmBulkPay}
+                className="rounded-md border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700 disabled:opacity-50"
+                disabled={busy || !payerId}
+              >
+                {busy ? "Processando…" : "Confirmar pagamento"}
+              </button>
+            </div>
           </div>
-        )}
-      </div>
-    );
-  }
+
+          <p className="mt-2 text-xs text-slate-600">
+            Todos os pagamentos <strong>pendentes</strong> dos <u>alunos deste pagador</u> em {ym} serão
+            marcados como <strong>pagos</strong>.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
   // ---------- Render ----------
   return (
@@ -583,20 +596,7 @@ console.log("claim object:", session?.claim);
       {/* Botão/painel "Pagar + de um aluno" (somente write) */}
       <BulkPayByPayer rows={rows} ym={ym} onDone={load} />
 
-      {/* Fonte/adapter (útil p/ debug) */}
-      <div className="text-xs text-slate-500">
-  Adapter: <b>{ADAPTER_NAME}</b> ·{" "}
-  owner:{String(isOwner)} · admin:{String(isAdmin)} ·{" "}
-  canFinanceWrite(sess):{String(canFinanceWrite)} ·{" "}
-  canReadDB(RPC):{String(canReadDB)} · canWriteDB(RPC):{String(canWriteDB)} ·{" "}
-  genMethod:{String(typeof financeGateway.generateMonth === "function")} ·{" "}
-  prevMethod:{String(typeof financeGateway.previewGenerateMonth === "function")}
-</div>
-<div className="text-[10px] text-slate-500">
-  tenant.owner_user_id: {String(session?.tenant?.owner_user_id || "—")} ·{" "}
-  user.id: {String(session?.user?.id || "—")} ·{" "}
-  claim.role: {String(session?.claim?.role || "—")}
-</div>
+      
 
       {/* KPIs */}
       {!loading && (

@@ -8,21 +8,34 @@ import Link from "next/link";
 export default function MinhaContaPage() {
   const [loading, setLoading] = useState(true);
 
-  const [user, setUser]       = useState(null);
-  const [claim, setClaim]     = useState(null);  // claim do usuário atual (tenant_id, role)
-  const [tenant, setTenant]   = useState(null);  // dados do tenant
-  const [members, setMembers] = useState([]);    // membros do tenant (com display_name/email)
+  const [user, setUser]         = useState(null);
+  const [claim, setClaim]       = useState(null);  // claim do usuário atual (tenant_id, role)
+  const [tenant, setTenant]     = useState(null);  // dados do tenant
+  const [members, setMembers]   = useState([]);    // membros do tenant (com display_name/email)
   const [membersError, setMembersError] = useState(null);
+
+  const [editTarget, setEditTarget]   = useState(null);   // membro selecionado
+  const [editPerms, setEditPerms]     = useState(null);   // json de perms em edição
+  const [savingEdit, setSavingEdit]   = useState(false);
+  const [editMsg, setEditMsg]         = useState(null);
+
+
+  // 🔒 pode gerenciar usuários? (RPC no Postgres)
+  const [canManageUsers, setCanManageUsers] = useState(false);
 
   // modal/cadastro
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [form, setForm] = useState({
     name: "", email: "", phone: "", cpf: "", password: "", role: "",
   });
+
+  // 🔐 Permissões padrão para novo usuário
   const [perms, setPerms] = useState({
-    classes: { read: true,  write: false },
-    finance: { read: false, write: false },
+    classes:  { read: true,  write: false },
+    finance:  { read: false, write: false },
+    registry: { read: false, write: false },
   });
+
   const [creating, setCreating] = useState(false);
   const [createMsg, setCreateMsg] = useState(null);
 
@@ -30,45 +43,113 @@ export default function MinhaContaPage() {
   function togglePerm(path) {
     setPerms(prev => {
       const [area, key] = path.split(".");
-      return { ...prev, [area]: { ...prev[area], [key]: !prev[area][key] } };
+      const areaObj = prev?.[area] ?? { read: false, write: false };
+      return { ...prev, [area]: { ...areaObj, [key]: !areaObj[key] } };
     });
   }
   function onChangeField(key, value) {
     setForm(prev => ({ ...prev, [key]: value }));
   }
+
   const isOwner   = useMemo(() => tenant?.owner_user_id === user?.id, [tenant, user]);
   const isAdminUI = useMemo(() => isOwner || claim?.role === "admin", [isOwner, claim]);
 
-  // --------- Carregar membros (user_claims + profiles) ----------
-// substitua a função inteira por esta versão
-async function loadMembersByTenantId(tenantId) {
-  const msg = (e) =>
-    e?.message || e?.hint || e?.details || e?.code || "Falha ao carregar membros.";
+  // --------- Carregar membros (user_claims) ----------
+  async function loadMembersByTenantId(tenantId) {
+    const msg = (e) =>
+      e?.message || e?.hint || e?.details || e?.code || "Falha ao carregar membros.";
 
-  setMembersError(null);
+    setMembersError(null);
 
-  const { data, error } = await supabase
-    .from("user_claims")
-    .select("user_id, role, perms, created_at, user_name_snapshot, user_email_snapshot")
-    .eq("tenant_id", tenantId)
-    .order("created_at", { ascending: true });
+    const { data, error } = await supabase
+      .from("user_claims")
+      .select("user_id, role, perms, created_at, user_name_snapshot, user_email_snapshot")
+      .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: true });
 
-  if (error) {
-    console.warn("user_claims fetch failed:", error);
-    setMembers([]);
-    setMembersError(msg(error));
-    return;
+    if (error) {
+      console.warn("user_claims fetch failed:", error);
+      setMembers([]);
+      setMembersError(msg(error));
+      return;
+    }
+
+    const rows = (data ?? []).map((c) => ({
+      ...c,
+      display_name:  c.user_name_snapshot  || c.user_email_snapshot || c.user_id,
+      display_email: c.user_email_snapshot || null,
+    }));
+
+    setMembers(rows);
   }
-
-  const rows = (data ?? []).map((c) => ({
-    ...c,
-    display_name: c.user_name_snapshot || c.user_email_snapshot || c.user_id,
-    display_email: c.user_email_snapshot || null,
-  }));
-
-  setMembers(rows);
+  function openEditPerms(m) {
+  // defaults seguros para todas as áreas conhecidas
+  const safe = {
+    classes:  { read: false, write: false },
+    finance:  { read: false, write: false },
+    registry: { read: false, write: false },
+  };
+  const merged = {
+    ...safe,
+    ...(m?.perms || {}),
+    classes:  { ...safe.classes,  ...(m?.perms?.classes  || {}) },
+    finance:  { ...safe.finance,  ...(m?.perms?.finance  || {}) },
+    registry: { ...safe.registry, ...(m?.perms?.registry || {}) },
+  };
+  setEditTarget(m);
+  setEditPerms(merged);
+  setEditMsg(null);
 }
 
+function toggleEdit(path) {
+  setEditPerms(prev => {
+    const [area, key] = path.split(".");
+    const areaObj = prev?.[area] ?? { read: false, write: false };
+    return { ...prev, [area]: { ...areaObj, [key]: !areaObj[key] } };
+  });
+}
+
+async function saveEditPerms() {
+  try {
+    setSavingEdit(true);
+    setEditMsg(null);
+
+    const { data: { session } } = await supabase.auth.getSession();
+    const accessToken = session?.access_token;
+    if (!accessToken) { setEditMsg("Sessão inválida."); return; }
+
+    // chama a rota (próximo passo eu te envio a implementação do /api/admin/update-user-perms)
+    const res = await fetch("/api/admin/update-user-perms", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        user_id: editTarget?.user_id,
+        perms: editPerms,
+      }),
+    });
+
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setEditMsg(out?.error || "Falha ao salvar permissões.");
+      return;
+    }
+
+    setEditMsg("Permissões atualizadas.");
+    // Atualiza listagem
+    await refreshMembers(tenant?.id ?? claim?.tenant_id);
+    // fecha depois de um pequeno delay
+    setTimeout(() => {
+      setEditTarget(null);
+      setEditPerms(null);
+      setEditMsg(null);
+    }, 600);
+  } finally {
+    setSavingEdit(false);
+  }
+}
 
   // --------- Boot / Sessão ----------
   useEffect(() => {
@@ -100,7 +181,11 @@ async function loadMembersByTenantId(tenantId) {
           setTenant(t);
           setClaim({ tenant_id: t.id, role: "admin" }); // owner como admin na UX
           await loadMembersByTenantId(t.id);
-          return; // fluxo resolvido
+
+          // verificação de permissão
+          const { data: canMU } = await supabase.rpc("can_manage_users");
+          setCanManageUsers(!!canMU);
+          return;
         }
 
         // 2) Senão, via claim do usuário
@@ -127,6 +212,10 @@ async function loadMembersByTenantId(tenantId) {
         if (tenants?.[0]) setTenant(tenants[0]);
 
         await loadMembersByTenantId(myClaim.tenant_id);
+
+        // verificação de permissão
+        const { data: canMU } = await supabase.rpc("can_manage_users");
+        setCanManageUsers(!!canMU);
       } finally {
         setLoading(false);
       }
@@ -144,6 +233,10 @@ async function loadMembersByTenantId(tenantId) {
     e?.preventDefault?.();
     setCreateMsg(null);
 
+    if (!canManageUsers) {
+      setCreateMsg("Você não tem permissão para cadastrar usuários.");
+      return;
+    }
     if (!form.email) { setCreateMsg("Informe um e-mail."); return; }
     if (!form.password || form.password.length < 8) { setCreateMsg("Senha precisa ter ao menos 8 caracteres."); return; }
     if (!form.role || form.role.trim().length < 3) { setCreateMsg("Informe uma identificação (ex.: teacher B, adm Bruno)."); return; }
@@ -156,7 +249,7 @@ async function loadMembersByTenantId(tenantId) {
       const tenant_id = tenant?.id ?? claim?.tenant_id;
 
       if (!accessToken) { setCreateMsg("Sessão inválida. Faça login novamente."); return; }
-      if (!tenant_id)    { setCreateMsg("Tenant inválido na sessão."); return; }
+      if (!tenant_id)   { setCreateMsg("Tenant inválido na sessão."); return; }
 
       const res = await fetch("/api/admin/create-user", {
         method: "POST",
@@ -165,14 +258,14 @@ async function loadMembersByTenantId(tenantId) {
           Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
-          email: form.email,
+          email:    form.email,
           password: form.password,
-          name: form.name,
-          phone: form.phone,
-          cpf: form.cpf,
-          role: form.role,
+          name:     form.name,
+          phone:    form.phone,
+          cpf:      form.cpf,
+          role:     form.role,
           tenant_id,
-          perms,
+          perms, // <- inclui classes/finance/registry
         }),
       });
 
@@ -184,17 +277,21 @@ async function loadMembersByTenantId(tenantId) {
         return;
       }
 
-      if (out?.status === "already_member")        setCreateMsg("Usuário já é membro desta escola.");
-      else if (out?.status === "linked_existing")   setCreateMsg("Usuário já existia. Vinculado a esta escola com sucesso.");
-      else if (out?.status === "created_and_confirmed") setCreateMsg("Usuário criado com sucesso.");
-      else setCreateMsg("Operação concluída.");
+      if (out?.status === "already_member")              setCreateMsg("Usuário já é membro desta escola.");
+      else if (out?.status === "linked_existing")        setCreateMsg("Usuário já existia. Vinculado a esta escola com sucesso.");
+      else if (out?.status === "created_and_confirmed")  setCreateMsg("Usuário criado com sucesso.");
+      else                                               setCreateMsg("Operação concluída.");
 
       await refreshMembers(tenant_id);
 
       setTimeout(() => {
         setShowCreateModal(false);
         setForm({ name: "", email: "", phone: "", cpf: "", password: "", role: "" });
-        setPerms({ classes: { read: true, write: false }, finance: { read: false, write: false } });
+        setPerms({
+          classes:  { read: true,  write: false },
+          finance:  { read: false, write: false },
+          registry: { read: false, write: false },
+        });
         setCreateMsg(null);
       }, 800);
     } finally {
@@ -258,34 +355,37 @@ async function loadMembersByTenantId(tenantId) {
             <h3 className="text-sm font-medium">Equipe / Usuários</h3>
             <div className="flex items-center justify-between">
               <p className="text-sm opacity-80">
-                Cadastrar membros do tenant com permissões (identificação) definidas por você.
+                Cadastrar membros do tenant com permissões definidas por você.
               </p>
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="rounded-lg border px-3 py-2 text-sm hover:bg-neutral-50"
-              >
-                + Cadastrar Usuário
-              </button>
+
+              {/* Botão só se puder gerenciar usuários */}
+              {canManageUsers && (
+                <button
+                  onClick={() => setShowCreateModal(true)}
+                  className="rounded-lg border px-3 py-2 text-sm hover:bg-neutral-50"
+                >
+                  + Cadastrar Usuário
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Preferências / Cobrança placeholders */}
-<div className="space-y-1">
-  <div className="flex items-center justify-between">
-    <h3 className="text-sm font-medium">Preferências do Tenant</h3>
-    <Link
-      href="/configuracoes"
-      className="rounded-lg border px-3 py-1.5 text-sm hover:bg-neutral-50"
-      title="Abrir Configurações"
-    >
-      Abrir Configurações
-    </Link>
-  </div>
-  <p className="text-sm text-neutral-600">
-    Gerencie logo, nome da marca, layout de navegação e tema.
-  </p>
-</div>
-
+          {/* Preferências / Cobrança shortcuts */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium">Preferências do Tenant</h3>
+              <Link
+                href="/configuracoes"
+                className="rounded-lg border px-3 py-1.5 text-sm hover:bg-neutral-50"
+                title="Abrir Configurações"
+              >
+                Abrir Configurações
+              </Link>
+            </div>
+            <p className="text-sm text-neutral-600">
+              Gerencie logo, nome da marca, layout de navegação e tema.
+            </p>
+          </div>
 
           {/* Membros */}
           <div className="pt-2">
@@ -301,47 +401,66 @@ async function loadMembersByTenantId(tenantId) {
               {members.length === 0 && !membersError && (
                 <div className="p-2 opacity-70">Sem membros cadastrados.</div>
               )}
+              
 
-{members.map((m) => (
-  <div
-    key={`${m.user_id}-${m.role}-${m.created_at}`}
-    className="p-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1"
-  >
-    <div className="min-w-0" title={m.user_id}>
-      <div className="font-medium truncate">
-        {m.display_name || m.user_id}
-      </div>
-      {m.display_email && (
-        <div className="text-xs text-slate-500 truncate">
-          {m.display_email}
-        </div>
-      )}
-      <div className="opacity-70 text-xs">
-        Criado: {new Date(m.created_at).toLocaleString("pt-BR")}
-      </div>
-      {m.perms && (
-        <div className="opacity-70 text-[11px] mt-1">
-          {m.perms?.classes?.read ? "Turmas:R" : ""}
-          {m.perms?.classes?.write ? "W " : " "}
-          {m.perms?.finance?.read ? "• Financeiro:R" : ""}
-          {m.perms?.finance?.write ? "W" : ""}
-        </div>
-      )}
-    </div>
+              {members.map((m) => (
+                <div
+                  key={`${m.user_id}-${m.role}-${m.created_at}`}
+                  className="p-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1"
+                >
+                  <div className="min-w-0" title={m.user_id}>
+                    <div className="font-medium truncate">
+                      {m.display_name || m.user_id}
+                    </div>
+                    {m.display_email && (
+                      <div className="text-xs text-slate-500 truncate">
+                        {m.display_email}
+                      </div>
+                    )}
+                    <div className="opacity-70 text-xs">
+                      Criado: {new Date(m.created_at).toLocaleString("pt-BR")}
+                    </div>
+                    {m.perms && (
+                      <div className="opacity-70 text-[11px] mt-1">
+                        {m.perms?.classes?.read   ? "Turmas:R"        : ""}
+                        {m.perms?.classes?.write  ? " W"              : ""}
+                        {m.perms?.finance?.read   ? " • Financeiro:R" : ""}
+                        {m.perms?.finance?.write  ? " W"              : ""}
+                        {m.perms?.registry?.read  ? " • Cadastros:R"  : ""}
+                        {m.perms?.registry?.write ? " W"              : ""}
+                      </div>
+                    )}
+                    
+                  </div>
+                  {/* ⬇️ Dentro do map dos membros (onde você exibe cada `m`), adicione o botão Editar */}
+<div className="shrink-0 flex items-center gap-2">
+  <span className="px-2 py-1 rounded bg-gray-100 text-xs">{m.role || "-"}</span>
 
-    <div className="shrink-0">
-      <span className="px-2 py-1 rounded bg-gray-100 text-xs">
-        {m.role || "-"}
-      </span>
-    </div>
-  </div>
-))}
+  {/* Botão editar permissões — opcionalmente só mostre se canManageUsers === true */}
+  {canManageUsers && (
+    <button
+      type="button"
+      onClick={() => openEditPerms(m)}
+      className="rounded border px-2 py-1 text-xs hover:bg-neutral-50"
+      title="Editar permissões"
+    >
+      Editar permissões
+    </button>
+  )}
+</div>
 
+                  <div className="shrink-0">
+                    <span className="px-2 py-1 rounded bg-gray-100 text-xs">
+                      {m.role || "-"}
+                    </span>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Modal de cadastro */}
-          {showCreateModal && (
+          {/* Modal de cadastro — só aparece se tiver permissão */}
+          {canManageUsers && showCreateModal && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
               <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl">
                 <div className="mb-4">
@@ -426,13 +545,13 @@ async function loadMembersByTenantId(tenantId) {
                   <div className="mt-2 border-t pt-3">
                     <div className="text-sm font-medium mb-2">Permissões</div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
                       <div className="rounded-lg border p-3">
                         <div className="font-medium mb-1">Turmas</div>
                         <label className="flex items-center gap-2">
                           <input
                             type="checkbox"
-                            checked={perms.classes.read}
+                            checked={!!perms.classes?.read}
                             onChange={() => togglePerm("classes.read")}
                           />
                           Leitura
@@ -440,7 +559,7 @@ async function loadMembersByTenantId(tenantId) {
                         <label className="flex items-center gap-2 mt-1">
                           <input
                             type="checkbox"
-                            checked={perms.classes.write}
+                            checked={!!perms.classes?.write}
                             onChange={() => togglePerm("classes.write")}
                           />
                           Edição
@@ -452,7 +571,7 @@ async function loadMembersByTenantId(tenantId) {
                         <label className="flex items-center gap-2">
                           <input
                             type="checkbox"
-                            checked={perms.finance.read}
+                            checked={!!perms.finance?.read}
                             onChange={() => togglePerm("finance.read")}
                           />
                           Leitura
@@ -460,8 +579,29 @@ async function loadMembersByTenantId(tenantId) {
                         <label className="flex items-center gap-2 mt-1">
                           <input
                             type="checkbox"
-                            checked={perms.finance.write}
+                            checked={!!perms.finance?.write}
                             onChange={() => togglePerm("finance.write")}
+                          />
+                          Edição
+                        </label>
+                      </div>
+
+                      {/* Cadastros */}
+                      <div className="rounded-lg border p-3">
+                        <div className="font-medium mb-1">Cadastros</div>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={!!perms.registry?.read}
+                            onChange={() => togglePerm("registry.read")}
+                          />
+                          Leitura
+                        </label>
+                        <label className="flex items-center gap-2 mt-1">
+                          <input
+                            type="checkbox"
+                            checked={!!perms.registry?.write}
+                            onChange={() => togglePerm("registry.write")}
                           />
                           Edição
                         </label>
@@ -498,7 +638,101 @@ async function loadMembersByTenantId(tenantId) {
           )}
         </section>
       )}
+{/* ⬇️ Modal de Edição — coloque no final do JSX (perto do modal de cadastro) */}
+{editTarget && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+    <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl">
+      <div className="mb-4">
+        <h4 className="text-lg font-semibold">Editar permissões</h4>
+        <p className="text-sm text-neutral-600">
+          Ajuste as permissões de <b>{editTarget.display_name || editTarget.display_email || editTarget.user_id}</b>.
+        </p>
+      </div>
 
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+        <div className="rounded-lg border p-3">
+          <div className="font-medium mb-1">Turmas</div>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!editPerms?.classes?.read}
+              onChange={() => toggleEdit("classes.read")}
+            />
+            Leitura
+          </label>
+          <label className="flex items-center gap-2 mt-1">
+            <input
+              type="checkbox"
+              checked={!!editPerms?.classes?.write}
+              onChange={() => toggleEdit("classes.write")}
+            />
+            Edição
+          </label>
+        </div>
+
+        <div className="rounded-lg border p-3">
+          <div className="font-medium mb-1">Financeiro</div>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!editPerms?.finance?.read}
+              onChange={() => toggleEdit("finance.read")}
+            />
+            Leitura
+          </label>
+          <label className="flex items-center gap-2 mt-1">
+            <input
+              type="checkbox"
+              checked={!!editPerms?.finance?.write}
+              onChange={() => toggleEdit("finance.write")}
+            />
+            Edição
+          </label>
+        </div>
+
+        <div className="rounded-lg border p-3">
+          <div className="font-medium mb-1">Cadastros</div>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!editPerms?.registry?.read}
+              onChange={() => toggleEdit("registry.read")}
+            />
+            Leitura
+          </label>
+          <label className="flex items-center gap-2 mt-1">
+            <input
+              type="checkbox"
+              checked={!!editPerms?.registry?.write}
+              onChange={() => toggleEdit("registry.write")}
+            />
+            Edição
+          </label>
+        </div>
+      </div>
+
+      <div className="mt-5 flex items-center justify-end gap-2">
+        <button
+          className="rounded-lg border px-3 py-2 text-sm"
+          onClick={() => { setEditTarget(null); setEditPerms(null); setEditMsg(null); }}
+          disabled={savingEdit}
+        >
+          Cancelar
+        </button>
+        <button
+          className="rounded-lg border px-3 py-2 text-sm"
+          onClick={saveEditPerms}
+          disabled={savingEdit}
+          title="Salvar permissões"
+        >
+          {savingEdit ? "Salvando..." : "Salvar"}
+        </button>
+      </div>
+
+      {editMsg && <div className="mt-3 text-sm">{editMsg}</div>}
+    </div>
+  </div>
+)}
       <div className="text-sm opacity-80">
         Dicas rápidas: <Link className="underline" href="/equipe">/equipe</Link>
       </div>
