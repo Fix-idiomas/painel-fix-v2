@@ -66,8 +66,9 @@ export default function TesteEmailPage() {
           />
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex gap-2">        
           <button
+            type="submit"
             className="border rounded px-3 py-2 bg-rose-600 text-white disabled:opacity-50"
             disabled={sending}
           >

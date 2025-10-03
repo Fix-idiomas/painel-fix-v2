@@ -262,6 +262,19 @@ export default function Page() {
       if (!to) throw new Error("Informe o(s) destinatário(s).");
       if (!subject) throw new Error("Informe o assunto.");
       if (!message) throw new Error("Escreva a mensagem.");
+      // 🔑 chamada real para Mailgun via rota /api/send-mail
+    const res = await fetch("/api/send-mail", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to,
+        subject,
+        html: `<p>${message.replace(/\n/g, "<br/>")}</p>`,
+        text: message
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || "Falha no envio");
       alert("E-mail enviado ✅");
       setOpenMail(false);
       setMailForm({ to: "", subject: "", message: "" });

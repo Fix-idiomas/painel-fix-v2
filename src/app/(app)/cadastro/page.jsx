@@ -7,9 +7,9 @@ import { supabase } from "@/lib/supabaseClient";
 
 export default function CadastrosHubPage() {
   const itens = [
-    { href: "/cadastro/alunos",       label: "Alunos",       desc: "Gerenciar alunos ativos e inativos" },
-    { href: "/cadastro/professores",  label: "Professores",  desc: "Gerenciar corpo docente" },
-    { href: "/cadastro/pagadores",    label: "Pagadores",    desc: "Responsáveis financeiros" },
+    { href: "/alunos",       label: "Alunos",       desc: "Gerenciar alunos ativos e inativos" },
+    { href: "/professores",  label: "Professores",  desc: "Gerenciar corpo docente" },
+    { href: "/pagadores",    label: "Pagadores",    desc: "Responsáveis financeiros" },
   ];
 
   return (
