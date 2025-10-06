@@ -7,6 +7,7 @@ import Sidebar from "@/components/Sidebar";
 import { supabaseGateway } from "@/lib/supabaseGateway";
 import UserMenu from "@/components/UserMenu";
 import { usePathname } from "next/navigation";
+import { Menu, User, ChevronDown } from "lucide-react";
   
 export default function AppLayout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -72,7 +73,7 @@ export default function AppLayout({ children }) {
                   aria-label="Abrir menu"
                   onClick={() => setSidebarOpen(true)}
                 >
-                  <span className="i-lucide-menu h-5 w-5" />
+                  <Menu className="h-5 w-5" aria-hidden="true" />
                 </button>
                 {/* Nada de logo/nome no header; ficam no Sidebar */}
                 <span className="sr-only">Painel</span>

@@ -1,6 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+// ADD
+import { User, ChevronDown, IdCard, LogOut } from "lucide-react";
+
 
 export default function UserMenu() {
   const [open, setOpen] = useState(false);
@@ -42,9 +45,9 @@ export default function UserMenu() {
         className="inline-flex items-center gap-2 rounded border px-3 py-1.5 text-sm hover:bg-neutral-50"
         title="Conta"
       >
-        <span className="i-lucide-user h-4 w-4" />
+        <User className="h-4 w-4" aria-hidden="true" />
         <span className="hidden sm:inline">Conta</span>
-        <span className={`i-lucide-chevron-down h-4 w-4 transition ${open ? "rotate-180" : ""}`} />
+        <ChevronDown className={`h-4 w-4 transition ${open ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
 
       {open && (
@@ -60,7 +63,7 @@ export default function UserMenu() {
             role="menuitem"
             onClick={() => setOpen(false)}
           >
-            <span className="i-lucide-id-card h-4 w-4" />
+            <IdCard className="h-4 w-4" aria-hidden="true" />
             Minha conta
           </Link>
 
@@ -74,7 +77,7 @@ export default function UserMenu() {
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-neutral-50"
               role="menuitem"
             >
-              <span className="i-lucide-log-out h-4 w-4" />
+              < LogOut className="h-4 w-4" aria-hidden="true" />
               Sair
             </button>
           </form>
