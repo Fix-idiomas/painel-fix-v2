@@ -1,24 +1,47 @@
+// middleware.js
 import { NextResponse } from "next/server";
+import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs";
 
-export function middleware(req) {
-  const { pathname } = req.nextUrl;
+export async function middleware(req) {
+  const res = NextResponse.next();
+  const { pathname, search } = req.nextUrl;
 
-  // rotas públicas
-  const publicPaths = ["/login", "/api/mock-login", "/api/mock-logout"];
-  const isPublic = publicPaths.includes(pathname) || pathname.startsWith("/_next");
+  // Rotas públicas (ajuste se necessário)
+  const isPublic =
+    pathname === "/login" ||
+    pathname.startsWith("/_next") ||
+    pathname === "/favicon.ico" ||
+    pathname.startsWith("/api/") || // geralmente públicas (ajuste se tiver APIs privadas)
+    pathname.startsWith("/assets/") ||
+    pathname.match(/\.(png|jpg|jpeg|gif|svg|ico|css|js|txt|map)$/);
 
-  if (isPublic) return NextResponse.next();
+  // Checa sessão do Supabase
+  const supabase = createMiddlewareClient({ req, res });
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
 
-  const isAuth = req.cookies.get("auth")?.value === "1";
-  if (!isAuth) {
+  // Sem sessão e rota privada -> manda para /login
+  if (!session && !isPublic) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
+    // preserva rota de destino
+    const next = pathname + (search || "");
+    url.searchParams.set("next", next);
     return NextResponse.redirect(url);
   }
 
-  return NextResponse.next();
+  // Já autenticado tentando acessar /login -> manda para a home do app
+  if (session && pathname === "/login") {
+    const url = req.nextUrl.clone();
+    url.pathname = "/recepcao"; // ajuste sua “home” autenticada
+    return NextResponse.redirect(url);
+  }
+
+  return res;
 }
 
+// Aplica a tudo, exceto estáticos do Next e favicon
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

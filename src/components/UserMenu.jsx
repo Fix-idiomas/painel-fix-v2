@@ -1,14 +1,17 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-// ADD
+import { useRouter } from "next/navigation";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { User, ChevronDown, IdCard, LogOut } from "lucide-react";
-
 
 export default function UserMenu() {
   const [open, setOpen] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const btnRef = useRef(null);
   const popRef = useRef(null);
+  const router = useRouter();
+  const supabase = createClientComponentClient();
 
   // fecha ao clicar fora
   useEffect(() => {
@@ -34,6 +37,18 @@ export default function UserMenu() {
     };
   }, [open]);
 
+  async function onLogout() {
+  try {
+    setSigningOut(true);
+    await supabase.auth.signOut();     // encerra a sessão
+    window.location.href = "/login";   // 🔥 recarrega e força middleware
+  } catch (e) {
+    console.warn("Falha no logout:", e?.message || e);
+  } finally {
+    setSigningOut(false);
+    setOpen(false);
+  }
+}
   return (
     <div className="relative">
       <button
@@ -67,20 +82,18 @@ export default function UserMenu() {
             Minha conta
           </Link>
 
-          {/* Divisor */}
           <div className="my-1 h-px bg-[var(--fix-border)]" />
 
-          {/* Mantém o POST para logout seguro */}
-          <form action="/api/mock-logout" method="post" role="none">
-            <button
-              type="submit"
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-neutral-50"
-              role="menuitem"
-            >
-              < LogOut className="h-4 w-4" aria-hidden="true" />
-              Sair
-            </button>
-          </form>
+          <button
+            type="button"
+            onClick={onLogout}
+            disabled={signingOut}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-neutral-50 disabled:opacity-60"
+            role="menuitem"
+          >
+            <LogOut className="h-4 w-4" aria-hidden="true" />
+            {signingOut ? "Saindo…" : "Sair"}
+          </button>
         </div>
       )}
     </div>
