@@ -99,6 +99,24 @@ console.log("claim object:", session?.claim);
   const [canReadDB, setCanReadDB] = useState(false);
   const [canWriteDB, setCanWriteDB]   = useState(false);
 
+  // --- Receita total (Mensalidades + Outras Receitas)
+  const [combined, setCombined] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    async function loadCombined() {
+      try {
+        const data = await financeGateway.getCombinedRevenueKpis({ ym });
+        if (alive) setCombined(data);
+      } catch (e) {
+        console.warn("[financeiro] getCombinedRevenueKpis:", e?.message || e);
+        if (alive) setCombined({ total: 0, received: 0, upcoming: 0, overdue: 0 });
+      }
+    }
+    loadCombined();
+    return () => { alive = false; };
+  }, [ym]);
+
   // 1) Checa permissão no banco via RPC (is_admin_or_finance_read)
   useEffect(() => {
     if (ready === false) return; // aguarda contexto inicializar

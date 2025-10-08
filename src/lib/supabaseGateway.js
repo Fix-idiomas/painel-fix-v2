@@ -97,6 +97,17 @@ function toIsoTz(dateStr) {
   if (isNaN(d)) return null;
   return d.toISOString();
 }
+// normaliza 'DD/MM/YYYY' ou 'DD.MM.YYYY' para 'YYYY-MM-DD'
+function normalizeDate(s) {
+  if (!s) return null;
+  const t = String(s).trim();
+  if (/^\d{2}[./]\d{2}[./]\d{4}$/.test(t)) {
+    const [dd, mm, yyyy] = t.split(/[./]/);
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t; // já ISO
+  return t.slice(0, 10); // fallback
+}
 
 // ========================================================
 
@@ -1927,11 +1938,48 @@ async reportReceivablesAging({ ym, tenant_id }) {
   };
 },
 
+// --- KPIs combinados (Mensalidades + Outras Receitas) ---
+async getCombinedRevenueKpis({ ym }) {
+  // Busca as duas fontes em paralelo
+  const [pays, others] = await Promise.all([
+    this.listPayments({ ym, status: "all" }),
+    this.listOtherRevenues({ ym, status: "all" }),
+  ]);
+
+  const rows = [
+    ...(Array.isArray(pays?.rows) ? pays.rows : []),
+    ...(Array.isArray(others?.rows) ? others.rows : []),
+  ];
+
+  const today = new Date().toISOString().slice(0, 10);
+  const sum = (a) => a.reduce((acc, r) => acc + Number(r.amount || 0), 0);
+
+  const received = sum(rows.filter(r => r.status === "paid"));
+  const overdue  = sum(rows.filter(r => r.status === "pending" && String(r.due_date) < today));
+  const upcoming = sum(rows.filter(r => r.status === "pending" && String(r.due_date) >= today));
+
+  // total = apenas itens não cancelados
+  const total = received + overdue + upcoming;
+
+  return { total, received, upcoming, overdue };
+},
   // ==============================
   // OUTRAS RECEITAS
   // ==============================
-  async listOtherRevenues({ ym, status = "all" } = {}) {
+  async listOtherRevenues({ ym, status = "all", cost_center = null } = {}) {
     const monthStart = monthStartOf(ym);
+    // (novo) Garante autogeração idempotente para o mês atual
+  try {
+    // A RPC do seu banco espera p_ym (TEXT), no formato "YYYY-MM"
+    await supabase.rpc("ensure_other_revenues_for_month", {
+      p_ym: monthStart.slice(0, 7), // ex.: "2025-11"
+    });
+  } catch (e) {
+    console.warn(
+      "[other_revenues] ensure_other_revenues_for_month falhou (seguindo com a listagem):",
+      e?.message || e
+    );
+  }
 
     let q = supabase
       .from("other_revenues")
@@ -1942,6 +1990,9 @@ async reportReceivablesAging({ ym, tenant_id }) {
       .order("due_date", { ascending: true })
       .order("created_at", { ascending: true });
 
+      if (cost_center && cost_center !== "all") {
+    q = q.eq("cost_center", cost_center);
+  }
     if (status && status !== "all") q = q.eq("status", status);
 
     const { data, error } = await q;
@@ -1956,17 +2007,18 @@ async reportReceivablesAging({ ym, tenant_id }) {
           : 0,
     }));
 
-    const sum = (arr) => arr.reduce((acc, it) => acc + Number(it.amount || 0), 0);
+   const sum = (arr) => arr.reduce((acc, it) => acc + Number(it.amount || 0), 0);
 
-    return {
-      rows,
-      kpis: {
-        total:   sum(rows),
-        paid:    sum(rows.filter((x) => x.status === "paid")),
-        pending: sum(rows.filter((x) => x.status === "pending")),
-        overdue: sum(rows.filter((x) => x.status === "pending" && x.due_date < today)),
-      },
-    };
+return {
+  rows,
+  kpis: {
+    // previsto = tudo que NÃO está cancelado (paid + pending)
+    total:   sum(rows.filter((x) => x.status !== "canceled")),
+    paid:    sum(rows.filter((x) => x.status === "paid")),
+    pending: sum(rows.filter((x) => x.status === "pending")),
+    overdue: sum(rows.filter((x) => x.status === "pending" && x.due_date < today)),
+  },
+};
   },
 
   async createOtherRevenue({
@@ -1984,9 +2036,9 @@ async reportReceivablesAging({ ym, tenant_id }) {
 
     const finalAmount = Number(amount || 0);
     const finalDueDate = due_date
-      ? String(due_date).slice(0, 10)
-      : dueDateFor(monthStart.slice(0, 7), 5);
-
+  ? normalizeDate(due_date)
+  : dueDateFor(monthStart.slice(0, 7), 5);
+  
     const row = {
       title: finalTitle,
       category: category ?? null,
@@ -2056,6 +2108,70 @@ async reportReceivablesAging({ ym, tenant_id }) {
     if (error) throw new Error(`reopenOtherRevenue: ${error.message}`);
     return true;
   },
+  // --- Outras Receitas: UPDATE ---
+async updateOtherRevenue(id, changes = {}, { syncCompetenceWithDueDate = false } = {}) {
+  if (!id) throw new Error("updateOtherRevenue: 'id' é obrigatório");
+
+  const patch = {};
+
+  if (changes.title !== undefined) {
+    const t = String(changes.title || "").trim();
+    if (!t) throw new Error("updateOtherRevenue: 'title' não pode ficar vazio");
+    patch.title = t;
+  }
+
+  if (changes.amount !== undefined) {
+    const n = Number(changes.amount);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new Error("updateOtherRevenue: 'amount' deve ser um número > 0");
+    }
+    patch.amount = n;
+  }
+
+  if (changes.due_date !== undefined) {
+    const s = String(changes.due_date || "").slice(0, 10); // "YYYY-MM-DD"
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      throw new Error("updateOtherRevenue: 'due_date' deve ser YYYY-MM-DD");
+    }
+    patch.due_date = s;
+
+    // (opcional) alinhar competência ao novo vencimento
+    if (syncCompetenceWithDueDate) {
+      const ym = s.slice(0, 7); // "YYYY-MM"
+      patch.competence_month = `${ym}-01`;
+    }
+  }
+
+  if (changes.category !== undefined) {
+    patch.category = changes.category ? String(changes.category).trim() : null;
+  }
+
+  if (changes.cost_center !== undefined) {
+    patch.cost_center = changes.cost_center ? String(changes.cost_center).trim() : "extra";
+  }
+
+  // NÃO permitimos alterar status por aqui (use mark/cancel/reopen)
+  delete patch.status;
+  delete patch.paid_at;
+  delete patch.canceled_at;
+  delete patch.cancel_note;
+
+  if (Object.keys(patch).length === 0) {
+    throw new Error("updateOtherRevenue: nada para atualizar");
+  }
+
+  patch.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from("other_revenues")
+    .update(patch)
+    .eq("id", id)
+    .select("id, title, category, amount, competence_month, due_date, status, paid_at, canceled_at, cancel_note, cost_center, created_at, updated_at")
+    .single();
+
+  if (error) throw new Error(`updateOtherRevenue: ${error.message}`);
+  return data;
+},
 
   // ==============================
   // PROFESSORES — Payout por mês

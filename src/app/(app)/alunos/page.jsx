@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { financeGateway, ADAPTER_NAME } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
 import Link from "next/link";
-
 
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -23,6 +22,9 @@ export default function AlunosPage() {
   const [list, setList] = useState([]);
   const [payers, setPayers] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // 🔎 Busca
+  const [query, setQuery] = useState("");
 
   // --------- Modal CADASTRAR ----------
   const [openCreate, setOpenCreate] = useState(false);
@@ -74,6 +76,21 @@ export default function AlunosPage() {
   useEffect(() => {
     load();
   }, []);
+
+  // 🔎 Lista filtrada (nome ou CPF)
+  const filtered = useMemo(() => {
+    const q = String(query || "").trim().toLowerCase();
+    if (!q) return list;
+
+    const onlyDigitsQ = q.replace(/\D/g, "");
+    return (list || []).filter((s) => {
+      const name = String(s?.name || "").toLowerCase();
+      const cpfDigits = String(s?.cpf || "").replace(/\D/g, "");
+      const matchName = name.includes(q);
+      const matchCpf = onlyDigitsQ ? cpfDigits.includes(onlyDigitsQ) : false;
+      return matchName || matchCpf;
+    });
+  }, [list, query]);
 
   // ---------- Create ----------
   function resetCreate() {
@@ -264,21 +281,37 @@ export default function AlunosPage() {
 
   return (
     <main className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="text-xs text-slate-500">
           Adapter: <b>{ADAPTER_NAME}</b>
         </div>
-        <button onClick={() => setOpenCreate(true)} className="border rounded px-3 py-2">
-          + Cadastrar aluno
-        </button>
+
+        {/* 🔎 Campo de busca */}
+        <div className="flex items-center gap-2 ml-auto">
+          <input
+            type="text"
+            placeholder="Buscar por nome ou CPF…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="border rounded px-3 py-2 w-72"
+          />
+          <button onClick={() => setQuery("")} className="border rounded px-3 py-2">
+            Limpar
+          </button>
+          <button onClick={() => setOpenCreate(true)} className="border rounded px-3 py-2">
+            + Cadastrar aluno
+          </button>
+        </div>
       </div>
 
       {/* Tabela */}
       <section className="border rounded overflow-auto">
         {loading ? (
           <div className="p-4">Carregando…</div>
-        ) : list.length === 0 ? (
-          <div className="p-4">Nenhum aluno cadastrado.</div>
+        ) : filtered.length === 0 ? (
+          <div className="p-4">
+            {query ? "Nenhum aluno encontrado para a busca." : "Nenhum aluno cadastrado."}
+          </div>
         ) : (
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50">
@@ -292,7 +325,7 @@ export default function AlunosPage() {
               </tr>
             </thead>
             <tbody>
-              {list.map((s) => (
+              {filtered.map((s) => (
                 <tr key={s.id} className="border-t">
                   <Td>{s.name}</Td>
                   <Td>{fmtBRL(s.monthly_value)}</Td>
@@ -392,30 +425,30 @@ export default function AlunosPage() {
             />
           </div>
           <div>
-  <label className="block text-sm mb-1">E-mail</label>
-  <input
-    type="email"
-    value={formCreate.email}
-    onChange={e => setFormCreate(f => ({ ...f, email: e.target.value }))}
-    className="border rounded px-3 py-2 w-full"
-  />
-</div>
-<div>
-  <label className="block text-sm mb-1">Endereço</label>
-  <input
-    value={formCreate.endereco}
-    onChange={e => setFormCreate(f => ({ ...f, endereco: e.target.value }))}
-    className="border rounded px-3 py-2 w-full"
-  />
-</div>
-<div>
-  <label className="block text-sm mb-1">CPF</label>
-  <input
-    value={formCreate.cpf}
-    onChange={e => setFormCreate(f => ({ ...f, cpf: e.target.value }))}
-    className="border rounded px-3 py-2 w-full"
-  />
-</div>
+            <label className="block text-sm mb-1">E-mail</label>
+            <input
+              type="email"
+              value={formCreate.email}
+              onChange={e => setFormCreate(f => ({ ...f, email: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Endereço</label>
+            <input
+              value={formCreate.endereco}
+              onChange={e => setFormCreate(f => ({ ...f, endereco: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">CPF</label>
+            <input
+              value={formCreate.cpf}
+              onChange={e => setFormCreate(f => ({ ...f, cpf: e.target.value }))}
+              className="border rounded px-3 py-2 w-full"
+            />
+          </div>
 
           {/* Pagador (cadastro) */}
           <div className="sm:col-span-2 mt-2">

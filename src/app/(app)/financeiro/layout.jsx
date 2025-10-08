@@ -3,31 +3,35 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const SUBTABS = [
-  { key: "mensalidades", label: "Mensalidades", href: "/financeiro/mensalidades" },
-  { key: "gastos",       label: "Gastos",       href: "/financeiro/gastos" },
-];
-
 export default function FinanceiroLayout({ children }) {
   const pathname = usePathname();
 
+  const items = [
+    { href: "/financeiro/mensalidades", label: "Mensalidades" },
+    { href: "/financeiro/gastos", label: "Gastos" },
+    { href: "/financeiro/outras-receitas", label: "Outras Receitas" },
+  ];
+
   return (
-    <div className="space-y-4">
-      {/* Sub-abas locais do Financeiro */}
-      <div className="w-full border-b bg-white">
-        <div className="mx-auto max-w-5xl px-4 py-2">
-          <nav className="flex flex-wrap gap-2">
-            {SUBTABS.map((t) => {
-              const active = pathname === t.href || pathname.startsWith(t.href + "/");
+    <div className="min-h-screen">
+      {/* Subnav Financeiro */}
+      <div className="sticky top-0 z-10 border-b bg-white">
+        <div className="mx-auto w-full max-w-6xl px-4">
+          <nav className="flex gap-2 py-3">
+            {items.map((it) => {
+              const active = pathname.startsWith(it.href);
               return (
                 <Link
-                  key={t.key}
-                  href={t.href}
-                  className={`rounded-md px-3 py-1.5 text-sm ${
-                    active ? "bg-gray-900 text-white" : "text-gray-700 hover:bg-gray-100"
-                  }`}
+                  key={it.href}
+                  href={it.href}
+                  className={[
+                    "rounded px-3 py-1.5 text-sm border",
+                    active
+                      ? "bg-black text-white border-black"
+                      : "bg-white text-slate-700 hover:bg-slate-50",
+                  ].join(" ")}
                 >
-                  {t.label}
+                  {it.label}
                 </Link>
               );
             })}
@@ -35,8 +39,8 @@ export default function FinanceiroLayout({ children }) {
         </div>
       </div>
 
-      {/* Conteúdo da sub-rota */}
-      <div className="mx-auto max-w-5xl px-4">{children}</div>
+      {/* Conteúdo da rota filha */}
+      <div className="mx-auto w-full max-w-6xl px-4 py-6">{children}</div>
     </div>
   );
 }

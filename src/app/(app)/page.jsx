@@ -38,8 +38,23 @@ export default function Page() {
   const [upcoming, setUpcoming] = useState([]);   // vencem nos próximos 7 dias
   const [birthdays, setBirthdays] = useState([]); // aniversariantes do mês
 
+  // KPIs combinados (mensalidades + outras receitas)
+  const [combined, setCombined] = useState(null);
+  useEffect(() => {
+    async function loadCombined() {
+      try {
+        const data = await financeGateway.getCombinedRevenueKpis({ ym });
+        setCombined(data);
+      } catch (err) {
+        console.warn("Erro ao carregar combined KPIs:", err.message);
+        setCombined({ total: 0, received: 0, upcoming: 0, overdue: 0 });
+      }
+    }
+    loadCombined();
+  }, [ym]);
+
   // 🔑 DB-first: sessão/permissões reais
-  const { ready, isAdmin, perms, session } = useSession();
+  const { ready, isAdmin, perms, session } = useSession(); // session mantido caso use depois
   const canReadFinance  = isAdmin || !!perms?.finance?.read;
   const canWriteFinance = isAdmin || !!perms?.finance?.write;
   const canReadRegistry = isAdmin || !!perms?.registry?.read; // p/ students (aniversários)
@@ -52,37 +67,76 @@ export default function Page() {
     setLoading(true);
     try {
       // pagamentos + despesas (somente se pode ler Financeiro)
-       const [payments, expenses] = await Promise.all([
+      const [payments, expenses] = await Promise.all([
         canReadFinance ? financeGateway.listPayments({ ym }) : Promise.resolve({ rows: [], kpis: {} }),
         canReadFinance ? financeGateway.listExpenseEntries({ ym }) : Promise.resolve({ kpis: {} }),
-]);
-    
-  if (!alive) return;
+      ]);
+      if (!alive) return;
 
-    const rows = payments?.rows || [];
-    const kpisNew = computeRevenueKPIs(rows, { ym, policy: "due_date" });
-    setRevKpis(kpisNew);
+      // KPIs de receitas (mensalidades)
+      const rows = payments?.rows || [];
+      const kpisNew = computeRevenueKPIs(rows, { ym, policy: "due_date" });
+      setRevKpis(kpisNew);
 
-    const finKpis = {
-      billed: Number(payments?.kpis?.total_billed || 0),
-      paid: Number(payments?.kpis?.total_paid || 0),
-      pending: Number(payments?.kpis?.total_pending || 0),
-      overdueMoney: Number(
-        rows
-          .filter((r) => r.status === "pending" && (r.days_overdue || 0) > 0)
-          .reduce((a, b) => a + Number(b.amount || 0), 0)
-      ),
-    };
+      const finKpis = {
+        billed: Number(payments?.kpis?.total_billed || 0),
+        paid: Number(payments?.kpis?.total_paid || 0),
+        pending: Number(payments?.kpis?.total_pending || 0),
+        overdueMoney: Number(
+          rows
+            .filter((r) => r.status === "pending" && (r.days_overdue || 0) > 0)
+            .reduce((a, b) => a + Number(b.amount || 0), 0)
+        ),
+      };
 
-    const expKpis = {
-      total:   Number(expenses?.kpis?.total   || 0),
-      paid:    Number(expenses?.kpis?.paid    || 0),
-      pending: Number(expenses?.kpis?.pending || 0),
-      overdue: Number(expenses?.kpis?.overdue || 0),
-      teachers:Number(expenses?.kpis?.teachers|| 0),
-    };
+      // KPIs de despesas
+      const expKpis = {
+        total:   Number(expenses?.kpis?.total   || 0),
+        paid:    Number(expenses?.kpis?.paid    || 0),
+        pending: Number(expenses?.kpis?.pending || 0),
+        overdue: Number(expenses?.kpis?.overdue || 0),
+        teachers:Number(expenses?.kpis?.teachers|| 0),
+      };
 
-     // ===== Próximos 7 dias =====
+      // === Custos professores (somatório do mês atual) ===
+      let teachersTotal = 0;
+      if (canReadFinance) {
+        let teacherIds = [];
+        try {
+          if (canReadRegistry) {
+            const list = await financeGateway.listTeachers();
+            const arr = Array.isArray(list) ? list : Array.isArray(list?.rows) ? list.rows : [];
+            teacherIds = arr.map(t => t.id);
+          } else {
+            // pega professores que realmente têm sessões no mês, sem depender do cadastro
+            const monthStart = `${ym}-01`;
+            const [Y, M] = ym.split("-").map(Number);
+            const nextMonthStart = `${M === 12 ? Y + 1 : Y}-${String(M === 12 ? 1 : M + 1).padStart(2, "0")}-01`;
+
+            const { data, error } = await supabase
+              .from("sessions")
+              .select("teacher_id_snapshot")
+              .gte("date", monthStart)
+              .lt("date", nextMonthStart);
+
+            if (!error) {
+              teacherIds = [...new Set((data || []).map(s => s.teacher_id_snapshot).filter(Boolean))];
+            }
+          }
+
+          if (teacherIds.length) {
+            const payouts = await Promise.all(
+              teacherIds.map(tid => financeGateway.sumTeacherPayoutByMonth(tid, ym))
+            );
+            teachersTotal = payouts.reduce((acc, it) => acc + Number(it?.amount || 0), 0);
+          }
+        } catch {
+          // mantém teachersTotal = 0 se algo falhar
+        }
+      }
+      expKpis.teachers = teachersTotal;
+
+      // ===== Próximos 7 dias (vencimentos) =====
       const nowSP  = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
       const todayISO = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(nowSP);
       const plus7 = new Date(nowSP); plus7.setDate(plus7.getDate() + 7);
@@ -123,7 +177,6 @@ export default function Page() {
       const payerNameById   = Object.create(null);
 
       if (canReadRegistry && needStudent.length) {
-       
         let q1 = await supabase.from("students").select("id, full_name").in("id", needStudent);
         let sList = q1.error
           ? (await supabase.from("students").select("id, name").in("id", needStudent)).data
@@ -131,7 +184,6 @@ export default function Page() {
         for (const s of sList || []) studentNameById[s.id] = s.full_name ?? s.name ?? "";
       }
       if (canReadRegistry && needPayer.length) {
-      
         let p1 = await supabase.from("payers").select("id, name").in("id", needPayer);
         let pList = p1.error
           ? (await supabase.from("payers").select("id, full_name").in("id", needPayer)).data
@@ -151,13 +203,12 @@ export default function Page() {
         .sort((a, b) => a.due_date.localeCompare(b.due_date));
 
       if (!alive) return;
-            setUpcoming(up);
+      setUpcoming(up);
 
-   // ===== Students (ativos) + Aniversariantes do mês =====
-
+      // ===== Students (ativos) + Aniversariantes do mês =====
       let students = [];
       if (canReadRegistry) {
-        const res = await financeGateway.listStudents(); // seu adapter já usa supabaseGateway (anon/RLS)
+        const res = await financeGateway.listStudents(); // adapter usa supabaseGateway (anon/RLS)
         students = Array.isArray(res) ? res : Array.isArray(res?.rows) ? res.rows : [];
       }
       const nowSPBirthday = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
@@ -183,15 +234,14 @@ export default function Page() {
       if (!alive) return;
       setBirthdays(list);
       setKpisFin(finKpis);
-      setKpisExp(expKpis);
-      setCounts({ studentsActive: activeStudentsAll }); // ✅ agora é o total de alunos ativos
+      setKpisExp({ ...expKpis, teachers: teachersTotal });
+      setCounts({ studentsActive: activeStudentsAll });
     } catch (e) {
       // opcional: console.warn("Dashboard load error:", e);
     } finally {
       if (alive) setLoading(false);
     }
-   }
-
+  }
 
   // carrega dados quando permitido
   useEffect(() => {
@@ -263,18 +313,18 @@ export default function Page() {
       if (!subject) throw new Error("Informe o assunto.");
       if (!message) throw new Error("Escreva a mensagem.");
       // 🔑 chamada real para Mailgun via rota /api/send-mail
-    const res = await fetch("/api/send-mail", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        to,
-        subject,
-        html: `<p>${message.replace(/\n/g, "<br/>")}</p>`,
-        text: message
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || "Falha no envio");
+      const res = await fetch("/api/send-mail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to,
+          subject,
+          html: `<p>${message.replace(/\n/g, "<br/>")}</p>`,
+          text: message
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Falha no envio");
       alert("E-mail enviado ✅");
       setOpenMail(false);
       setMailForm({ to: "", subject: "", message: "" });
@@ -335,7 +385,11 @@ export default function Page() {
           {/* 2ª linha: cards conforme grupo */}
           {panelGroup === "receitas" && (
             <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Kpi title="Receita prevista"  value={maskMoney(revKpis?.receita_prevista_mes || 0)} />
+              <Kpi
+                title="Receita total"
+                value={maskMoney(combined?.total || 0)}
+                subtitle={`Recebido: ${maskMoney(combined?.received || 0)} • A vencer: ${maskMoney(combined?.upcoming || 0)} • Em atraso: ${maskMoney(combined?.overdue || 0)}`}
+              />
               <Kpi title="Receita recebida"  value={maskMoney(revKpis?.receita_recebida    || 0)} />
               <Kpi title="Receita atrasada"  value={maskMoney(revKpis?.receita_atrasada    || 0)} />
               <Kpi title="Receita a receber" value={maskMoney(revKpis?.receita_a_receber   || 0)} />
@@ -469,7 +523,7 @@ export default function Page() {
   );
 }
 
-function Kpi({ title, value, tone = "neutral" }) {
+function Kpi({ title, value, tone = "neutral", subtitle }) {
   const toneBox = {
     danger:  "border-red-300 bg-red-50",
     warning: "border-amber-300 bg-amber-50",
@@ -488,6 +542,7 @@ function Kpi({ title, value, tone = "neutral" }) {
     <div className={`border rounded p-3 ${toneBox}`}>
       <div className={`text-xs ${toneText} opacity-80`}>{title}</div>
       <div className={`text-xl font-semibold ${toneText}`}>{value}</div>
+      {subtitle && <div className="mt-1 text-xs text-slate-600">{subtitle}</div>}
     </div>
   );
 }

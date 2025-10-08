@@ -40,7 +40,9 @@ async function getMonthlyFinancialSummary(args) {
 async function getMonthlyFinanceKpis(args) {
   return supabaseGateway.getMonthlyFinanceKpis(args);
 }
-
+async function getCombinedRevenueKpis({ ym }) {
+  return supabaseGateway.getCombinedRevenueKpis({ ym });
+}
 // ---------- Despesas (templates + entries) ----------
 async function listExpenseTemplates(opts = {}) {
   return supabaseGateway.listExpenseTemplates(opts);
@@ -108,8 +110,8 @@ async function generateExpenses({ ym, cost_center = null } = {}) {
 }
 
 // ---------- Outras Receitas ----------
-async function listOtherRevenues({ ym, status = "all" } = {}) {
-  return supabaseGateway.listOtherRevenues({ ym, status });
+async function listOtherRevenues({ ym, status = "all", cost_center = null } = {}) {
+  return supabaseGateway.listOtherRevenues({ ym, status, cost_center });
 }
 async function createOtherRevenue(payload) {
   return supabaseGateway.createOtherRevenue(payload);
@@ -122,6 +124,9 @@ async function cancelOtherRevenue(id, note = null) {
 }
 async function reopenOtherRevenue(id) {
   return supabaseGateway.reopenOtherRevenue(id);
+}
+async function updateOtherRevenue(id, changes = {}, opts = {}) {
+  return supabaseGateway.updateOtherRevenue(id, changes, opts);
 }
 
 // ---------- Professores (payout) ----------
@@ -251,6 +256,8 @@ export const financeGateway = {
   getMonthlySummary,
   getMonthlyFinancialSummary,
   getMonthlyFinanceKpis,
+  reportReceivablesAging,
+  getCombinedRevenueKpis,
 
   // Despesas
   listExpenseTemplates,
@@ -273,6 +280,7 @@ export const financeGateway = {
   markOtherRevenuePaid,
   cancelOtherRevenue,
   reopenOtherRevenue,
+  updateOtherRevenue,
 
   // Professores
   sumTeacherPayoutByMonth,

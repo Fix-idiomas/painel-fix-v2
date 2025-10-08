@@ -101,6 +101,14 @@ export default function ProfessoresPage() {
     if (teachers.length) computePayouts();
   }, [teachers, ym]);
 
+  // === INSERÇÃO 1: total "A pagar" de todos os professores ===
+  const totalPayout = useMemo(() => {
+    return Object.values(payouts || {}).reduce(
+      (acc, p) => acc + Number(p?.amount || 0),
+      0
+    );
+  }, [payouts]);
+
   // linhas agregadas (contagens + mensalidades + payout)
   const rows = useMemo(() => {
     return teachers.map((th) => {
@@ -171,7 +179,7 @@ export default function ProfessoresPage() {
             min: String(r.min ?? ""),
             max: String(r.max ?? ""),
             // aceita ambos formatos: 'rate' (legado) ou 'hourly_rate' (novo)
-            rate: String((r.hourly_rate ?? "")), // só hourly_rate agora
+            rate: String(r.hourly_rate ?? ""),
           }))
         : [],
     });
@@ -280,9 +288,15 @@ export default function ProfessoresPage() {
           />
         </div>
 
-        <button onClick={openCreate} className="border rounded px-3 py-2">
-          + Cadastrar professor
-        </button>
+        {/* INSERÇÃO 2: total ao lado do botão */}
+        <div className="flex items-center gap-3">
+          <div className="text-sm text-slate-700">
+            Total a pagar:&nbsp;<b>{fmtBRL(totalPayout)}</b>
+          </div>
+          <button onClick={openCreate} className="border rounded px-3 py-2">
+            + Cadastrar professor
+          </button>
+        </div>
       </div>
 
       <section className="border rounded overflow-auto">
