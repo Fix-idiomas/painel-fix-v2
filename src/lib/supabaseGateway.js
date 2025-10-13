@@ -124,7 +124,7 @@ export const supabaseGateway = {
   async listStudents() {
     const { data, error } = await supabase
       .from("students")
-      .select("id,name,status,monthly_value,due_day,birth_date,payer_id")
+      .select("id,name,status,monthly_value,due_day,birth_date,payer_id,email,endereco,cpf")
       .order("name", { ascending: true });
     if (error) mapErr("listStudents", error);
     return data || [];
@@ -148,12 +148,15 @@ export const supabaseGateway = {
       birth_date: birth_date || null,
       status: status || "ativo",
       payer_id: payer_id || null,
+      email: payload?.email ? String(payload.email).trim().toLowerCase() : null,
+      endereco: payload?.endereco ? String(payload.endereco).trim() : null,
+      cpf: payload?.cpf ? String(payload.cpf).trim() : null,
       created_at: new Date().toISOString(),
     };
     const { data, error } = await supabase
       .from("students")
       .insert(row)
-      .select("id,name,tenant_id,status,monthly_value,due_day,birth_date,payer_id")
+      .select("id,name,tenant_id,status,monthly_value,due_day,birth_date,payer_id,email,endereco,cpf")
       .single();
     if (error) mapErr("createStudent", error);
     return data;
@@ -185,7 +188,7 @@ async updateStudent(id, changes = {}) {
     patch.due_day = d;
   }
 
-  // birth_date (date ou null) — “YYYY-MM-DD”
+  // birth_date (YYYY-MM-DD) ou null
   if (changes.birth_date !== undefined) {
     patch.birth_date = changes.birth_date ? String(changes.birth_date).slice(0, 10) : null;
   }
@@ -193,6 +196,24 @@ async updateStudent(id, changes = {}) {
   // payer_id (uuid ou null)
   if (changes.payer_id !== undefined) {
     patch.payer_id = changes.payer_id || null;
+  }
+
+  // email (trim + lower; null se vazio)
+  if (changes.email !== undefined) {
+    const em = String(changes.email || "").trim();
+    patch.email = em ? em.toLowerCase() : null;
+  }
+
+  // endereco (trim; null se vazio)
+  if (changes.endereco !== undefined) {
+    const en = String(changes.endereco || "").trim();
+    patch.endereco = en || null;
+  }
+
+  // cpf (aceita com/sem máscara; null se vazio)
+  if (changes.cpf !== undefined) {
+    const cpf = String(changes.cpf || "").trim();
+    patch.cpf = cpf || null;
   }
 
   if (Object.keys(patch).length === 0) {
@@ -203,7 +224,7 @@ async updateStudent(id, changes = {}) {
     .from("students")
     .update(patch)
     .eq("id", id)
-    .select("id, name, status, monthly_value, due_day, birth_date, payer_id, updated_at")
+    .select("id, name, status, monthly_value, due_day, birth_date, payer_id, email, endereco, cpf, updated_at")
     .single();
 
   if (error) {
