@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "@/contexts/SessionContext";
-import { financeGateway, ADAPTER_NAME } from "@/lib/financeGateway";
+import { financeGateway } from "@/lib/financeGateway";
 import { computeRevenueKPIs } from "@/lib/finance";
 
 // Tradução de status para exibir na tabela
@@ -53,8 +53,126 @@ const fmtBRDate = (s) => {
     return s;
   }
 };
+function daysToDue(due) {
+  const d0 = new Date(); d0.setHours(0,0,0,0);
+  const d1 = new Date(String(due) + "T00:00:00"); d1.setHours(0,0,0,0);
+  return Math.floor((d1 - d0) / 86400000);
+}
+function reminderStatus(due, status) {
+  if (status !== "pending") return null;
+  const dt = daysToDue(due); // dias até o vencimento
+  if (dt < 0)  return "Atrasado";
+  if (dt === 0) return "Vencido";
+  if (dt > 0 && dt <= 7) return "A vencer";
+  return null; // fora das janelas de lembrete
+}
+// ---- TEMPLATE DE LEMBRETE (padrão simples)
+const REMINDER_TEMPLATES = {
+  subject: ({ status, studentName, dueDateBR }) =>
+    status === "Atrasado"
+      ? `Pagamento em atraso – ${studentName} (venc. ${dueDateBR})`
+      : status === "Vencido"
+      ? `Vence hoje – ${studentName} (${dueDateBR})`
+      : `Lembrete de vencimento – ${studentName} (${dueDateBR})`,
 
-export default function MensalidadesPage() { 
+  html: ({ tenantName, studentName, dueDateBR, amountBRL, status }) => `
+<div style="font-family:Arial,Helvetica,sans-serif;line-height:1.5">
+  <h2 style="margin:0 0 12px">${tenantName}</h2>
+  <p>Olá! Este é um ${
+    status === "Atrasado" ? "<b>lembrete de atraso</b>" :
+    status === "Vencido"  ? "<b>lembrete de vencimento hoje</b>" : "<b>lembrete de vencimento</b>"
+  } referente à mensalidade de <b>${studentName}</b>.</p>
+  <p><b>Vencimento:</b> ${dueDateBR}<br/>
+     <b>Valor:</b> ${amountBRL}</p>
+  <p>Se já realizou o pagamento, por favor desconsidere este aviso.</p>
+  <p>Qualquer dúvida, fale com a secretaria.</p>
+  <p style="margin-top:16px">— ${tenantName}</p>
+</div>`,
+
+  text: ({ tenantName, studentName, dueDateBR, amountBRL, status }) =>
+`${tenantName}
+${status === "Atrasado" ? "Lembrete de atraso" : (status === "Vencido" ? "Vence hoje" : "Lembrete de vencimento")}
+Aluno: ${studentName}
+Vencimento: ${dueDateBR}
+Valor: ${amountBRL}
+
+Se já pagou, desconsidere. Dúvidas, contate a secretaria.
+— ${tenantName}`
+};
+
+// Constrói o e-mail a partir de uma linha da prévia
+function buildReminderEmail(row, session) {
+  const tenantName = session?.tenantName || "Sua escola";
+  const studentName = row.student_name_snapshot || row.student_name || "Aluno";
+  const dueDateBR = fmtBRDate(row.due_date);
+  const amountBRL = fmtBRL(row.amount);
+  const status = row.reminder_status; // "Atrasado" | "Vencido" | "A vencer"
+
+  return {
+    to: row.email_to,
+    subject: REMINDER_TEMPLATES.subject({ status, studentName, dueDateBR }),
+    html: REMINDER_TEMPLATES.html({ tenantName, studentName, dueDateBR, amountBRL, status }),
+    text: REMINDER_TEMPLATES.text({ tenantName, studentName, dueDateBR, amountBRL, status }),
+  };
+}
+
+// === NOVOS HELPERS: templates por tenant com fallback ===
+function applyTemplate(str, vars) {
+  if (!str) return "";
+  return str.replace(/{{\s*(\w+)\s*}}/g, (_, k) => (vars?.[k] ?? ""));
+}
+async function getTenantReminderTemplate(status) {
+  try {
+    const res = await fetch(
+      `/api/email-templates?kind=payment_reminder&status=${encodeURIComponent(status)}`,
+      { method: "GET" }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return { subject: data.subject || "", html: data.html || "", text: data.text || "" };
+  } catch {
+    return null;
+  }
+}
+function makeTemplateVars(row, session) {
+  return {
+    tenantName: session?.tenantName || "Sua escola",
+    studentName: row.student_name_snapshot || row.student_name || "Aluno",
+    dueDate: fmtBRDate(row.due_date),
+    amount: fmtBRL(row.amount),
+    status: row.reminder_status,
+  };
+}
+async function buildReminderEmailWithTenant(row, session, tplMap) {
+  const v = makeTemplateVars(row, session);
+  const tpl = tplMap.get(row.reminder_status) || null;
+
+  if (tpl && (tpl.subject || tpl.html || tpl.text)) {
+    return {
+      to: row.email_to,
+      subject: tpl.subject ? applyTemplate(tpl.subject, v) : REMINDER_TEMPLATES.subject({
+        status: v.status, studentName: v.studentName, dueDateBR: v.dueDate
+      }),
+      html:    tpl.html    ? applyTemplate(tpl.html, v)    : REMINDER_TEMPLATES.html({
+        tenantName: v.tenantName, studentName: v.studentName, dueDateBR: v.dueDate, amountBRL: v.amount, status: v.status
+      }),
+      text:    tpl.text    ? applyTemplate(tpl.text, v)    : REMINDER_TEMPLATES.text({
+        tenantName: v.tenantName, studentName: v.studentName, dueDateBR: v.dueDate, amountBRL: v.amount, status: v.status
+      }),
+    };
+  }
+
+  return buildReminderEmail(row, session);
+}
+
+export default function MensalidadesPage() {
+  // --- Estado para prévia de lembretes ---
+  const [remPrevOpen, setRemPrevOpen] = useState(false);
+  const [remPrevBusy, setRemPrevBusy] = useState(false);
+  const [remRows, setRemRows] = useState([]); // linhas enriquecidas com email + bucket
+// dias até o vencimento: negativo = já venceu
+
+
   // ---------- Sessão / Permissões (do contexto) ----------
   const sess = useSession(); // ✅ sempre chama o hook
   const session = sess?.session;
@@ -101,6 +219,107 @@ console.log("claim object:", session?.claim);
 
   // --- Receita total (Mensalidades + Outras Receitas)
   const [combined, setCombined] = useState(null);
+  // Seleção na prévia de lembretes
+const [selectedIds, setSelectedIds] = useState(new Set());
+const [sendingRem, setSendingRem] = useState(false);
+
+// Alterna seleção de uma linha
+function toggleSelect(id) {
+  setSelectedIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+}
+
+// Selecionar / limpar tudo (visível)
+function selectAllVisible(flag) {
+  setSelectedIds(flag ? new Set(remRows.map(r => r.id)) : new Set());
+}
+
+// Envio (selecionados ou todos)
+// SUBSTITUA sua função sendReminders por ESTA versão
+async function sendReminders({ onlySelected = false } = {}) {
+  const pool = onlySelected
+    ? remRows.filter(r => selectedIds.has(r.id))
+    : remRows;
+
+  const deliverables = pool.filter(r => !!r.email_to);
+  if (deliverables.length === 0) {
+    alert("Nada para enviar (sem e-mails válidos).");
+    return;
+  }
+
+  if (!confirm(`Enviar ${deliverables.length} lembrete(s) agora?`)) return;
+
+  setSendingRem(true);
+  let ok = 0, fail = 0, skipped = pool.length - deliverables.length;
+
+  try {
+    const { supabase } = await import("@/lib/supabaseClient");
+
+    // 1) buscar templates do tenant por status (apenas uma vez)
+    const statuses = [...new Set(deliverables.map(r => r.reminder_status).filter(Boolean))];
+    const tplMap = new Map();
+    const fetched = await Promise.all(statuses.map(s => getTenantReminderTemplate(s)));
+    statuses.forEach((s, i) => tplMap.set(s, fetched[i]));
+
+    for (const r of deliverables) {
+      // monta payload do e-mail com templates do tenant (fallback ao default)
+      const payload = await buildReminderEmailWithTenant(r, session, tplMap);
+
+      // dispara via Mailgun
+      const res = await fetch("/api/send-mail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      // prepara dados para o log
+      let providerId = null;
+      let errorText = null;
+
+      if (res.ok) {
+        // /api/send-mail retorna { ok:true, id:"<mailgun-id>" }
+        const data = await res.json().catch(() => ({}));
+        providerId = data?.id ?? null;
+        ok++;
+      } else {
+        // captura texto bruto do erro do /api/send-mail
+        errorText = await res.text().catch(() => "Mail provider error");
+        fail++;
+      }
+
+      // insere log (não bloqueia a UX se falhar)
+      try {
+        await supabase.from("finance_reminders_log").insert({
+          tenant_id: session?.tenant?.id ?? session?.tenant_id ?? null,
+          payment_id: r.id ?? null,
+          student_id: r.student_id ?? null,
+          payer_id: r.payer_id ?? null,
+          to_email: r.email_to ?? null,           // <- nome correto na tabela
+          subject: payload.subject ?? null,
+          provider: "mailgun",
+          provider_id: providerId,                // <- nome correto na tabela
+          status: res.ok ? "sent" : "error",
+          error_text: errorText,                  // texto curto/visível
+          error_detail: null,                     // reserve p/ stack/trace se quiser
+          payload: payload,                       // jsonb com subject/html/text
+          sent_at: res.ok ? new Date().toISOString() : null,
+        });
+      } catch {
+        // se o log falhar, só segue (não quebra o envio)
+      }
+    }
+
+  alert(`Lembretes: enviados ${ok}, falhas ${fail}, sem e-mail ${skipped}.`);
+  } catch (e) {
+    alert(`Erro ao enviar: ${e?.message || e}`);
+  } finally {
+    setSendingRem(false);
+  }
+}
 
   useEffect(() => {
     let alive = true;
@@ -264,91 +483,194 @@ console.log("claim object:", session?.claim);
   }
 
   // ---------- Prévia de geração ----------
-  async function openPreview() {
-    if (!canPreview) {
-      alert("Prévia indisponível no adaptador atual.");
-      return;
-    }
-    setPreviewOpen(true);
-    setPreviewLoading(true);
-    try {
-      // 1) prévia “crua”
-      const prev = (await financeGateway.previewGenerateMonth({ ym })) || [];
-
-      // 2) IDs de alunos
-      const studentIds = [...new Set(prev.map((p) => p.student_id).filter(Boolean))];
-
-      // 3) buscar alunos (nome + payer_id)
-      const { supabase } = await import("@/lib/supabaseClient");
-      let studs = [];
-      if (studentIds.length) {
-        const tries = ["id, full_name, payer_id", "id, name, payer_id"];
-        for (const cols of tries) {
-          const { data, error } = await supabase.from("students").select(cols).in("id", studentIds);
-          if (!error) {
-            studs = data || [];
-            break;
-          }
-        }
-      }
-
-      // 4) índices
-      const studentNameById = Object.create(null);
-      const payerIdByStudentId = Object.create(null);
-      for (const s of studs) {
-        studentNameById[s.id] = s.full_name ?? s.name ?? "";
-        payerIdByStudentId[s.id] = s.payer_id ?? null;
-      }
-
-      // 5) coletar payer_ids
-      const payerIdsSet = new Set(prev.map((p) => p.payer_id).filter(Boolean));
-      for (const sid of studentIds) {
-        const pid = payerIdByStudentId[sid];
-        if (pid) payerIdsSet.add(pid);
-      }
-      const payerIds = [...payerIdsSet];
-
-      // 6) buscar pagadores (nome)
-      let pays = [];
-      if (payerIds.length) {
-        const tries = ["id, name", "id, full_name"];
-        for (const cols of tries) {
-          const { data, error } = await supabase.from("payers").select(cols).in("id", payerIds);
-          if (!error) {
-            pays = data || [];
-            break;
-          }
-        }
-      }
-      const payerNameById = Object.create(null);
-      for (const p of pays) payerNameById[p.id] = p.name ?? p.full_name ?? "";
-
-      // 7) enriquecer linhas
-      const enriched = prev.map((r) => {
-        const pid = r.payer_id ?? payerIdByStudentId[r.student_id] ?? null;
-        return {
-          ...r,
-          student_name:
-            r.student_name_snapshot ??
-            studentNameById[r.student_id] ??
-            r.student_name ??
-            r.student_id,
-          payer_name:
-            r.payer_name_snapshot ??
-            (pid ? payerNameById[pid] : undefined) ??
-            r.payer_name ??
-            "—",
-        };
-      });
-      setPreview(enriched);
-    } catch (e) {
-      alert(e?.message || String(e));
-    } finally {
-      setPreviewLoading(false);
-    }
+async function openPreview() {
+  if (!canPreview) {
+    alert("Prévia indisponível no adaptador atual.");
+    return;
   }
+  setPreviewOpen(true);
+  setPreviewLoading(true);
+  try {
+    // 0) monta chaves existentes no mês atual (já carregadas em `rows`)
+    const existingKeys = new Set(
+      (rows || [])
+        .map(r => {
+          const sid = r.student_id ?? r.student_id_snapshot ?? null;
+          const due = r.due_date ? String(r.due_date).slice(0, 10) : null;
+          return sid && due ? `${sid}::${due}` : null;
+        })
+        .filter(Boolean)
+    );
+
+    // 1) prévia “crua”
+    const rawPrev = (await financeGateway.previewGenerateMonth({ ym })) || [];
+
+    // 2) mantém só o que ainda NÃO foi gerado no mês
+    const prev = rawPrev.filter(p => {
+      const sid = p.student_id ?? null;
+      const due = p.due_date ? String(p.due_date).slice(0, 10) : null;
+      return !(sid && due && existingKeys.has(`${sid}::${due}`));
+    });
+
+    // 3) IDs de alunos
+    const studentIds = [...new Set(prev.map((p) => p.student_id).filter(Boolean))];
+
+    // 4) buscar alunos (nome + payer_id)
+    const { supabase } = await import("@/lib/supabaseClient");
+    let studs = [];
+    if (studentIds.length) {
+      const tries = ["id, full_name, payer_id", "id, name, payer_id"];
+      for (const cols of tries) {
+        const { data, error } = await supabase.from("students").select(cols).in("id", studentIds);
+        if (!error) {
+          studs = data || [];
+          break;
+        }
+      }
+    }
+
+    // 5) índices
+    const studentNameById = Object.create(null);
+    const payerIdByStudentId = Object.create(null);
+    for (const s of studs) {
+      studentNameById[s.id] = s.full_name ?? s.name ?? "";
+      payerIdByStudentId[s.id] = s.payer_id ?? null;
+    }
+
+    // 6) coletar payer_ids
+    const payerIdsSet = new Set(prev.map((p) => p.payer_id).filter(Boolean));
+    for (const sid of studentIds) {
+      const pid = payerIdByStudentId[sid];
+      if (pid) payerIdsSet.add(pid);
+    }
+    const payerIds = [...payerIdsSet];
+
+    // 7) buscar pagadores (nome)
+    let pays = [];
+    if (payerIds.length) {
+      const tries = ["id, name", "id, full_name"];
+      for (const cols of tries) {
+        const { data, error } = await supabase.from("payers").select(cols).in("id", payerIds);
+        if (!error) {
+          pays = data || [];
+          break;
+        }
+      }
+    }
+    const payerNameById = Object.create(null);
+    for (const p of pays) payerNameById[p.id] = p.name ?? p.full_name ?? "";
+
+    // 8) enriquecer linhas
+    const enriched = prev.map((r) => {
+      const pid = r.payer_id ?? payerIdByStudentId[r.student_id] ?? null;
+      return {
+        ...r,
+        student_name:
+          r.student_name_snapshot ??
+          studentNameById[r.student_id] ??
+          r.student_name ??
+          r.student_id,
+        payer_name:
+          r.payer_name_snapshot ??
+          (pid ? payerNameById[pid] : undefined) ??
+          r.payer_name ??
+          "—",
+      };
+    });
+    setPreview(enriched);
+  } catch (e) {
+    alert(e?.message || String(e));
+  } finally {
+    setPreviewLoading(false);
+  }
+}
 
   // ---------- Ações (somente para quem tem write) ----------
+  // --- Resolver e-mails (payer → fallback student) ---
+  async function resolveEmailsFor(rowsList) {
+    const studentIds = [...new Set(rowsList.map(r => r.student_id).filter(Boolean))];
+    const payerIds   = [...new Set(rowsList.map(r => r.payer_id).filter(Boolean))];
+
+    const { supabase } = await import("@/lib/supabaseClient");
+
+    // students: id, email, payer_id (tentamos colunas alternativas se necessário)
+    let students = [];
+    {
+      const tries = ["id,email,payer_id", "id,student_email:email,payer_id"];
+      for (const cols of tries) {
+        const { data, error } = await supabase.from("students").select(cols).in("id", studentIds);
+        if (!error) { students = data || []; break; }
+      }
+    }
+
+    // payers: id, email
+    let payers = [];
+    {
+      const tries = ["id,email", "id,contact_email:email"];
+      for (const cols of tries) {
+        const { data, error } = await supabase.from("payers").select(cols).in("id", payerIds);
+        if (!error) { payers = data || []; break; }
+      }
+    }
+
+    const emailByStudentId = Object.create(null);
+    const payerIdByStudent = Object.create(null);
+    students.forEach(s => {
+      emailByStudentId[s.id] = s.email ?? s.student_email ?? null;
+      payerIdByStudent[s.id] = s.payer_id ?? null;
+    });
+
+    const emailByPayerId = Object.create(null);
+    payers.forEach(p => { emailByPayerId[p.id] = p.email ?? p.contact_email ?? null; });
+
+    // enriquece cada linha com {email_to, email_source}
+    return rowsList.map(r => {
+      const pid = r.payer_id ?? payerIdByStudent[r.student_id] ?? null;
+      const payerEmail   = pid ? emailByPayerId[pid] : null;
+      const studentEmail = emailByStudentId[r.student_id] ?? null;
+      const email_to     = payerEmail || studentEmail || null;
+      const email_source = payerEmail ? "payer" : (studentEmail ? "student" : null);
+      return { ...r, email_to, email_source };
+    });
+  }
+
+
+// Adicione perto das outras actions
+async function openReminderPreview() {
+  setRemPrevOpen(true);
+  setRemPrevBusy(true);
+  try {
+    // mantém o mesmo filtro de janelas (D-7, D-3, D-1, D0, Vencido)
+    const eligible = (rows || [])
+      .filter(r => r.status === "pending")
+      .map(r => ({ ...r, reminder_status: reminderStatus(r.due_date, r.status) }))
+      .filter(r => !!r.reminder_status)
+      // adiciona o "Status" simplificado para exibição
+      .map(r => ({ ...r, reminder_status: reminderStatus(r.due_date, r.status) }));
+
+    const enriched = await resolveEmailsFor(eligible);
+
+    // ordena por Status (Atrasado > Vencido > A vencer), depois por data e nome
+    const order = { "Atrasado": 0, "Vencido": 1, "A vencer": 2 };
+    enriched.sort((a, b) => {
+      const byStatus = (order[a.reminder_status] ?? 99) - (order[b.reminder_status] ?? 99);
+      if (byStatus !== 0) return byStatus;
+      const byDue = new Date(a.due_date) - new Date(b.due_date);
+      if (byDue !== 0) return byDue;
+      const an = (a.student_name_snapshot || a.student_name || "").toString();
+      const bn = (b.student_name_snapshot || b.student_name || "").toString();
+      return an.localeCompare(bn, "pt-BR");
+    });
+
+    setRemRows(enriched);
+  } catch (e) {
+    alert(e?.message || String(e));
+    setRemRows([]);
+  } finally {
+    setRemPrevBusy(false);
+  }
+}
+
   async function doGenerate() {
     if (!canGenerate) {
       alert("Geração indisponível no adaptador atual.");
@@ -608,6 +930,9 @@ function BulkPayByPayer({ rows, ym, onDone }) {
               {genLoading ? "Gerando…" : "Gerar mensalidades"}
             </button>
           )}
+          <button onClick={openReminderPreview} className="border rounded px-3 py-2">
+            Prévia de lembretes
+          </button>
         </div>
       </header>
 
@@ -757,6 +1082,145 @@ function BulkPayByPayer({ rows, ym, onDone }) {
           </div>
         </div>
       )}
+    {remPrevOpen && (
+  <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
+    <div className="bg-white rounded shadow-xl w-full max-w-3xl">
+      <div className="p-4 border-b flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="font-semibold">Prévia de lembretes ({ym})</div>
+          {isAdmin && (
+            <a
+              href="/app/conta#comunicacao"
+              className="text-sm text-emerald-700 underline hover:no-underline"
+              title="Configurar templates de e-mail do tenant"
+            >
+              Configurar templates
+            </a>
+          )}
+        </div>
+        <button onClick={() => setRemPrevOpen(false)} className="text-slate-500">✕</button>
+      </div>
+
+      <div className="p-4 max-h-[70vh] overflow-auto">
+        {remPrevBusy ? (
+          <div>Carregando…</div>
+        ) : remRows.length === 0 ? (
+          <div className="text-slate-500">
+           Nenhum aluno com cobrança atrasada, vencendo hoje ou nos próximos 7 dias.
+          </div>
+        ) : (
+          <>
+            {/* Resumo por status */}
+            <div className="mb-3 text-sm text-slate-700">
+              {["Atrasado","Vencido","A vencer"].map(tag => {
+                const n = remRows.filter(r => r.reminder_status === tag).length;
+                return (
+                  <span key={tag} className="inline-block mr-3">
+                    <b>{tag}:</b> {n}
+                  </span>
+                );
+              })}
+              <span className="inline-block ml-4">
+                <b>Sem e-mail:</b> {remRows.filter(r => !r.email_to).length}
+              </span>
+            </div>
+
+            {/* Barra de ações */}
+<div className="mb-2 flex items-center justify-between">
+  <div className="text-sm text-slate-700">
+    <button
+      className="mr-2 underline"
+      onClick={() => selectAllVisible(true)}
+    >
+      Selecionar todos
+    </button>
+    <button
+      className="underline"
+      onClick={() => selectAllVisible(false)}
+    >
+      Limpar seleção
+    </button>
+    <span className="ml-3 opacity-70">
+      Selecionados: {selectedIds.size}
+    </span>
+  </div>
+
+  <div className="flex gap-2">
+    <button
+      onClick={() => sendReminders({ onlySelected: true })}
+      className="px-3 py-2 border rounded bg-emerald-600 text-white disabled:opacity-50"
+      disabled={sendingRem || selectedIds.size === 0}
+      title="Enviar somente para os selecionados"
+    >
+      {sendingRem ? "Enviando…" : "Enviar selecionados"}
+    </button>
+    <button
+      onClick={() => sendReminders({ onlySelected: false })}
+      className="px-3 py-2 border rounded bg-emerald-700 text-white disabled:opacity-50"
+      disabled={sendingRem || remRows.length === 0}
+      title="Enviar para todos listados"
+    >
+      {sendingRem ? "Enviando…" : "Enviar todos"}
+    </button>
+  </div>
+</div>
+
+{/* Tabela com seleção */}
+<div className="overflow-auto border rounded">
+  <table className="min-w-[780px] w-full">
+    <thead className="bg-slate-50">
+      <tr>
+        <Th></Th>
+        <Th>Status</Th>
+        <Th>Aluno</Th>
+        <Th>Vencimento</Th>
+        <Th>E-mail</Th>
+      </tr>
+    </thead>
+    <tbody>
+      {remRows.map(r => (
+        <tr key={r.id} className="border-t">
+          <Td>
+            <input
+              type="checkbox"
+              checked={selectedIds.has(r.id)}
+              onChange={() => toggleSelect(r.id)}
+              aria-label={`Selecionar ${r.student_name_snapshot || r.student_name || "Aluno"}`}
+            />
+          </Td>
+          <Td>{r.reminder_status}</Td>
+          <Td>{r.student_name_snapshot || r.student_name || "—"}</Td>
+          <Td>{fmtBRDate(r.due_date)}</Td>
+          <Td>
+            {r.email_to ? (
+              <span className="text-slate-800">
+                {r.email_to}
+                <span className="ml-2 text-xs text-slate-500">
+                  ({r.email_source === "payer" ? "pagador" : "aluno"})
+                </span>
+              </span>
+            ) : (
+              <span className="text-rose-700 font-medium">— sem e-mail —</span>
+            )}
+          </Td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+          </>
+        )}
+      </div>
+
+   <div className="p-4 border-t flex justify-end">
+  <button onClick={() => setRemPrevOpen(false)} className="px-3 py-2 border rounded">
+    Fechar
+  </button>
+</div>
+    </div>
+  </div>
+)}
+
     </main>
   );
 }

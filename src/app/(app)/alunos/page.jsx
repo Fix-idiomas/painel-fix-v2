@@ -125,6 +125,9 @@ export default function AlunosPage() {
         due_day: Math.min(Math.max(Number(formCreate.due_day || 5), 1), 28),
         birth_date: formCreate.birth_date || null, // yyyy-mm-dd
         payer_id: chosenPayerId,
+        email: formCreate.email || null,
+        endereco: formCreate.endereco || null,
+        cpf: formCreate.cpf || null,
       });
 
       resetCreate();

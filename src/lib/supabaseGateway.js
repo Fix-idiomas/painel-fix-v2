@@ -130,16 +130,20 @@ export const supabaseGateway = {
     return data || [];
   },
 
-  async createStudent({
-    name,
-    monthly_value,
-    due_day,
-    birth_date = null,
-    status = "ativo",
-    payer_id = null,
-  }) {
+  async createStudent(payload) {
+    const {
+      name,
+      monthly_value,
+      due_day,
+      birth_date = null,
+      status = "ativo",
+      payer_id = null,
+      email = null,
+      endereco = null,
+      cpf = null,
+    } = payload || {};
     if (!name) throw new Error("Nome é obrigatório");
-    const tenant_id = await this.getTenantId(); // <-- aqui
+    const tenant_id = await this.getTenantId();
 
     const row = {
       name: String(name).trim(),
@@ -148,9 +152,9 @@ export const supabaseGateway = {
       birth_date: birth_date || null,
       status: status || "ativo",
       payer_id: payer_id || null,
-      email: payload?.email ? String(payload.email).trim().toLowerCase() : null,
-      endereco: payload?.endereco ? String(payload.endereco).trim() : null,
-      cpf: payload?.cpf ? String(payload.cpf).trim() : null,
+      email: email ? String(email).trim().toLowerCase() : null,
+      endereco: endereco ? String(endereco).trim() : null,
+      cpf: cpf ? String(cpf).trim() : null,
       created_at: new Date().toISOString(),
     };
     const { data, error } = await supabase
