@@ -39,15 +39,28 @@ export default function UserMenu() {
 
   async function onLogout() {
   try {
-    setSigningOut(true);
-    await supabase.auth.signOut();     // encerra a sessão
-    window.location.href = "/login";   // 🔥 recarrega e força middleware
-  } catch (e) {
-    console.warn("Falha no logout:", e?.message || e);
-  } finally {
-    setSigningOut(false);
-    setOpen(false);
-  }
+  setSigningOut(true);
+
+  // encerra só a sessão deste cliente (não derruba outros devices)
+  await supabase.auth.signOut({ scope: "local" });
+
+  // higiene de UI/estado (opcional, mas recomendado)
+  try {
+    localStorage.removeItem("pf.session.ui");
+    // adicione outras chaves do seu app se houver
+    // localStorage.removeItem("pf.lastRoute");
+    // sessionStorage.removeItem("pf.tmp");
+  } catch {}
+
+  // evita "Voltar" levar a uma rota protegida em cache/histórico
+  window.location.replace("/login");
+} catch (e) {
+  console.warn("Falha no logout:", e?.message || e);
+} finally {
+  setSigningOut(false);
+  setOpen(false);
+}
+
 }
   return (
     <div className="relative">

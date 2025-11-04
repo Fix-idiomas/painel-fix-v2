@@ -346,14 +346,14 @@ export default function Page() {
             type="month"
             value={ym}
             onChange={(e) => setYm(e.target.value.slice(0, 7))}
-            className="border rounded px-2 py-1"
+            className="rounded-lg border px-3 py-2 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-600 focus:border-gray-600"
           />
         </div>
         <div className="flex items-center gap-2">
           <select
             value={panelGroup}
             onChange={(e) => setPanelGroup(e.target.value)}
-            className="border rounded px-2 py-2"
+            className="rounded-lg border px-3 py-2 bg-white shadow-sm text-gray-800 hover:border-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-600 focus:border-gray-600 transition-colors"
             title="Escolha o conjunto de cards"
           >
             <option value="receitas">Receitas</option>
@@ -362,11 +362,11 @@ export default function Page() {
           </select>
           <button
             onClick={() => setShowValues((v) => !v)}
-            className="border rounded px-3 py-2"
+            className="rounded-lg border px-3 py-2 text-gray-700 border-gray-700 hover:bg-gray-700/10 focus:outline-none focus:ring-2 focus:ring-gray-600 transition-colors"
           >
             {showValues ? "Ocultar valores" : "Mostrar valores"}
           </button>
-          <button onClick={() => setOpenMail(true)} className="border rounded px-3 py-2">
+          <button onClick={() => setOpenMail(true)} className="rounded-lg border px-3 py-2 bg-gray-700 text-white border-gray-800 hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-600 shadow-sm transition-colors">
             Enviar e-mail
           </button>
         </div>
@@ -414,60 +414,68 @@ export default function Page() {
 
       {/* Próximos 7 dias + Aniversariantes do mês */}
       <section className="grid gap-4 lg:grid-cols-2">
-        <div className="border rounded overflow-hidden">
-          <div className="px-3 py-2 border-b bg-slate-50 font-semibold">Vencem nos próximos 7 dias</div>
+        <div className="border rounded-xl overflow-hidden shadow-sm">
+          <div className="px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">Vencem nos próximos 7 dias</div>
           {upcoming.length === 0 ? (
             <div className="p-4 text-slate-600">Nada a vencer no período.</div>
           ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50">
+            <div className="max-h-80 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-white/90 border-b">
                 <tr>
                   <Th>Vencimento</Th>
                   <Th>Aluno</Th>
                   <Th>Pagador</Th>
                   <Th className="text-right">Valor</Th>
                 </tr>
-              </thead>
-              <tbody>
-                {upcoming.map((r) => (
-                  <tr key={r.id} className="border-t">
-                    <Td>
-                      {fmtBRDateDots(r.due_date)}
-                      {r.isToday && (
-                        <span className="ml-2 rounded-full px-2 py-0.5 text-xs bg-amber-100 text-amber-800">Hoje</span>
-                      )}
-                    </Td>
-                    <Td>{r.student_name}</Td>
-                    <Td>{r.payer_name}</Td>
-                    <Td className="text-right">{maskMoney(r.amount)}</Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {upcoming.map((r) => (
+                    <tr key={r.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
+                      <Td>
+                        {fmtBRDateDots(r.due_date)}
+                        {r.isToday && (
+                          <span className="ml-2 rounded-full px-2 py-0.5 text-xs bg-amber-100 text-amber-800">Hoje</span>
+                        )}
+                      </Td>
+                      <Td>{r.student_name}</Td>
+                      <Td>{r.payer_name}</Td>
+                      <Td className="text-right tabular-nums font-mono">{maskMoney(r.amount)}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
-        <div className="border rounded overflow-hidden">
-          <div className="px-3 py-2 border-b bg-slate-50 font-semibold">Aniversariantes do mês</div>
+        <div className="border rounded-xl overflow-hidden shadow-sm">
+          <div className="px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">Aniversariantes do mês</div>
           {birthdays.length === 0 ? (
             <div className="p-4 text-slate-600">Nenhum aniversariante encontrado.</div>
           ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50">
+            <div className="max-h-80 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-white/90 border-b">
                 <tr>
                   <Th style={{ width: 80 }}>Dia</Th>
                   <Th>Nome</Th>
                 </tr>
-              </thead>
-              <tbody>
-                {birthdays.map((b) => (
-                  <tr key={b.id} className="border-t">
-                    <Td>{String(b.dd).padStart(2, "0")}</Td>
-                    <Td>{b.name}</Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {birthdays.map((b) => (
+                    <tr key={b.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
+                      <Td>
+                        <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-slate-100 px-2 text-xs font-medium text-slate-700">
+                          {String(b.dd).padStart(2, "0")}
+                        </span>
+                      </Td>
+                      <Td>{b.name}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </section>
@@ -539,7 +547,7 @@ function Kpi({ title, value, tone = "neutral", subtitle }) {
   }[tone] || "text-slate-900";
 
   return (
-    <div className={`border rounded p-3 ${toneBox}`}>
+    <div className={`rounded-xl border p-3 shadow-sm hover:shadow-md transition-shadow ${toneBox}`}>
       <div className={`text-xs ${toneText} opacity-80`}>{title}</div>
       <div className={`text-xl font-semibold ${toneText}`}>{value}</div>
       {subtitle && <div className="mt-1 text-xs text-slate-600">{subtitle}</div>}

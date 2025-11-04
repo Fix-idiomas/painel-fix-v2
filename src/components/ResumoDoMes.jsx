@@ -61,7 +61,7 @@ export function ResumoDoMes({ ym, costCenter = null }) {
 
 function Card({ title, value, highlight }) {
   return (
-    <div className="border rounded p-3">
+    <div className="rounded-xl border p-3 shadow-sm">
       <div className="text-xs text-slate-500">{title}</div>
       <div className={`text-xl font-semibold ${highlight || ""}`}>{value}</div>
     </div>
