@@ -14,11 +14,11 @@ export default function Modal({ open, onClose, title, children, footer }) {
         aria-modal="true"
         className="absolute inset-0 flex items-center justify-center p-4"
       >
-        <div className="w-full max-w-xl rounded-lg bg-white shadow-lg">
+        <div className="w-full max-w-xl rounded-lg bg-white shadow-lg max-h-[calc(100vh-2rem)] flex flex-col">
           <div className="border-b px-4 py-3">
             <h2 className="text-lg font-semibold">{title}</h2>
           </div>
-          <div className="p-4">{children}</div>
+          <div className="p-4 overflow-y-auto">{children}</div>
           {footer && <div className="border-t px-4 py-3 flex justify-end gap-2">{footer}</div>}
         </div>
       </div>

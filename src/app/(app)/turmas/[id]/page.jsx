@@ -756,7 +756,7 @@ useEffect(() => {
       >
         <form onSubmit={onSubmitSess} className="grid gap-4">
           {/* Geral */}
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
             <div className="sm:col-span-1">
               <label className="block text-sm mb-1">Data*</label>
               <input
@@ -781,11 +781,11 @@ useEffect(() => {
                 <option value="2">2 h</option>
               </select>
             </div>
-            <div className="sm:col-span-1 flex items-end gap-3">
+            <div className="sm:col-span-2 md:col-span-1 flex flex-wrap items-end gap-2 justify-start md:justify-end">
               <button
                 type="button"
                 onClick={() => setAllPresentValue(true)}
-                className="px-3 py-2 border rounded"
+                className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm shrink-0 w-44 text-center"
                 title="Marcar todos como presentes"
               >
                 Todos presentes
@@ -793,7 +793,7 @@ useEffect(() => {
               <button
                 type="button"
                 onClick={() => setAllPresentValue(false)}
-                className="px-3 py-2 border rounded"
+                className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm shrink-0 w-44 text-center"
                 title="Marcar todos como ausentes"
               >
                 Todos ausentes
@@ -817,9 +817,9 @@ useEffect(() => {
               Adicione alunos à turma para registrar presenças.
             </div>
           ) : (
-            <div className="border rounded overflow-auto">
+            <div className="border rounded overflow-x-auto">
               <table className="min-w-full text-sm">
-                <thead className="bg-gray-50">
+                <thead className="sticky top-0 z-10 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
                   <tr>
                     <Th>Aluno</Th>
                     <Th>Presença</Th>
@@ -890,8 +890,8 @@ useEffect(() => {
 }
 
 function Th({ children }) {
-  return <th className="text-left px-3 py-2 font-medium">{children}</th>;
+  return <th className="text-left px-2 sm:px-3 py-2 font-medium">{children}</th>;
 }
 function Td({ children }) {
-  return <td className="px-3 py-2">{children}</td>;
+  return <td className="px-2 sm:px-3 py-2">{children}</td>;
 }
