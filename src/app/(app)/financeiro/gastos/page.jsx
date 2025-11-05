@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
@@ -84,7 +84,77 @@ export default function GastosPage() {
     due_month: "1",
     active: true,
     cost_center: "PJ", // PJ | PF
+    // Novos (recorrência)
+    recurrence_mode: "indefinite", // 'indefinite' | 'installments' | 'until_month'
+    start_month: "", // YYYY-MM
+    installments: "",
+    end_month: "", // YYYY-MM
   });
+
+  // ---------- Duplicatas (helpers locais) ----------
+  const normalizeTitle = (s) =>
+    String(s || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  const clampDay = (n) => Math.min(Math.max(Number(n || 5), 1), 28);
+  const shapeKey = (freq, day, month, cc) =>
+    `${cc || "PJ"}|${String(freq || "monthly")}|${clampDay(day)}|${String(freq) === "annual" ? Number(month || 0) : 0}`;
+
+  const currentShapeKey = useMemo(
+    () => shapeKey(formTpl.frequency, formTpl.due_day, formTpl.due_month, formTpl.cost_center),
+    [formTpl.frequency, formTpl.due_day, formTpl.due_month, formTpl.cost_center]
+  );
+
+  const exactDuplicate = useMemo(() => {
+    if (!formTpl.title) return null;
+    const norm = normalizeTitle(formTpl.title);
+    const amt = Number(formTpl.amount || 0);
+    return (
+      templates.find(
+        (t) =>
+          (!tplId || t.id !== tplId) &&
+          !!t.active &&
+          shapeKey(t.frequency, t.due_day, t.due_month, t.cost_center) === currentShapeKey &&
+          normalizeTitle(t.title) === norm &&
+          Math.abs(Number(t.amount || 0) - amt) < 0.01
+      ) || null
+    );
+  }, [templates, formTpl.title, formTpl.amount, currentShapeKey, tplId]);
+
+  // Similaridade simples por tokens (soft suggestion)
+  const tokenSet = (s) => new Set(normalizeTitle(s).split(" ").filter(Boolean));
+  const tokenJaccard = (a, b) => {
+    const A = tokenSet(a);
+    const B = tokenSet(b);
+    if (!A.size || !B.size) return 0;
+    let inter = 0;
+    for (const w of A) if (B.has(w)) inter++;
+    return inter / (A.size + B.size - inter);
+  };
+
+  const softSuggestions = useMemo(() => {
+    if (!formTpl.title) return [];
+    const norm = normalizeTitle(formTpl.title);
+    const augmented = (templates || [])
+      .filter((t) => !(tplId && t.id === tplId))
+      .map((t) => {
+        const tNorm = normalizeTitle(t.title);
+        const starts = tNorm.startsWith(norm) ? 1 : 0;
+        const includes = !starts && tNorm.includes(norm) ? 1 : 0;
+        const sim = tokenJaccard(tNorm, norm);
+        // Prioriza prefixo, depois substring, depois similaridade
+        const score = starts * 3 + includes * 2 + sim;
+        return { t, tNorm, score, starts, includes, sim };
+      })
+      .filter((r) => r.starts || r.includes || r.sim >= 0.4)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10)
+      .map((r) => r.t);
+    return augmented;
+  }, [templates, formTpl.title, tplId]);
 
   // Avulso
   const [openAvulso, setOpenAvulso] = useState(false);
@@ -276,6 +346,10 @@ export default function GastosPage() {
       due_month: "1",
       active: true,
       cost_center: "PJ",
+      recurrence_mode: "indefinite",
+      start_month: "",
+      installments: "",
+      end_month: "",
     });
     setOpenEditTpl(true);
   }
@@ -295,6 +369,10 @@ export default function GastosPage() {
       due_month: String(t.due_month ?? "1"),
       active: !!t.active,
       cost_center: t.cost_center || "PJ",
+      recurrence_mode: t.recurrence_mode || "indefinite",
+      start_month: (t.start_month ? String(t.start_month).slice(0,7) : ""),
+      installments: t.installments != null ? String(t.installments) : "",
+      end_month: (t.end_month ? String(t.end_month).slice(0,7) : ""),
     });
     setOpenEditTpl(true);
   }
@@ -307,6 +385,13 @@ export default function GastosPage() {
     }
     try {
       setSavingTpl(true);
+      // Bloqueio de duplicata exata (no cliente)
+      if (!tplId && exactDuplicate) {
+        throw new Error(
+          `Já existe uma recorrente idêntica: "${exactDuplicate.title}" (${fmtBRL(exactDuplicate.amount)}). ` +
+            `Ajuste o título/valor ou edite a existente.`
+        );
+      }
       const payload = {
         title: formTpl.title.trim(),
         category: formTpl.category.trim() || null,
@@ -316,8 +401,25 @@ export default function GastosPage() {
         due_month: Number(formTpl.due_month || 1),
         active: !!formTpl.active,
         cost_center: formTpl.cost_center,
+        // Novos (recorrência)
+        recurrence_mode: formTpl.recurrence_mode,
+        start_month: formTpl.start_month ? `${formTpl.start_month}-01` : null,
+        installments: formTpl.recurrence_mode === 'installments' ? Number(formTpl.installments || 0) : null,
+        end_month: formTpl.recurrence_mode === 'until_month' && formTpl.end_month ? `${formTpl.end_month}-01` : null,
       };
       if (!payload.title) throw new Error("Título é obrigatório");
+      // Validações de recorrência no front (para mensagens melhores)
+      if (payload.recurrence_mode === 'installments') {
+        if (!payload.installments || payload.installments < 1) {
+          throw new Error("Informe o número de parcelas (>= 1)");
+        }
+      }
+      if (payload.recurrence_mode === 'until_month') {
+        if (!payload.end_month) throw new Error("Informe o mês final");
+        if (payload.start_month && payload.end_month < payload.start_month) {
+          throw new Error("Mês final deve ser maior ou igual ao mês inicial");
+        }
+      }
 
       if (tplId) await financeGateway.updateExpenseTemplate(tplId, payload);
       else await financeGateway.createExpenseTemplate(payload);
@@ -596,6 +698,20 @@ export default function GastosPage() {
                 className="border rounded px-3 py-2 w-full"
                 required
               />
+              {!!softSuggestions.length && (
+                <div className="mt-2 text-xs p-2 border rounded bg-amber-50 border-amber-200">
+                  <div className="font-medium mb-1">Possíveis duplicatas (não bloqueia):</div>
+                  <ul className="list-disc pl-4 space-y-1">
+                    {softSuggestions.map((t) => (
+                      <li key={t.id}>
+                        <span className="font-medium">{t.title}</span>
+                        <span className="opacity-70"> — {fmtBRL(t.amount)}</span>
+                        <span className="opacity-70"> · {t.frequency === 'annual' ? `Anual (mês ${t.due_month})` : `Mensal (dia ${t.due_day})`}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
             <div>
@@ -644,6 +760,30 @@ export default function GastosPage() {
               </select>
             </div>
 
+            {/* Recorrência: duração */}
+            <div>
+              <label className="block text-sm mb-1">Duração</label>
+              <select
+                value={formTpl.recurrence_mode}
+                onChange={(e) => setFormTpl((f) => ({ ...f, recurrence_mode: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+              >
+                <option value="indefinite">Indefinida</option>
+                <option value="installments">Por parcelas</option>
+                <option value="until_month">Até um mês</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm mb-1">Início (mês)</label>
+              <input
+                type="month"
+                value={formTpl.start_month}
+                onChange={(e) => setFormTpl((f) => ({ ...f, start_month: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+              />
+            </div>
+
             {formTpl.frequency === "annual" ? (
               <>
                 <div>
@@ -678,6 +818,31 @@ export default function GastosPage() {
                   max="28"
                   value={formTpl.due_day}
                   onChange={(e) => setFormTpl((f) => ({ ...f, due_day: e.target.value }))}
+                  className="border rounded px-3 py-2 w-full"
+                />
+              </div>
+            )}
+
+            {formTpl.recurrence_mode === 'installments' && (
+              <div>
+                <label className="block text-sm mb-1">Parcelas</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={formTpl.installments}
+                  onChange={(e) => setFormTpl((f) => ({ ...f, installments: e.target.value }))}
+                  className="border rounded px-3 py-2 w-full"
+                />
+              </div>
+            )}
+
+            {formTpl.recurrence_mode === 'until_month' && (
+              <div>
+                <label className="block text-sm mb-1">Até (mês)</label>
+                <input
+                  type="month"
+                  value={formTpl.end_month}
+                  onChange={(e) => setFormTpl((f) => ({ ...f, end_month: e.target.value }))}
                   className="border rounded px-3 py-2 w-full"
                 />
               </div>
