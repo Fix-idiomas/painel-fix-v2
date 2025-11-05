@@ -285,74 +285,139 @@ export default function TurmasPage() {
         </div>
         {/* 🔒 Professor não pode criar turmas */}
         {!isProfessor && (
-          <button onClick={openCreateTurma} className="border rounded px-3 py-2">
+          <button
+            onClick={openCreateTurma}
+            className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+          >
             + Criar turma
           </button>
         )}
       </div>
 
-      <section className="border rounded overflow-auto">
+      <section className="border rounded">
         {loading ? (
           <div className="p-4">Carregando…</div>
         ) : visibleTurmas.length === 0 ? (
           <div className="p-4">Nenhuma turma encontrada.</div>
         ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <Th>Nome</Th>
-                <Th>Professor</Th>
-                <Th>Capacidade</Th>
-                <Th>Alunos</Th>
-                <Th>Ações</Th>
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            {/* Mobile cards */}
+            <div className="sm:hidden divide-y">
               {visibleTurmas.map((t) => (
-                <tr key={t.id} className="border-t">
-                  <Td>
-                    <Link href={`/turmas/${t.id}`} className="underline hover:no-underline">
-                      {t.name}
-                    </Link>
-                  </Td>
-                  <Td>{t.teacher_name ?? "-"}</Td>
-                  <Td>{t.capacity}</Td>
-                  <Td>{t.students_count}</Td>
-                  <Td className="py-2">
-                    <div className="flex gap-2">
-                      <Link href={`/turmas/${t.id}`} className="px-2 py-1 border rounded">
-                        Abrir
-                      </Link>
-
-                      {/* 🔒 Botões restritos a não-professor */}
-                      {!isProfessor && (
-                        <>
-                          <button
-                            onClick={() => openManageMembers(t)}
-                            className="px-2 py-1 border rounded"
-                          >
-                            Gerenciar
-                          </button>
-                          <button
-                            onClick={() => openEditTurmaModal(t)}
-                            className="px-2 py-1 border rounded"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            onClick={() => onDeleteTurma(t)}
-                            className="px-2 py-1 border rounded"
-                          >
-                            Excluir
-                          </button>
-                        </>
-                      )}
+                <div key={t.id} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-medium leading-tight">{t.name}</div>
+                      <div className="text-xs text-slate-600 mt-1">
+                        Professor: <b>{t.teacher_name ?? "-"}</b>
+                      </div>
                     </div>
-                  </Td>
-                </tr>
+                    <Link
+                      href={`/turmas/${t.id}`}
+                      className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+                    >
+                      Abrir
+                    </Link>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-700">
+                    <span className="inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1">
+                      Capacidade: {t.capacity}
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1">
+                      Alunos: {t.students_count}
+                    </span>
+                  </div>
+
+                  {!isProfessor && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        onClick={() => openManageMembers(t)}
+                        className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+                      >
+                        Gerenciar
+                      </button>
+                      <button
+                        onClick={() => openEditTurmaModal(t)}
+                        className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+                      >
+                        Editar
+                      </button>
+                      <button
+                        onClick={() => onDeleteTurma(t)}
+                        className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
+                      >
+                        Excluir
+                      </button>
+                    </div>
+                  )}
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+
+            {/* Desktop/table */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
+                  <tr>
+                    <Th>Nome</Th>
+                    <Th>Professor</Th>
+                    <Th>Capacidade</Th>
+                    <Th>Alunos</Th>
+                    <Th>Ações</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleTurmas.map((t) => (
+                    <tr key={t.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-100 transition-colors">
+                      <Td>
+                        <Link href={`/turmas/${t.id}`} className="underline hover:no-underline">
+                          {t.name}
+                        </Link>
+                      </Td>
+                      <Td>{t.teacher_name ?? "-"}</Td>
+                      <Td>{t.capacity}</Td>
+                      <Td>{t.students_count}</Td>
+                      <Td className="py-2">
+                        <div className="flex flex-wrap gap-2">
+                          <Link
+                            href={`/turmas/${t.id}`}
+                            className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+                          >
+                            Abrir
+                          </Link>
+
+                          {/* 🔒 Botões restritos a não-professor */}
+                          {!isProfessor && (
+                            <>
+                              <button
+                                onClick={() => openManageMembers(t)}
+                                className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+                              >
+                                Gerenciar
+                              </button>
+                              <button
+                                onClick={() => openEditTurmaModal(t)}
+                                className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                onClick={() => onDeleteTurma(t)}
+                                className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
+                              >
+                                Excluir
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
 
@@ -466,7 +531,7 @@ export default function TurmasPage() {
                 </button>
               </div>
 
-              <div className="border rounded">
+              <div className="border rounded overflow-x-auto">
                 {members.length === 0 ? (
                   <div className="p-3">Nenhum aluno nesta turma.</div>
                 ) : (
@@ -508,8 +573,8 @@ export default function TurmasPage() {
 }
 
 function Th({ children }) {
-  return <th className="text-left px-3 py-2 font-medium">{children}</th>;
+  return <th className="text-left px-2 sm:px-3 py-2 font-medium">{children}</th>;
 }
 function Td({ children }) {
-  return <td className="px-3 py-2">{children}</td>;
+  return <td className="px-2 sm:px-3 py-2">{children}</td>;
 }

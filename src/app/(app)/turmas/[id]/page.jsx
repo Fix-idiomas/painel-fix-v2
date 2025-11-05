@@ -429,13 +429,19 @@ useEffect(() => {
         </div>
 
         <div className="flex gap-2">
-          <button onClick={() => router.push("/turmas")} className="border rounded px-3 py-2">
+          <button
+            onClick={() => router.push("/turmas")}
+            className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+          >
             Voltar
           </button>
 
           {/* 🔒 Editar turma: apenas não-professor */}
           {!isProfessor && (
-            <button onClick={openEditTurma} className="border rounded px-3 py-2">
+            <button
+              onClick={openEditTurma}
+              className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+            >
               Editar turma
             </button>
           )}
@@ -443,7 +449,7 @@ useEffect(() => {
           {/* Relatório liberado para todos (se quiser restringir, mova para !isProfessor) */}
           <Link
             href={`/relatorios/assiduidade?turma=${turma.id}&ym=${ym}`}
-            className="border rounded px-3 py-2"
+            className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
           >
             Relatório
           </Link>
@@ -452,7 +458,7 @@ useEffect(() => {
 
       {/* Alunos (somente não-professor enxerga controles) */}
       <section className="border rounded overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:p-4 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
           <h2 className="font-semibold">Alunos da turma</h2>
 
           {!isProfessor && (
@@ -460,7 +466,7 @@ useEffect(() => {
               <select
                 value={addStudentId}
                 onChange={(e) => setAddStudentId(e.target.value)}
-                className="border rounded px-3 py-2 min-w-[260px]"
+                className="border border-gray-200 rounded px-3 py-2 min-w-[260px] bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-200"
               >
                 <option value="">— adicionar aluno (somente ativos) —</option>
                 {candidates.map((s) => (
@@ -469,7 +475,10 @@ useEffect(() => {
                   </option>
                 ))}
               </select>
-              <button onClick={onAddMember} className="border rounded px-3 py-2">
+              <button
+                onClick={onAddMember}
+                className="px-3 py-2 rounded border border-gray-200 bg-white text-gray-800 hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-200 transition-colors shadow-sm"
+              >
                 Adicionar
               </button>
             </div>
@@ -497,7 +506,7 @@ useEffect(() => {
                       <div className="flex gap-2">
                         <button
                           onClick={() => onRemoveMember(m.id)}
-                          className="px-2 py-1 border rounded"
+                          className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
                         >
                           Remover
                         </button>
@@ -512,10 +521,13 @@ useEffect(() => {
       </section>
 
       {/* Sessões */}
-      <section className="border rounded">
-        <div className="flex items-center justify-between p-4 border-b">
+      <section className="border rounded overflow-hidden">
+        <div className="flex items-center justify-between p-3 sm:p-4 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
           <h2 className="font-semibold">Aulas / Sessões</h2>
-          <button onClick={openCreateSession} className="border rounded px-3 py-2">
+          <button
+            onClick={openCreateSession}
+            className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+          >
             + Criar sessão
           </button>
         </div>
@@ -540,10 +552,16 @@ useEffect(() => {
                   <Td>{s.notes || "—"}</Td>
                   <Td className="py-2">
                     <div className="flex gap-2">
-                      <button onClick={() => openEditSession(s)} className="px-2 py-1 border rounded">
+                      <button
+                        onClick={() => openEditSession(s)}
+                        className="px-3 py-1.5 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+                      >
                         Abrir / Editar
                       </button>
-                      <button onClick={() => onDeleteSess(s)} className="px-2 py-1 border rounded">
+                      <button
+                        onClick={() => onDeleteSess(s)}
+                        className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
+                      >
                         Excluir
                       </button>
                     </div>
