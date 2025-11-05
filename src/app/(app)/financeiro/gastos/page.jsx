@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
@@ -90,6 +90,66 @@ export default function GastosPage() {
     installments: "",
     end_month: "", // YYYY-MM
   });
+
+  // ---------- Duplicatas (helpers locais) ----------
+  const normalizeTitle = (s) =>
+    String(s || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  const clampDay = (n) => Math.min(Math.max(Number(n || 5), 1), 28);
+  const shapeKey = (freq, day, month, cc) =>
+    `${cc || "PJ"}|${String(freq || "monthly")}|${clampDay(day)}|${String(freq) === "annual" ? Number(month || 0) : 0}`;
+
+  const currentShapeKey = useMemo(
+    () => shapeKey(formTpl.frequency, formTpl.due_day, formTpl.due_month, formTpl.cost_center),
+    [formTpl.frequency, formTpl.due_day, formTpl.due_month, formTpl.cost_center]
+  );
+
+  const exactDuplicate = useMemo(() => {
+    if (!formTpl.title) return null;
+    const norm = normalizeTitle(formTpl.title);
+    const amt = Number(formTpl.amount || 0);
+    return (
+      templates.find(
+        (t) =>
+          (!tplId || t.id !== tplId) &&
+          !!t.active &&
+          shapeKey(t.frequency, t.due_day, t.due_month, t.cost_center) === currentShapeKey &&
+          normalizeTitle(t.title) === norm &&
+          Math.abs(Number(t.amount || 0) - amt) < 0.01
+      ) || null
+    );
+  }, [templates, formTpl.title, formTpl.amount, currentShapeKey, tplId]);
+
+  // Similaridade simples por tokens (soft suggestion)
+  const tokenSet = (s) => new Set(normalizeTitle(s).split(" ").filter(Boolean));
+  const tokenJaccard = (a, b) => {
+    const A = tokenSet(a);
+    const B = tokenSet(b);
+    if (!A.size || !B.size) return 0;
+    let inter = 0;
+    for (const w of A) if (B.has(w)) inter++;
+    return inter / (A.size + B.size - inter);
+  };
+
+  const softSuggestions = useMemo(() => {
+    if (!formTpl.title) return [];
+    const norm = normalizeTitle(formTpl.title);
+    const list = (templates || []).filter((t) => {
+      if (tplId && t.id === tplId) return false;
+      // relaxa: considera apenas mesmo cost_center; não exige shape idêntico
+      if ((t.cost_center || "PJ") !== (formTpl.cost_center || "PJ")) return false;
+      const tNorm = normalizeTitle(t.title);
+      // inclui iguais (útil para alertar cedo)
+      if (tNorm === norm) return true;
+      if (tNorm.includes(norm) || norm.includes(tNorm)) return true;
+      return tokenJaccard(tNorm, norm) >= 0.6;
+    });
+    return list.slice(0, 5);
+  }, [templates, formTpl.title, formTpl.cost_center, tplId]);
 
   // Avulso
   const [openAvulso, setOpenAvulso] = useState(false);
@@ -320,6 +380,13 @@ export default function GastosPage() {
     }
     try {
       setSavingTpl(true);
+      // Bloqueio de duplicata exata (no cliente)
+      if (!tplId && exactDuplicate) {
+        throw new Error(
+          `Já existe uma recorrente idêntica: "${exactDuplicate.title}" (${fmtBRL(exactDuplicate.amount)}). ` +
+            `Ajuste o título/valor ou edite a existente.`
+        );
+      }
       const payload = {
         title: formTpl.title.trim(),
         category: formTpl.category.trim() || null,
@@ -626,6 +693,20 @@ export default function GastosPage() {
                 className="border rounded px-3 py-2 w-full"
                 required
               />
+              {!!softSuggestions.length && (
+                <div className="mt-2 text-xs p-2 border rounded bg-amber-50 border-amber-200">
+                  <div className="font-medium mb-1">Possíveis duplicatas (não bloqueia):</div>
+                  <ul className="list-disc pl-4 space-y-1">
+                    {softSuggestions.map((t) => (
+                      <li key={t.id}>
+                        <span className="font-medium">{t.title}</span>
+                        <span className="opacity-70"> — {fmtBRL(t.amount)}</span>
+                        <span className="opacity-70"> · {t.frequency === 'annual' ? `Anual (mês ${t.due_month})` : `Mensal (dia ${t.due_day})`}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
             <div>
