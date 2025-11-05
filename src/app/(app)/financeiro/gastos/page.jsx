@@ -365,7 +365,8 @@ export default function GastosPage() {
     try {
       setSavingAvulso(true);
       const payload = {
-        due_date: formAvulso.date,
+        // O gateway espera 'date' e faz o mapeamento para 'due_date'
+        date: formAvulso.date,
         title: formAvulso.title.trim(),
         category: formAvulso.category.trim() || null,
         amount: Number(formAvulso.amount || 0),
