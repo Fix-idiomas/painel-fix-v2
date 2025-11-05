@@ -1667,7 +1667,8 @@ async createOneOffExpense({
 
     const preview = [];
     for (const t of (templates || [])) {
-      if (String(t.frequency || "monthly") === "yearly") {
+      // DB constraint allows only 'monthly' | 'annual'. Align comparison to 'annual'.
+      if (String(t.frequency || "monthly") === "annual") {
         if (!t.due_month || Number(t.due_month) !== M) continue;
       }
       if (existingSet.has(t.id)) continue;
@@ -1714,7 +1715,8 @@ async createOneOffExpense({
 
     const toInsert = [];
     for (const t of (templates || [])) {
-      if (String(t.frequency || "monthly") === "yearly") {
+      // DB constraint allows only 'monthly' | 'annual'. Align comparison to 'annual'.
+      if (String(t.frequency || "monthly") === "annual") {
         if (!t.due_month || Number(t.due_month) !== M) continue;
       }
       if (existingSet.has(t.id)) continue;
