@@ -51,6 +51,41 @@ const dueDateFor = (ym /* "YYYY-MM" */, due_day /* 1..28 */) => {
   return `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 };
 
+// Diferença em meses inteiros entre dois "YYYY-MM-01" (b - a)
+function monthsBetween(a /* YYYY-MM-01 */, b /* YYYY-MM-01 */) {
+  if (!a || !b) return null;
+  const [Ya, Ma] = a.slice(0, 7).split("-").map(Number);
+  const [Yb, Mb] = b.slice(0, 7).split("-").map(Number);
+  return (Yb - Ya) * 12 + (Mb - Ma);
+}
+
+// Verifica se um template está ativo para um determinado mês de competência
+function isRecurrenceActiveForMonth(t, monthStart /* YYYY-MM-01 */) {
+  const mode = String(t?.recurrence_mode || 'indefinite');
+  const start = t?.start_month ? monthStartOf(String(t.start_month)) : null;
+  const end = t?.end_month ? monthStartOf(String(t.end_month)) : null;
+  const inst = (t?.installments ?? null) != null ? Number(t.installments) : null;
+
+  // Lower bound by start_month
+  if (start && monthStart < start) return false;
+
+  if (mode === 'installments') {
+    if (!inst || inst < 1) return true; // sem info suficiente -> não bloqueia
+    if (!start) return true; // sem start_month, não conseguimos limitar, então não bloqueia
+    const diff = monthsBetween(start, monthStart); // >=0 significa dentro ou após o início
+    if (diff == null || diff < 0) return false;
+    return diff < inst; // 0..inst-1
+  }
+
+  if (mode === 'until_month') {
+    if (end && monthStart > end) return false;
+    return true;
+  }
+
+  // 'indefinite'
+  return true;
+}
+
 // Retorna "YYYY-MM-DD" no fuso America/Sao_Paulo
 function tzToday(tz = "America/Sao_Paulo") {
   const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -1392,7 +1427,7 @@ async listPayments({ ym, status = "all", page = 1, pageSize = 50 } = {}) {
     let q = supabase
       .from("expense_templates")
       .select(
-        "id, title, category, amount, frequency, due_day, due_month, cost_center, active, created_at, updated_at"
+        "id, title, category, amount, frequency, due_day, due_month, cost_center, active, created_at, updated_at, recurrence_mode, start_month, installments, end_month"
       )
       .order("title", { ascending: true });
 
@@ -1413,9 +1448,33 @@ async listPayments({ ym, status = "all", page = 1, pageSize = 50 } = {}) {
     cost_center = "PJ",
     tenant_id = null,
     active = true,
+    // Novos (opcionais)
+    recurrence_mode = 'indefinite',
+    start_month = null,
+    installments = null,
+    end_month = null,
   }) {
     if (!title || String(title).trim() === "") {
       throw new Error("createExpenseTemplate: 'title' é obrigatório");
+    }
+
+    // Normalizações de recorrência
+    const mode = String(recurrence_mode || 'indefinite');
+    const sm = start_month ? monthStartOf(String(start_month)) : null;
+    const em = end_month ? monthStartOf(String(end_month)) : null;
+    const inst = (installments ?? null) != null ? Math.max(1, Number(installments)) : null;
+
+    // Valida shape mínimo para evitar erro de CHECK no banco
+    if (mode === 'installments') {
+      if (!inst) throw new Error("createExpenseTemplate: 'installments' é obrigatório quando recurrence_mode='installments'");
+      if (em) throw new Error("createExpenseTemplate: 'end_month' deve ser nulo quando recurrence_mode='installments'");
+    }
+    if (mode === 'until_month') {
+      if (!em) throw new Error("createExpenseTemplate: 'end_month' é obrigatório quando recurrence_mode='until_month'");
+      if (inst) throw new Error("createExpenseTemplate: 'installments' deve ser nulo quando recurrence_mode='until_month'");
+    }
+    if (mode === 'indefinite') {
+      if (inst || em) throw new Error("createExpenseTemplate: 'installments' e 'end_month' devem ser nulos quando recurrence_mode='indefinite'");
     }
 
     const row = {
@@ -1428,13 +1487,17 @@ async listPayments({ ym, status = "all", page = 1, pageSize = 50 } = {}) {
       cost_center: cost_center ?? "PJ",
       tenant_id,
       active: active !== false,
+      recurrence_mode: mode,
+      start_month: sm,
+      installments: inst,
+      end_month: em,
     };
 
     const { data, error } = await supabase
       .from("expense_templates")
       .insert([row])
       .select(
-        "id, title, category, amount, frequency, due_day, due_month, cost_center, active, created_at, updated_at"
+        "id, title, category, amount, frequency, due_day, due_month, cost_center, active, created_at, updated_at, recurrence_mode, start_month, installments, end_month"
       )
       .single();
 
@@ -1506,13 +1569,47 @@ async listPayments({ ym, status = "all", page = 1, pageSize = 50 } = {}) {
     if (changes.due_month !== undefined)    patch.due_month  = changes.due_month ?? null; // 1..12 ou null
     if (changes.cost_center !== undefined)  patch.cost_center= changes.cost_center ?? "PJ";
     if (changes.active !== undefined)       patch.active     = !!changes.active;
+    // Novos campos de recorrência (opcionais)
+    if (changes.recurrence_mode !== undefined) patch.recurrence_mode = String(changes.recurrence_mode || 'indefinite');
+    if (changes.start_month !== undefined)     patch.start_month     = changes.start_month ? monthStartOf(String(changes.start_month)) : null;
+    if (changes.installments !== undefined)    patch.installments    = (changes.installments ?? null) != null ? Math.max(1, Number(changes.installments)) : null;
+    if (changes.end_month !== undefined)       patch.end_month       = changes.end_month ? monthStartOf(String(changes.end_month)) : null;
+
+    // Validações de shape quando campos relacionados vierem no payload
+    const mode = patch.recurrence_mode ?? undefined;
+    const inst = patch.installments ?? undefined;
+    const em   = patch.end_month ?? undefined;
+    if (mode === 'installments') {
+      if (em === null || em === undefined) {
+        // ok (deve ser nulo)
+      } else {
+        throw new Error("updateExpenseTemplate: 'end_month' deve ser nulo quando recurrence_mode='installments'");
+      }
+      if (inst === null || inst === undefined) {
+        throw new Error("updateExpenseTemplate: 'installments' é obrigatório quando recurrence_mode='installments'");
+      }
+    }
+    if (mode === 'until_month') {
+      if (inst === null || inst === undefined) {
+        // ok (deve ser nulo)
+      } else {
+        throw new Error("updateExpenseTemplate: 'installments' deve ser nulo quando recurrence_mode='until_month'");
+      }
+      if (em === null || em === undefined) {
+        throw new Error("updateExpenseTemplate: 'end_month' é obrigatório quando recurrence_mode='until_month'");
+      }
+    }
+    if (mode === 'indefinite') {
+      if (inst !== null && inst !== undefined) throw new Error("updateExpenseTemplate: 'installments' deve ser nulo quando recurrence_mode='indefinite'");
+      if (em   !== null && em   !== undefined) throw new Error("updateExpenseTemplate: 'end_month' deve ser nulo quando recurrence_mode='indefinite'");
+    }
 
     const { data, error } = await supabase
       .from("expense_templates")
       .update(patch)
       .eq("id", id)
       .select(
-        "id, title, category, amount, frequency, due_day, due_month, cost_center, active, created_at, updated_at"
+        "id, title, category, amount, frequency, due_day, due_month, cost_center, active, created_at, updated_at, recurrence_mode, start_month, installments, end_month"
       )
       .single();
 
@@ -1650,7 +1747,7 @@ async createOneOffExpense({
 
     let qt = supabase
       .from("expense_templates")
-      .select("id, title, category, amount, frequency, due_day, due_month, cost_center, active")
+      .select("id, title, category, amount, frequency, due_day, due_month, cost_center, active, recurrence_mode, start_month, installments, end_month")
       .eq("active", true);
     if (cost_center) qt = qt.eq("cost_center", cost_center);
 
@@ -1667,6 +1764,8 @@ async createOneOffExpense({
 
     const preview = [];
     for (const t of (templates || [])) {
+      // Restringe por recorrência (novos campos), mantendo compatível
+      if (!isRecurrenceActiveForMonth(t, monthStart)) continue;
       // DB constraint allows only 'monthly' | 'annual'. Align comparison to 'annual'.
       if (String(t.frequency || "monthly") === "annual") {
         if (!t.due_month || Number(t.due_month) !== M) continue;
@@ -1698,7 +1797,7 @@ async createOneOffExpense({
 
     let qt = supabase
       .from("expense_templates")
-      .select("id, title, category, amount, frequency, due_day, due_month, cost_center, active")
+      .select("id, title, category, amount, frequency, due_day, due_month, cost_center, active, recurrence_mode, start_month, installments, end_month")
       .eq("active", true);
     if (cost_center) qt = qt.eq("cost_center", cost_center);
 
@@ -1715,6 +1814,8 @@ async createOneOffExpense({
 
     const toInsert = [];
     for (const t of (templates || [])) {
+      // Restringe por recorrência (novos campos), mantendo compatível
+      if (!isRecurrenceActiveForMonth(t, monthStart)) continue;
       // DB constraint allows only 'monthly' | 'annual'. Align comparison to 'annual'.
       if (String(t.frequency || "monthly") === "annual") {
         if (!t.due_month || Number(t.due_month) !== M) continue;

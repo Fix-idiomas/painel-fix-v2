@@ -84,6 +84,11 @@ export default function GastosPage() {
     due_month: "1",
     active: true,
     cost_center: "PJ", // PJ | PF
+    // Novos (recorrência)
+    recurrence_mode: "indefinite", // 'indefinite' | 'installments' | 'until_month'
+    start_month: "", // YYYY-MM
+    installments: "",
+    end_month: "", // YYYY-MM
   });
 
   // Avulso
@@ -276,6 +281,10 @@ export default function GastosPage() {
       due_month: "1",
       active: true,
       cost_center: "PJ",
+      recurrence_mode: "indefinite",
+      start_month: "",
+      installments: "",
+      end_month: "",
     });
     setOpenEditTpl(true);
   }
@@ -295,6 +304,10 @@ export default function GastosPage() {
       due_month: String(t.due_month ?? "1"),
       active: !!t.active,
       cost_center: t.cost_center || "PJ",
+      recurrence_mode: t.recurrence_mode || "indefinite",
+      start_month: (t.start_month ? String(t.start_month).slice(0,7) : ""),
+      installments: t.installments != null ? String(t.installments) : "",
+      end_month: (t.end_month ? String(t.end_month).slice(0,7) : ""),
     });
     setOpenEditTpl(true);
   }
@@ -316,8 +329,25 @@ export default function GastosPage() {
         due_month: Number(formTpl.due_month || 1),
         active: !!formTpl.active,
         cost_center: formTpl.cost_center,
+        // Novos (recorrência)
+        recurrence_mode: formTpl.recurrence_mode,
+        start_month: formTpl.start_month ? `${formTpl.start_month}-01` : null,
+        installments: formTpl.recurrence_mode === 'installments' ? Number(formTpl.installments || 0) : null,
+        end_month: formTpl.recurrence_mode === 'until_month' && formTpl.end_month ? `${formTpl.end_month}-01` : null,
       };
       if (!payload.title) throw new Error("Título é obrigatório");
+      // Validações de recorrência no front (para mensagens melhores)
+      if (payload.recurrence_mode === 'installments') {
+        if (!payload.installments || payload.installments < 1) {
+          throw new Error("Informe o número de parcelas (>= 1)");
+        }
+      }
+      if (payload.recurrence_mode === 'until_month') {
+        if (!payload.end_month) throw new Error("Informe o mês final");
+        if (payload.start_month && payload.end_month < payload.start_month) {
+          throw new Error("Mês final deve ser maior ou igual ao mês inicial");
+        }
+      }
 
       if (tplId) await financeGateway.updateExpenseTemplate(tplId, payload);
       else await financeGateway.createExpenseTemplate(payload);
@@ -644,6 +674,30 @@ export default function GastosPage() {
               </select>
             </div>
 
+            {/* Recorrência: duração */}
+            <div>
+              <label className="block text-sm mb-1">Duração</label>
+              <select
+                value={formTpl.recurrence_mode}
+                onChange={(e) => setFormTpl((f) => ({ ...f, recurrence_mode: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+              >
+                <option value="indefinite">Indefinida</option>
+                <option value="installments">Por parcelas</option>
+                <option value="until_month">Até um mês</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm mb-1">Início (mês)</label>
+              <input
+                type="month"
+                value={formTpl.start_month}
+                onChange={(e) => setFormTpl((f) => ({ ...f, start_month: e.target.value }))}
+                className="border rounded px-3 py-2 w-full"
+              />
+            </div>
+
             {formTpl.frequency === "annual" ? (
               <>
                 <div>
@@ -678,6 +732,31 @@ export default function GastosPage() {
                   max="28"
                   value={formTpl.due_day}
                   onChange={(e) => setFormTpl((f) => ({ ...f, due_day: e.target.value }))}
+                  className="border rounded px-3 py-2 w-full"
+                />
+              </div>
+            )}
+
+            {formTpl.recurrence_mode === 'installments' && (
+              <div>
+                <label className="block text-sm mb-1">Parcelas</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={formTpl.installments}
+                  onChange={(e) => setFormTpl((f) => ({ ...f, installments: e.target.value }))}
+                  className="border rounded px-3 py-2 w-full"
+                />
+              </div>
+            )}
+
+            {formTpl.recurrence_mode === 'until_month' && (
+              <div>
+                <label className="block text-sm mb-1">Até (mês)</label>
+                <input
+                  type="month"
+                  value={formTpl.end_month}
+                  onChange={(e) => setFormTpl((f) => ({ ...f, end_month: e.target.value }))}
                   className="border rounded px-3 py-2 w-full"
                 />
               </div>
