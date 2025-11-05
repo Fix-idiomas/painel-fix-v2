@@ -138,18 +138,23 @@ export default function GastosPage() {
   const softSuggestions = useMemo(() => {
     if (!formTpl.title) return [];
     const norm = normalizeTitle(formTpl.title);
-    const list = (templates || []).filter((t) => {
-      if (tplId && t.id === tplId) return false;
-      // relaxa: considera apenas mesmo cost_center; não exige shape idêntico
-      if ((t.cost_center || "PJ") !== (formTpl.cost_center || "PJ")) return false;
-      const tNorm = normalizeTitle(t.title);
-      // inclui iguais (útil para alertar cedo)
-      if (tNorm === norm) return true;
-      if (tNorm.includes(norm) || norm.includes(tNorm)) return true;
-      return tokenJaccard(tNorm, norm) >= 0.6;
-    });
-    return list.slice(0, 5);
-  }, [templates, formTpl.title, formTpl.cost_center, tplId]);
+    const augmented = (templates || [])
+      .filter((t) => !(tplId && t.id === tplId))
+      .map((t) => {
+        const tNorm = normalizeTitle(t.title);
+        const starts = tNorm.startsWith(norm) ? 1 : 0;
+        const includes = !starts && tNorm.includes(norm) ? 1 : 0;
+        const sim = tokenJaccard(tNorm, norm);
+        // Prioriza prefixo, depois substring, depois similaridade
+        const score = starts * 3 + includes * 2 + sim;
+        return { t, tNorm, score, starts, includes, sim };
+      })
+      .filter((r) => r.starts || r.includes || r.sim >= 0.4)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10)
+      .map((r) => r.t);
+    return augmented;
+  }, [templates, formTpl.title, tplId]);
 
   // Avulso
   const [openAvulso, setOpenAvulso] = useState(false);
