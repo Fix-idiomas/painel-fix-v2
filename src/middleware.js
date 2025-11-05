@@ -4,6 +4,9 @@
 
   export async function middleware(req) {
     const res = NextResponse.next();
+
+    console.log({ res });
+
     const { pathname, search } = req.nextUrl;
      // 🔒 Regra canônica: qualquer acesso à raiz vai para /login
    // (independente de sessão; mantém /login como ponto de entrada explícito)
@@ -27,6 +30,8 @@
     const {
       data: { session },
     } = await supabase.auth.getSession();
+
+    console.log({ isPublic, session });
 
     // Sem sessão e rota privada -> manda para /login
     if (!session && !isPublic) {
