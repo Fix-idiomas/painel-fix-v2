@@ -1551,6 +1551,87 @@ async listPayments({ ym, status = "all", page = 1, pageSize = 50 } = {}) {
     };
   },
 
+  // ==============================
+  // DESPESAS — Categorias (nova tabela opcional: expense_categories)
+  // ==============================
+  async listExpenseCategories() {
+    try {
+      const { data, error } = await supabase
+        .from("expense_categories")
+        .select("id, name, active, created_at, updated_at")
+        .order("active", { ascending: false })
+        .order("name", { ascending: true });
+      if (error) throw error;
+      return data || [];
+    } catch (e) {
+      // Fallback: se a tabela não existir, devolve categorias distintas de entries/templates
+      const code = e?.code || e?.details || e?.message || "";
+      if (String(code).includes("relation") || String(code).includes("does not exist") || String(code).includes("42P01")) {
+        const out = new Set();
+        try {
+          const { data: e1 } = await supabase
+            .from("expense_entries")
+            .select("category")
+            .not("category", "is", null)
+            .limit(2000);
+          for (const r of e1 || []) if (r.category) out.add(String(r.category));
+        } catch {}
+        try {
+          const { data: t1 } = await supabase
+            .from("expense_templates")
+            .select("category")
+            .not("category", "is", null)
+            .limit(2000);
+          for (const r of t1 || []) if (r.category) out.add(String(r.category));
+        } catch {}
+        return Array.from(out).sort().map((name) => ({ id: null, name, active: true }));
+      }
+      throw e;
+    }
+  },
+
+  async createExpenseCategory({ name, active = true }) {
+    const n = String(name || "").trim();
+    if (!n) throw new Error("createExpenseCategory: 'name' é obrigatório");
+    const { data, error } = await supabase
+      .from("expense_categories")
+      .insert({ name: n, active: !!active })
+      .select("id, name, active, created_at, updated_at")
+      .single();
+    if (error) throw new Error(`createExpenseCategory: ${error.message}`);
+    return data;
+  },
+
+  async updateExpenseCategory(id, changes = {}) {
+    if (!id) throw new Error("updateExpenseCategory: 'id' é obrigatório");
+    const patch = {};
+    if (changes.name !== undefined) {
+      const n = String(changes.name || "").trim();
+      if (!n) throw new Error("updateExpenseCategory: 'name' não pode ficar vazio");
+      patch.name = n;
+    }
+    if (changes.active !== undefined) patch.active = !!changes.active;
+    patch.updated_at = new Date().toISOString();
+    const { data, error } = await supabase
+      .from("expense_categories")
+      .update(patch)
+      .eq("id", id)
+      .select("id, name, active, created_at, updated_at")
+      .single();
+    if (error) throw new Error(`updateExpenseCategory: ${error.message}`);
+    return data;
+  },
+
+  async deleteExpenseCategory(id) {
+    if (!id) throw new Error("deleteExpenseCategory: 'id' é obrigatório");
+    const { error } = await supabase
+      .from("expense_categories")
+      .delete()
+      .eq("id", id);
+    if (error) throw new Error(`deleteExpenseCategory: ${error.message}`);
+    return true;
+  },
+
  
 
   async updateExpenseTemplate(id, changes = {}) {

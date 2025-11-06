@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
+import Link from "next/link";
 
 
 // Tradução de status
@@ -72,6 +73,7 @@ export default function GastosPage() {
 
   // Recorrentes
   const [templates, setTemplates] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [openEditTpl, setOpenEditTpl] = useState(false);
   const [savingTpl, setSavingTpl] = useState(false);
   const [tplId, setTplId] = useState(null);
@@ -196,6 +198,19 @@ export default function GastosPage() {
     if (!permChecked || !canWriteDB) return;
     loadTemplates();
   }, [permChecked, canWriteDB, ym]);
+
+  // Carregar categorias (read suficiente)
+  useEffect(() => {
+    if (!permChecked || !canReadDB) return;
+    (async () => {
+      try {
+        const list = await financeGateway.listExpenseCategories();
+        setCategories(Array.isArray(list) ? list : []);
+      } catch {
+        setCategories([]);
+      }
+    })();
+  }, [permChecked, canReadDB]);
 
   // Se perder permissão de write, limpa UI
   useEffect(() => {
@@ -715,12 +730,29 @@ export default function GastosPage() {
             </div>
 
             <div>
-              <label className="block text-sm mb-1">Categoria</label>
-              <input
-                value={formTpl.category}
-                onChange={(e) => setFormTpl((f) => ({ ...f, category: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-              />
+              <div className="flex items-center justify-between">
+                <label className="block text-sm mb-1">Categoria</label>
+                <Link href="/financeiro/categorias" className="text-xs text-slate-600 underline underline-offset-2">Gerenciar</Link>
+              </div>
+              {categories.length > 0 ? (
+                <select
+                  value={formTpl.category || ""}
+                  onChange={(e) => setFormTpl((f) => ({ ...f, category: e.target.value }))}
+                  className="border rounded px-3 py-2 w-full"
+                >
+                  <option value="">(sem categoria)</option>
+                  {categories.map((c) => (
+                    <option key={`${c.id ?? c.name}`} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={formTpl.category}
+                  onChange={(e) => setFormTpl((f) => ({ ...f, category: e.target.value }))}
+                  className="border rounded px-3 py-2 w-full"
+                  placeholder="Digite a categoria"
+                />
+              )}
             </div>
 
             <div>
@@ -918,12 +950,29 @@ export default function GastosPage() {
             </div>
 
             <div className="sm:col-span-2">
-              <label className="block text-sm mb-1">Categoria</label>
-              <input
-                value={formAvulso.category}
-                onChange={(e) => setFormAvulso((f) => ({ ...f, category: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-              />
+              <div className="flex items-center justify-between">
+                <label className="block text-sm mb-1">Categoria</label>
+                <Link href="/financeiro/categorias" className="text-xs text-slate-600 underline underline-offset-2">Gerenciar</Link>
+              </div>
+              {categories.length > 0 ? (
+                <select
+                  value={formAvulso.category || ""}
+                  onChange={(e) => setFormAvulso((f) => ({ ...f, category: e.target.value }))}
+                  className="border rounded px-3 py-2 w-full"
+                >
+                  <option value="">(sem categoria)</option>
+                  {categories.map((c) => (
+                    <option key={`${c.id ?? c.name}`} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={formAvulso.category}
+                  onChange={(e) => setFormAvulso((f) => ({ ...f, category: e.target.value }))}
+                  className="border rounded px-3 py-2 w-full"
+                  placeholder="Digite a categoria"
+                />
+              )}
             </div>
 
             <div>

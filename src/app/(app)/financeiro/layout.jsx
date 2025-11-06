@@ -10,6 +10,7 @@ export default function FinanceiroLayout({ children }) {
     { href: "/financeiro/mensalidades", label: "Mensalidades" },
     { href: "/financeiro/gastos", label: "Gastos" },
     { href: "/financeiro/outras-receitas", label: "Outras Receitas" },
+    { href: "/financeiro/categorias", label: "Categorias" },
   ];
 
   return (

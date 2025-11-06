@@ -282,6 +282,12 @@ export const financeGateway = {
   reopenOtherRevenue,
   updateOtherRevenue,
 
+  // Categorias de Despesas
+  listExpenseCategories: () => supabaseGateway.listExpenseCategories(),
+  createExpenseCategory: (payload) => supabaseGateway.createExpenseCategory(payload),
+  updateExpenseCategory: (id, changes) => supabaseGateway.updateExpenseCategory(id, changes),
+  deleteExpenseCategory: (id) => supabaseGateway.deleteExpenseCategory(id),
+
   // Professores
   sumTeacherPayoutByMonth,
   listTeacherSessionsByMonth,
