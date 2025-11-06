@@ -37,6 +37,8 @@ export default function Page() {
   const [counts, setCounts] = useState({ studentsActive: 0 });
   const [upcoming, setUpcoming] = useState([]);   // vencem nos próximos 7 dias
   const [birthdays, setBirthdays] = useState([]); // aniversariantes do mês
+  const [payables5, setPayables5] = useState([]); // contas a pagar próximos 5 dias
+  const [payablesInclPast, setPayablesInclPast] = useState(false); // fallback: inclui últimos 5 dias se não houver próximos
 
   // KPIs combinados (mensalidades + outras receitas)
   const [combined, setCombined] = useState(null);
@@ -204,6 +206,49 @@ export default function Page() {
 
       if (!alive) return;
       setUpcoming(up);
+
+      // ===== Contas a pagar (próximos 5 dias) =====
+      const plus5 = new Date(nowSP); plus5.setDate(plus5.getDate() + 5);
+      const end5ISO = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(plus5);
+
+      // usa o gateway (meses atual + próximo) e filtra pelo range de 5 dias
+      let rows5 = [];
+      if (canReadFinance) {
+        const ymNow  = todayISO.slice(0, 7);
+        const ymNext = ymAddMonths(ymNow, 1);
+        const [eNow, eNext] = await Promise.all([
+          financeGateway.listExpenseEntries({ ym: ymNow,  status: "pending" }),
+          financeGateway.listExpenseEntries({ ym: ymNext, status: "pending" }),
+        ]);
+        const rowsNow  = Array.isArray(eNow?.rows)  ? eNow.rows  : [];
+        const rowsNext = Array.isArray(eNext?.rows) ? eNext.rows : [];
+        const all = [...rowsNow, ...rowsNext];
+        rows5 = all.filter(r => r?.due_date >= todayISO && r?.due_date <= end5ISO);
+
+        // Fallback: se não houver próximos, inclui atrasados dos últimos 5 dias
+        if (!rows5.length) {
+          const minus5 = new Date(nowSP); minus5.setDate(minus5.getDate() - 5);
+          const start5ISO = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(minus5);
+          rows5 = all.filter(r => r?.due_date >= start5ISO && r?.due_date <= end5ISO);
+          setPayablesInclPast(rows5.length > 0);
+        } else {
+          setPayablesInclPast(false);
+        }
+      }
+
+      const pay5 = (rows5 || [])
+        .map(r => ({
+          id: r.id,
+          due_date: r.due_date,
+          title: r.title_snapshot || r.title || r.description || "—",
+          amount: Number(r.amount || 0),
+          isToday: r.due_date === todayISO,
+          isPast: r.due_date < todayISO,
+        }))
+        .sort((a, b) => a.due_date.localeCompare(b.due_date));
+
+      if (!alive) return;
+      setPayables5(pay5);
 
       // ===== Students (ativos) + Aniversariantes do mês =====
       let students = [];
@@ -412,8 +457,8 @@ export default function Page() {
         </>
       )}
 
-      {/* Próximos 7 dias + Aniversariantes do mês */}
-      <section className="grid gap-4 lg:grid-cols-2">
+      {/* Próximos 7 dias + Contas a pagar (5 dias) + Aniversariantes */}
+      <section className="grid gap-4 lg:grid-cols-3">
         <div className="border rounded-xl overflow-hidden shadow-sm">
           <div className="px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">Vencem nos próximos 7 dias</div>
           {upcoming.length === 0 ? (
@@ -441,6 +486,50 @@ export default function Page() {
                       <Td>{r.student_name}</Td>
                       <Td>{r.payer_name}</Td>
                       <Td className="text-right tabular-nums font-mono">{maskMoney(r.amount)}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="border rounded-xl overflow-hidden shadow-sm">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">
+            <span>
+              Contas a pagar (próximos 5 dias)
+              {payablesInclPast && (
+                <span className="ml-2 text-xs font-normal bg-white/15 rounded px-2 py-0.5">inclui atrasados</span>
+              )}
+            </span>
+            <a href="/financeiro/gastos" className="text-xs font-normal underline underline-offset-2 hover:opacity-90">Ver todos</a>
+          </div>
+          {payables5.length === 0 ? (
+            <div className="p-4 text-slate-600">Nada a pagar no período.</div>
+          ) : (
+            <div className="max-h-80 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-white/90 border-b">
+                  <tr>
+                    <Th>Vencimento</Th>
+                    <Th>Descrição</Th>
+                    <Th className="text-right">Valor</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payables5.map((e) => (
+                    <tr key={e.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
+                      <Td>
+                        {fmtBRDateDots(e.due_date)}
+                        {e.isToday && (
+                          <span className="ml-2 rounded-full px-2 py-0.5 text-xs bg-amber-100 text-amber-800">Hoje</span>
+                        )}
+                        {!e.isToday && e.isPast && (
+                          <span className="ml-2 rounded-full px-2 py-0.5 text-xs bg-rose-100 text-rose-800">Atrasado</span>
+                        )}
+                      </Td>
+                      <Td>{e.title}</Td>
+                      <Td className="text-right tabular-nums font-mono">{maskMoney(e.amount)}</Td>
                     </tr>
                   ))}
                 </tbody>
