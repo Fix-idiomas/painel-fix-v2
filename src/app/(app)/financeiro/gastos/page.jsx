@@ -550,135 +550,237 @@ export default function GastosPage() {
 
       {/* KPIs */}
       <section className="grid sm:grid-cols-4 gap-3">
-        <KpiCard title="Total do mês" value={fmtBRL(kpis.total)} />
-        <KpiCard title="Pagos" value={fmtBRL(kpis.paid)} />
-        <KpiCard title="Pendentes" value={fmtBRL(kpis.pending)} />
-        <KpiCard title="Em atraso" value={fmtBRL(kpis.overdue)} />
+        <KpiCard title="Total do mês" value={fmtBRL(kpis.total)} tone="neutral" />
+        <KpiCard title="Pagos" value={fmtBRL(kpis.paid)} tone="success" />
+        <KpiCard title="Pendentes" value={fmtBRL(kpis.pending)} tone="warning" />
+        <KpiCard title="Em atraso" value={fmtBRL(kpis.overdue)} tone="danger" />
       </section>
 
       {/* Lançamentos do mês */}
-      <section className="border rounded overflow-auto">
-        <div className="p-3 border-b font-semibold">Lançamentos do mês</div>
+      <section className="border rounded-xl overflow-hidden shadow-sm">
+        <div className="px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">Lançamentos do mês</div>
         {loading ? (
           <div className="p-4">Carregando…</div>
         ) : rows.length === 0 ? (
           <div className="p-4">Sem lançamentos para este filtro.</div>
         ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <Th>Vencimento</Th>
-                <Th>Título</Th>
-                <Th>Categoria</Th>
-                <Th>Centro</Th>
-                <Th>Valor</Th>
-                <Th>Status</Th>
-                <Th>Ações</Th>
-              </tr>
-            </thead>
-            <tbody>
+          <div className="w-full">
+            {/* Tabela (>= sm) */}
+            <div className="hidden sm:block overflow-x-auto">
+            <table className="min-w-[900px] w-full text-xs sm:text-sm">
+              <thead className="sticky top-0 z-10 bg-white/90 border-b">
+                <tr>
+                  <Th>Venc.</Th>
+                  <Th>Título</Th>
+                  <Th className="hidden sm:table-cell">Categoria</Th>
+                  <Th className="hidden sm:table-cell">Centro</Th>
+                  <Th className="text-right">Valor</Th>
+                  <Th className="hidden sm:table-cell">Status</Th>
+                  <Th>Ações</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
+                    <Td className="whitespace-nowrap">{fmtBR(r.due_date)}</Td>
+                    <Td className="truncate max-w-[240px] sm:max-w-none">{r.title_snapshot}</Td>
+                    <Td className="hidden sm:table-cell">{r.category || "-"}</Td>
+                    <Td className="hidden sm:table-cell">{r.cost_center || "-"}</Td>
+                    <Td className="text-right tabular-nums font-mono whitespace-nowrap">{fmtBRL(r.amount)}</Td>
+                    <Td className="hidden sm:table-cell">{statusLabels[r.status] || r.status}</Td>
+                    <Td className="py-2">
+                      {canWriteDB ? (
+                        <div className="flex gap-2">
+                          {r.status === "pending" ? (
+                            <>
+                              <button
+                                onClick={() => markPaid(r.id)}
+                                className="px-2 py-1 border rounded"
+                                disabled={updatingId === r.id}
+                              >
+                                Pago
+                              </button>
+                              <button
+                                onClick={() => cancel(r.id)}
+                                className="px-2 py-1 border rounded"
+                                disabled={updatingId === r.id}
+                              >
+                                Cancelar
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={() => reopen(r.id)}
+                              className="px-2 py-1 border rounded"
+                              disabled={updatingId === r.id}
+                            >
+                              Reabrir
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-500">—</span>
+                      )}
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            </div>
+
+            {/* Cards (xs) */}
+            <div className="sm:hidden divide-y">
               {rows.map((r) => (
-                <tr key={r.id} className="border-t">
-                  <Td>{fmtBR(r.due_date)}</Td>
-                  <Td>{r.title_snapshot}</Td>
-                  <Td>{r.category || "-"}</Td>
-                  <Td>{r.cost_center || "-"}</Td>
-                  <Td>{fmtBRL(r.amount)}</Td>
-                  <Td>{statusLabels[r.status] || r.status}</Td>
-                  <Td className="py-2">
+                <div key={r.id} className="p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-medium text-slate-900 truncate">{r.title_snapshot}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                        <span className="whitespace-nowrap">{fmtBR(r.due_date)}</span>
+                        {r.category && <span className="truncate max-w-[160px]">{r.category}</span>}
+                        {r.cost_center && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                            {r.cost_center}
+                          </span>
+                        )}
+                        <StatusPill status={r.status} />
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-mono tabular-nums font-semibold">{fmtBRL(r.amount)}</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
                     {canWriteDB ? (
-                      <div className="flex gap-2">
-                        {r.status === "pending" ? (
-                          <>
-                            <button
-                              onClick={() => markPaid(r.id)}
-                              className="px-2 py-1 border rounded"
-                              disabled={updatingId === r.id}
-                            >
-                              Marcar pago
-                            </button>
-                            <button
-                              onClick={() => cancel(r.id)}
-                              className="px-2 py-1 border rounded"
-                              disabled={updatingId === r.id}
-                            >
-                              Cancelar
-                            </button>
-                          </>
-                        ) : (
+                      r.status === "pending" ? (
+                        <>
                           <button
-                            onClick={() => reopen(r.id)}
+                            onClick={() => markPaid(r.id)}
+                            className="px-2 py-1 border rounded"
+                            disabled={updatingId === r.id}
+                              >
+                                Pago
+                          </button>
+                          <button
+                            onClick={() => cancel(r.id)}
                             className="px-2 py-1 border rounded"
                             disabled={updatingId === r.id}
                           >
-                            Reabrir
+                            Cancelar
                           </button>
-                        )}
-                      </div>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => reopen(r.id)}
+                          className="px-2 py-1 border rounded"
+                          disabled={updatingId === r.id}
+                        >
+                          Reabrir
+                        </button>
+                      )
                     ) : (
                       <span className="text-xs text-slate-500">—</span>
                     )}
-                  </Td>
-                </tr>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </div>
         )}
       </section>
 
       {/* Recorrentes (somente se canWriteDB === true) */}
       {canWriteDB && (
-        <section className="border rounded overflow-auto">
-          <div className="flex items-center justify-between p-3 border-b">
-            <div className="font-semibold">Despesas recorrentes</div>
-            <button onClick={openCreateTpl} className="border rounded px-3 py-2">
+        <section className="border rounded-xl overflow-hidden shadow-sm">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">
+            <span>Despesas recorrentes</span>
+            <button onClick={openCreateTpl} className="border rounded px-3 py-1.5 bg-white/10 hover:bg-white/20 text-sm transition-colors">
               + Nova recorrente
             </button>
           </div>
           {templates.length === 0 ? (
             <div className="p-4">Nenhuma recorrente cadastrada.</div>
           ) : (
-            <table className="min-w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <Th>Título</Th>
-                  <Th>Categoria</Th>
-                  <Th>Centro</Th>
-                  <Th>Frequência</Th>
-                  <Th>Vencimento</Th>
-                  <Th>Valor</Th>
-                  <Th>Status</Th>
-                  <Th>Ações</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {templates.map((t) => (
-                  <tr key={t.id} className="border-t">
-                    <Td>{t.title}</Td>
-                    <Td>{t.category || "-"}</Td>
-                    <Td>{t.cost_center || "-"}</Td>
-                    <Td>{t.frequency === "annual" ? "Anual" : "Mensal"}</Td>
-                    <Td>
-                      {t.frequency === "annual"
-                        ? `Mês ${t.due_month} • Dia ${t.due_day}`
-                        : `Dia ${t.due_day}`}
-                    </Td>
-                    <Td>{fmtBRL(t.amount)}</Td>
-                    <Td>{t.active ? "ativo" : "inativo"}</Td>
-                    <Td className="py-2">
-                      <div className="flex gap-2">
-                        <button onClick={() => openEditTplModal(t)} className="px-2 py-1 border rounded">
-                          Editar
-                        </button>
-                        <button onClick={() => onDeleteTpl(t)} className="px-2 py-1 border rounded">
-                          Excluir
-                        </button>
-                      </div>
-                    </Td>
+            <div className="max-h-96 w-full">
+              {/* Tabela (>= sm) */}
+              <div className="hidden sm:block overflow-x-auto">
+                <table className="min-w-[800px] w-full text-xs sm:text-sm">
+                <thead className="sticky top-0 z-10 bg-white/90 border-b">
+                  <tr>
+                    <Th>Título</Th>
+                    <Th className="hidden sm:table-cell">Categoria</Th>
+                    <Th className="hidden sm:table-cell">Centro</Th>
+                    <Th>Frequência</Th>
+                    <Th>Vencimento</Th>
+                    <Th className="text-right">Valor</Th>
+                    <Th className="hidden sm:table-cell">Status</Th>
+                    <Th>Ações</Th>
                   </tr>
+                </thead>
+                <tbody>
+                  {templates.map((t) => (
+                    <tr key={t.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
+                      <Td className="truncate max-w-[240px] sm:max-w-none">{t.title}</Td>
+                      <Td className="hidden sm:table-cell">{t.category || "-"}</Td>
+                      <Td className="hidden sm:table-cell">{t.cost_center || "-"}</Td>
+                      <Td>{t.frequency === "annual" ? "Anual" : "Mensal"}</Td>
+                      <Td className="whitespace-nowrap">
+                        {t.frequency === "annual"
+                          ? `Mês ${t.due_month} • Dia ${t.due_day}`
+                          : `Dia ${t.due_day}`}
+                      </Td>
+                      <Td className="text-right tabular-nums font-mono whitespace-nowrap">{fmtBRL(t.amount)}</Td>
+                      <Td className="hidden sm:table-cell">{t.active ? "ativo" : "inativo"}</Td>
+                      <Td className="py-2">
+                        <div className="flex gap-2">
+                          <button onClick={() => openEditTplModal(t)} className="px-2 py-1 border rounded">
+                            Editar
+                          </button>
+                          <button onClick={() => onDeleteTpl(t)} className="px-2 py-1 border rounded">
+                            Excluir
+                          </button>
+                        </div>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+                </table>
+              </div>
+              {/* Cards (xs) */}
+              <div className="sm:hidden divide-y overflow-auto max-h-96">
+                {templates.map((t) => (
+                  <div key={t.id} className="p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-medium text-slate-900 truncate">{t.title}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                          {t.category && <span className="truncate max-w-[140px]">{t.category}</span>}
+                          {t.cost_center && (
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">{t.cost_center}</span>
+                          )}
+                          <span>{t.frequency === "annual" ? "Anual" : "Mensal"}</span>
+                          <span className="whitespace-nowrap">
+                            {t.frequency === "annual"
+                              ? `Mês ${t.due_month} • Dia ${t.due_day}`
+                              : `Dia ${t.due_day}`}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded text-xs ${t.active ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'}`}>
+                            {t.active ? 'ativo' : 'inativo'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm font-mono tabular-nums font-semibold">{fmtBRL(t.amount)}</div>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button onClick={() => openEditTplModal(t)} className="px-2 py-1 border rounded">Editar</button>
+                      <button onClick={() => onDeleteTpl(t)} className="px-2 py-1 border rounded">Excluir</button>
+                    </div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            </div>
           )}
         </section>
       )}
@@ -993,17 +1095,33 @@ export default function GastosPage() {
   );
 }
 
-function KpiCard({ title, value }) {
+function KpiCard({ title, value, tone = "neutral" }) {
+  const accent = {
+    danger: "bg-rose-600",
+    warning: "bg-amber-500",
+    success: "bg-green-600",
+    neutral: "bg-slate-300",
+  }[tone] || "bg-slate-300";
   return (
-    <div className="border rounded p-3">
-      <div className="text-xs text-slate-500">{title}</div>
-      <div className="text-lg font-semibold">{value}</div>
+    <div className="rounded-lg border border-slate-200 bg-white shadow-sm p-4 overflow-hidden">
+      <div className={`h-1 w-full ${accent} rounded-t-md -mt-1 mb-3`}></div>
+      <div className="text-[11px] uppercase tracking-wide text-slate-500">{title}</div>
+      <div className="text-2xl font-semibold text-slate-900">{value}</div>
     </div>
   );
 }
-function Th({ children }) {
-  return <th className="text-left px-3 py-2 font-medium">{children}</th>;
+function StatusPill({ status }) {
+  const label = statusLabels[status] || status;
+  const cls =
+    status === 'paid' ? 'bg-emerald-100 text-emerald-800'
+    : status === 'pending' ? 'bg-amber-100 text-amber-800'
+    : status === 'canceled' ? 'bg-slate-200 text-slate-700'
+    : 'bg-slate-100 text-slate-700';
+  return <span className={`px-2 py-0.5 rounded text-xs ${cls}`}>{label}</span>;
 }
-function Td({ children }) {
-  return <td className="px-3 py-2">{children}</td>;
+function Th({ children, className = "" }) {
+  return <th className={`text-left px-2 py-2 sm:px-3 sm:py-2 font-medium ${className}`}>{children}</th>;
+}
+function Td({ children, className = "" }) {
+  return <td className={`px-2 py-2 sm:px-3 sm:py-2 ${className}`}>{children}</td>;
 }

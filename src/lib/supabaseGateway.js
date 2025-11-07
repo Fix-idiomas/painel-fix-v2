@@ -1,5 +1,28 @@
 import { supabase } from "./supabaseClient";
 
+// Auto-geração silenciosa para o mês atual via RPC (sem depender de env agora)
+// Circuit breaker: após primeira falha (404/400), desabilita chamadas subsequentes na sessão para evitar ruído 400 no DevTools
+let HAS_RPC_ENSURE_OTHER_REVENUES = undefined; // undefined=desconhecido | true=ok | false=indisponível
+// Descoberta de capacidades de colunas extras em other_revenues (evita 400 repetidos de coluna inexistente)
+let HAS_OTHER_REVENUE_EXT_COLUMNS = undefined; // undefined=desconhecido | true=possui | false=ausente
+// Persistência leve no navegador para lembrar capability entre reloads (evita 1º 400 da sessão)
+const LS_EXT_COLS_KEY = "fix.or.hasExtCols";
+function _getExtColsFromLS() {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return null;
+    const v = window.localStorage.getItem(LS_EXT_COLS_KEY);
+    if (v === "1") return true;
+    if (v === "0") return false;
+    return null;
+  } catch { return null; }
+}
+function _setExtColsToLS(val) {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.setItem(LS_EXT_COLS_KEY, val ? "1" : "0");
+  } catch {}
+}
+
 // ------------------------ Helpers ------------------------
  const mapErr = (ctx, err) => {
    const code = err?.code || err?.status || err?.name;
@@ -50,6 +73,16 @@ const dueDateFor = (ym /* "YYYY-MM" */, due_day /* 1..28 */) => {
   const d = clampDay1to28(due_day);
   return `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 };
+
+// Sessão autenticada disponível? (evita chamar RPCs com role anon e receber 404 por falta de EXECUTE)
+async function hasAuthSession() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    return !!data?.session?.access_token;
+  } catch {
+    return false;
+  }
+}
 
 // Diferença em meses inteiros entre dois "YYYY-MM-01" (b - a)
 function monthsBetween(a /* YYYY-MM-01 */, b /* YYYY-MM-01 */) {
@@ -152,6 +185,103 @@ export const supabaseGateway = {
     const { data, error } = await supabase.rpc("current_tenant_id");
     if (error || !data) throw new Error("tenant_id indisponível no contexto");
     return data; // uuid
+  },
+  // --- Outras Receitas: criar Template (para autogeração) ---
+  async createOtherRevenueTemplate({
+    title,
+    amount,
+    frequency = "monthly", // 'monthly' | 'yearly'
+    recurrence_type = "indefinite", // 'indefinite' | 'installments'
+    due_day = 5,
+    due_month = null, // usado quando yearly
+    start_month = null, // 'YYYY-MM-01'
+    end_month = null,
+    active = true,
+    cost_center = "extra",
+    category = null,
+  } = {}) {
+    const finalTitle = String(title || "").trim();
+    if (!finalTitle) throw new Error("createOtherRevenueTemplate: 'title' é obrigatório");
+    const finalAmount = Number(amount || 0);
+    // Garante o tenant_id (alguns schemas exigem explicitamente)
+    let tenant_id = null;
+    try { tenant_id = await this.getTenantId(); } catch {}
+
+    const row = {
+      ...(tenant_id ? { tenant_id } : {}),
+      title: finalTitle,
+      amount: finalAmount,
+      frequency: String(frequency || "monthly"),
+      recurrence_type: String(recurrence_type || "indefinite"),
+      due_day: clampDay1to28(due_day),
+      due_month: due_month ? Number(due_month) : null,
+      start_month: start_month ? monthStartOf(start_month) : monthStartOf(tzToday("America/Sao_Paulo").slice(0,7)),
+      end_month: end_month ? monthStartOf(end_month) : null,
+      active: active !== false,
+      cost_center: cost_center || "extra",
+      category: category || null,
+    };
+
+    // Insere e retorna id/título/campos principais
+    // Tenta inserir com todos os campos; se houver coluna ausente (42703), remove e tenta novamente.
+    const essentialKeys = new Set(["title","amount","due_day","frequency","recurrence_type","start_month","active"]);
+    let attemptRow = { ...row };
+    let tries = 0;
+    while (tries < 8) {
+      const { data, error } = await supabase
+        .from("other_revenue_templates")
+        .insert([attemptRow])
+        .select("id, title, amount, frequency, recurrence_type, due_day, due_month, start_month, end_month, active, cost_center, category, created_at")
+        .single();
+      if (!error) return data;
+
+      const msg = String(error.message || error.details || "");
+      const isMissing = /42703|column|does not exist|unknown column/i.test(msg);
+      const isCheck = /23514|check constraint|violates check constraint/i.test(msg);
+      if (!isMissing && !isCheck) throw new Error(`createOtherRevenueTemplate: ${error.message}`);
+      if (isCheck && /recurrence_type/i.test(msg)) {
+        // Map EN -> PT-BR synonyms for legacy DBs
+        const val = String(attemptRow.recurrence_type || "");
+        let mapped = val;
+        if (val === "indefinite") mapped = "indefinido";
+        else if (val === "installments") mapped = "parcelado";
+        else if (val === "until_month") mapped = "ate_mes"; // fallback without accent
+        if (mapped !== val) {
+          attemptRow.recurrence_type = mapped;
+          tries++;
+          continue;
+        }
+      }
+      // tenta extrair o nome da coluna
+      const m = msg.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+of\s+relation/i) || msg.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does\s+not\s+exist/i);
+      const col = m && m[1] ? m[1] : null;
+      if (!col || essentialKeys.has(col) || attemptRow[col] === undefined) {
+        // fallback bruto: remova chaves opcionais conhecidas, se existirem
+        for (const k of ["category","cost_center","due_month","end_month"]) {
+          if (attemptRow[k] !== undefined && !essentialKeys.has(k)) delete attemptRow[k];
+        }
+      } else {
+        delete attemptRow[col];
+      }
+      tries++;
+    }
+    throw new Error("createOtherRevenueTemplate: não foi possível inserir (colunas ausentes)");
+  },
+  // Util: força geração a partir dos templates para um mês (YYYY-MM)
+  async ensureOtherRevenuesForMonth(ym /* 'YYYY-MM' */) {
+    if (!ym || String(ym).length < 7) throw new Error("ensureOtherRevenuesForMonth: 'ym' deve ser 'YYYY-MM'");
+    const ymStr = String(ym).slice(0, 7);
+    try {
+      // A função foi criada com assinatura (p_ym text). PostgREST exige correspondência exata dos parâmetros.
+      // Enviar chaves extras gera PGRST202 (schema cache não encontra variação com múltiplos nomes).
+      const { data, error } = await supabase.rpc("ensure_other_revenues_for_month", { p_ym: ymStr });
+      if (error) throw error;
+      return data;
+    } catch (e) {
+      const msg = e?.message || String(e);
+      // Propaga erro amigável
+      throw new Error(`[ensure_other_revenues_for_month] ${msg}`);
+    }
   },
   // ==============================
   // ALUNOS (CRUD + evolução)
@@ -2177,57 +2307,111 @@ async getCombinedRevenueKpis({ ym }) {
   // ==============================
   async listOtherRevenues({ ym, status = "all", cost_center = null } = {}) {
     const monthStart = monthStartOf(ym);
-    // (novo) Garante autogeração idempotente para o mês atual
-  try {
-    // A RPC do seu banco espera p_ym (TEXT), no formato "YYYY-MM"
-    await supabase.rpc("ensure_other_revenues_for_month", {
-      p_ym: monthStart.slice(0, 7), // ex.: "2025-11"
-    });
-  } catch (e) {
-    console.warn(
-      "[other_revenues] ensure_other_revenues_for_month falhou (seguindo com a listagem):",
-      e?.message || e
-    );
-  }
+    // Auto-geração opcional apenas para o mês corrente e somente se a RPC estiver disponível
+    const isCurrentMonth = (() => {
+      const today = tzToday("America/Sao_Paulo");
+      return monthStart.slice(0, 7) === today.slice(0, 7);
+    })();
 
-    let q = supabase
-      .from("other_revenues")
-      .select(
-        "id, title, category, amount, competence_month, due_date, status, paid_at, canceled_at, cancel_note, cost_center, created_at, updated_at"
-      )
-      .eq("competence_month", monthStart)
-      .order("due_date", { ascending: true })
-      .order("created_at", { ascending: true });
+    if (isCurrentMonth && HAS_RPC_ENSURE_OTHER_REVENUES !== false) {
+      try {
+        // Só chama se houver JWT (role authenticated); se não, evita 404/permission noise
+        const authed = await hasAuthSession();
+        if (authed) {
+          const ymStr = monthStart.slice(0, 7);
+          // Assinatura atual: (p_ym text). Enviar apenas a chave correta.
+          await supabase.rpc("ensure_other_revenues_for_month", { p_ym: ymStr });
+          HAS_RPC_ENSURE_OTHER_REVENUES = true;
+        }
+      } catch (e) {
+        // 400/404 geralmente indicam assinatura diferente ou função ausente → desliga na sessão para evitar ruído
+        HAS_RPC_ENSURE_OTHER_REVENUES = false;
+        console.info("[other_revenues] auto-geração desabilitada nesta sessão:", e?.message || e);
+      }
+    }
 
-      if (cost_center && cost_center !== "all") {
-    q = q.eq("cost_center", cost_center);
-  }
-    if (status && status !== "all") q = q.eq("status", status);
+    const baseFields = "id, title, category, amount, competence_month, due_date, status, paid_at, canceled_at, cancel_note, cost_center, created_at, updated_at";
+    const extendedFields = [
+      baseFields,
+      // Campos de recorrência/parcelas — podem não existir em alguns bancos; cairemos no fallback
+      "template_id",
+      "recurrence_kind",
+      "frequency",
+      "installment_index",
+      "installments_total",
+      "start_month",
+      "end_month",
+      "generated_at",
+    ].join(", ");
 
-    const { data, error } = await q;
-    if (error) throw new Error(`listOtherRevenues: ${error.message}`);
+    const buildQuery = (fields) => {
+      let q = supabase
+        .from("other_revenues")
+        .select(fields)
+        .eq("competence_month", monthStart)
+        .order("due_date", { ascending: true })
+        .order("created_at", { ascending: true });
+      if (cost_center && cost_center !== "all") q = q.eq("cost_center", cost_center);
+      if (status && status !== "all") q = q.eq("status", status);
+      return q;
+    };
+
+    // Tenta buscar com campos estendidos (apenas se nunca detectamos ausência)
+    let data = null;
+    let error = null;
+    if (HAS_OTHER_REVENUE_EXT_COLUMNS === undefined) {
+      const stored = _getExtColsFromLS();
+      if (stored !== null) HAS_OTHER_REVENUE_EXT_COLUMNS = stored;
+    }
+
+    if (HAS_OTHER_REVENUE_EXT_COLUMNS !== false) {
+      const res = await buildQuery(extendedFields);
+      data = res.data; error = res.error;
+      if (error) {
+        const msg = String(error.message || error);
+        const isMissingColumn = /42703|column|does not exist|unknown column/i.test(msg);
+        if (!isMissingColumn) {
+          throw new Error(`listOtherRevenues: ${error.message}`);
+        }
+        // marca como ausente para evitar novas requisições 400 nesta sessão
+        HAS_OTHER_REVENUE_EXT_COLUMNS = false;
+        _setExtColsToLS(false);
+      } else {
+        HAS_OTHER_REVENUE_EXT_COLUMNS = true;
+        _setExtColsToLS(true);
+      }
+    }
+    // Se não temos dados (ou detectamos ausência), usa baseFields
+    if (!data || HAS_OTHER_REVENUE_EXT_COLUMNS === false) {
+      const res2 = await buildQuery(baseFields);
+      data = res2.data; error = res2.error;
+      if (error) throw new Error(`listOtherRevenues: ${error.message}`);
+    }
 
     const today = tzToday("America/Sao_Paulo");
-    const rows = (data || []).map((r) => ({
-      ...r,
-      days_overdue:
+    const rows = (data || []).map((r) => {
+      const days_overdue =
         r.status === "pending" && r.due_date < today
           ? Math.max(0, Math.floor((new Date(today) - new Date(r.due_date)) / 86400000))
-          : 0,
-    }));
+          : 0;
+      const is_generated = r && Object.prototype.hasOwnProperty.call(r, "template_id")
+        ? r.template_id != null
+        : false;
+      return { ...r, days_overdue, is_generated };
+    });
 
-   const sum = (arr) => arr.reduce((acc, it) => acc + Number(it.amount || 0), 0);
+    const sum = (arr) => arr.reduce((acc, it) => acc + Number(it.amount || 0), 0);
 
-return {
-  rows,
-  kpis: {
-    // previsto = tudo que NÃO está cancelado (paid + pending)
-    total:   sum(rows.filter((x) => x.status !== "canceled")),
-    paid:    sum(rows.filter((x) => x.status === "paid")),
-    pending: sum(rows.filter((x) => x.status === "pending")),
-    overdue: sum(rows.filter((x) => x.status === "pending" && x.due_date < today)),
-  },
-};
+    return {
+      rows,
+      kpis: {
+        // previsto = tudo que NÃO está cancelado (paid + pending)
+        total:   sum(rows.filter((x) => x.status !== "canceled")),
+        paid:    sum(rows.filter((x) => x.status === "paid")),
+        pending: sum(rows.filter((x) => x.status === "pending")),
+        overdue: sum(rows.filter((x) => x.status === "pending" && x.due_date < today)),
+      },
+    };
   },
 
   async createOtherRevenue({
@@ -2237,6 +2421,13 @@ return {
     due_date = null,
     category = null,
     cost_center = "extra",
+    // novos campos opcionais (utilizados se existirem na tabela)
+    installment_index = null,
+    installments_total = null,
+    recurrence_kind = null,
+    frequency = null,
+    start_month = null,
+    end_month = null,
   } = {}) {
     const monthStart = monthStartOf(ym);
 
@@ -2248,7 +2439,7 @@ return {
   ? normalizeDate(due_date)
   : dueDateFor(monthStart.slice(0, 7), 5);
   
-    const row = {
+    const baseRow = {
       title: finalTitle,
       category: category ?? null,
       amount: finalAmount,
@@ -2259,15 +2450,74 @@ return {
       canceled_at: null,
       cancel_note: null,
       cost_center: cost_center ?? "extra",
+      // recorrência/parcela (inserimos somente se valores fornecidos)
+      installment_index: installment_index ?? null,
+      installments_total: installments_total ?? null,
+      recurrence_kind: recurrence_kind ?? (installments_total ? "installments" : null),
+      frequency: frequency ?? (installments_total ? "monthly" : null),
+      start_month: start_month ?? null,
+      end_month: end_month ?? null,
     };
 
-    const { data, error } = await supabase
-      .from("other_revenues")
-      .insert([row])
-      .select(
-        "id, title, category, amount, competence_month, due_date, status, paid_at, canceled_at, cancel_note, cost_center, created_at, updated_at"
-      )
-      .single();
+    // Tentativa com campos extras; se der erro por coluna inexistente (inclui PGRST204), fazemos retry sem extras
+    let data = null; let error = null;
+    const tryExtended = HAS_OTHER_REVENUE_EXT_COLUMNS !== false; // reuse detection from list
+    if (tryExtended) {
+      const insertSelect = "id, title, category, amount, competence_month, due_date, status, paid_at, canceled_at, cancel_note, cost_center, created_at, updated_at, installment_index, installments_total, recurrence_kind, frequency, start_month, end_month";
+      let attemptRow = { ...baseRow };
+      let tries = 0;
+      while (tries < 3 && !data) {
+        const res = await supabase
+          .from("other_revenues")
+          .insert([attemptRow])
+          .select(insertSelect)
+          .single();
+        data = res.data; error = res.error;
+        if (!error) break;
+        const msg = String(error.message || "");
+        const isMissingColumn = /42703|PGRST204|column|does not exist|unknown column/i.test(msg);
+        const isCheck = /23514|check constraint|violates check constraint/i.test(msg);
+        if (isMissingColumn) {
+          HAS_OTHER_REVENUE_EXT_COLUMNS = false; // avoid future attempts this session
+          _setExtColsToLS(false);
+          break; // will fall back to minimal insert below
+        }
+        if (isCheck && /recurrence_kind/i.test(msg)) {
+          // Map EN -> PT-BR synonyms for legacy DBs
+          const val = String(attemptRow.recurrence_kind || "");
+          let mapped = val;
+          if (val === "indefinite") mapped = "indefinido";
+          else if (val === "installments") mapped = "parcelado";
+          else if (val === "until_month") mapped = "ate_mes";
+          if (mapped !== val) {
+            attemptRow.recurrence_kind = mapped;
+            tries++;
+            continue;
+          }
+          // If mapping didn't change, drop the field to bypass strict checks
+          delete attemptRow.recurrence_kind;
+          tries++;
+          continue;
+        }
+        // Other error: break to minimal retry path
+        break;
+      }
+    }
+    if (!data || error) {
+      const minimalRow = { ...baseRow };
+      delete minimalRow.installment_index;
+      delete minimalRow.installments_total;
+      delete minimalRow.recurrence_kind;
+      delete minimalRow.frequency;
+      delete minimalRow.start_month;
+      delete minimalRow.end_month;
+      const retry = await supabase
+        .from("other_revenues")
+        .insert([minimalRow])
+        .select("id, title, category, amount, competence_month, due_date, status, paid_at, canceled_at, cancel_note, cost_center, created_at, updated_at")
+        .single();
+      data = retry.data; error = retry.error;
+    }
 
     if (error) throw new Error(`createOtherRevenue: ${error.message}`);
     return data;
@@ -2316,6 +2566,295 @@ return {
       .eq("id", id);
     if (error) throw new Error(`reopenOtherRevenue: ${error.message}`);
     return true;
+  },
+
+  // --- Outras Receitas: Cancelar série (futuras pendentes) a partir de um item ---
+  async cancelOtherRevenueSeriesFrom(id, note = null) {
+    if (!id) throw new Error("cancelOtherRevenueSeriesFrom: 'id' é obrigatório");
+    // 1) Busca o item de referência com melhor esforço (campos estendidos se existirem)
+    let ref = null;
+    {
+      const res = await supabase
+        .from("other_revenues")
+        .select("id,status,title,due_date,recurrence_kind,generated_from,installment_index,installments_total")
+        .eq("id", id)
+        .single();
+      if (res.error) {
+        const msg = String(res.error.message || "");
+        const missing = /42703|column|does not exist|unknown column/i.test(msg);
+        if (!missing) throw new Error(`cancelOtherRevenueSeriesFrom.select: ${res.error.message}`);
+        const fallback = await supabase
+          .from("other_revenues")
+          .select("id,status,title,due_date")
+          .eq("id", id)
+          .single();
+        if (fallback.error) throw new Error(`cancelOtherRevenueSeriesFrom.select.fallback: ${fallback.error.message}`);
+        ref = fallback.data;
+      } else {
+        ref = res.data;
+      }
+    }
+
+    // Se não há sinais de série, cancela apenas o item
+    const parseParcel = (title) => {
+      const m = String(title || "").match(/\((\d+)\s*\/\s*(\d+)\)\s*$/);
+      return m ? { index: Number(m[1]), total: Number(m[2]) } : { index: 0, total: 0 };
+    };
+    const p = ref.installments_total ? { index: Number(ref.installment_index || 0), total: Number(ref.installments_total || 0) } : parseParcel(ref.title);
+    if (!p.total || p.total < 2) {
+      // Cancela apenas este item
+      const ok = await this.cancelOtherRevenue(id, note);
+      // Tentativa best-effort de desativar o template de origem para não regenerar no mês seguinte
+      if (ref.generated_from) {
+        try {
+          const { error: tplErr } = await supabase
+            .from("other_revenue_templates")
+            .update({ active: false })
+            .eq("id", ref.generated_from);
+          if (tplErr) {
+            console.warn("cancelOtherRevenueSeriesFrom.templateDeactivate:", tplErr.message || tplErr);
+          }
+        } catch (e) {
+          console.warn("cancelOtherRevenueSeriesFrom.templateDeactivate.catch:", e?.message || e);
+        }
+      }
+      return ok;
+    }
+    const idx = Math.max(1, Number(p.index || 1));
+
+    // 2) Cancela futuros pendentes pela melhor chave disponível
+    const patch = {
+      status: "canceled",
+      canceled_at: new Date().toISOString(),
+      cancel_note: note || null,
+      paid_at: null,
+    };
+
+    let q = supabase.from("other_revenues").update(patch).eq("status", "pending");
+    if (ref.generated_from) {
+      q = q.eq("generated_from", ref.generated_from).gte("installment_index", idx);
+    } else if (ref.installments_total) {
+      q = q.eq("installments_total", p.total).gte("installment_index", idx);
+      const base = String(ref.title || "").replace(/\s*\(\d+\s*\/\s*\d+\)\s*$/, "");
+      if (base) q = q.ilike("title", `${base}%`);
+    } else if (ref.due_date) {
+      // fallback mínimo: cancelar a partir da data (pode cancelar itens homônimos)
+      const base = String(ref.title || "").replace(/\s*\(\d+\s*\/\s*\d+\)\s*$/, "");
+      q = q.gte("due_date", String(ref.due_date).slice(0,10));
+      if (base) q = q.ilike("title", `${base}%`);
+    }
+
+    const { data, error } = await q.select("id");
+    if (error) throw new Error(`cancelOtherRevenueSeriesFrom.update: ${error.message}`);
+
+    // Desativa o template de origem (se houver) para evitar futuras gerações automáticas
+    if (ref.generated_from) {
+      try {
+        const { error: tplErr } = await supabase
+          .from("other_revenue_templates")
+          .update({ active: false })
+          .eq("id", ref.generated_from);
+        if (tplErr) {
+          console.warn("cancelOtherRevenueSeriesFrom.templateDeactivate:", tplErr.message || tplErr);
+        }
+      } catch (e) {
+        console.warn("cancelOtherRevenueSeriesFrom.templateDeactivate.catch:", e?.message || e);
+      }
+    }
+
+    return { canceled_count: Array.isArray(data) ? data.length : 0 };
+  },
+  // --- Outras Receitas: DELETE (hard delete de uma receita) ---
+  async deleteOtherRevenue(id) {
+    if (!id) throw new Error("deleteOtherRevenue: 'id' é obrigatório");
+    // Obter referência para desativar template de origem (se existir)
+    let generated_from = null;
+    try {
+      const sel = await supabase
+        .from("other_revenues")
+        .select("id, generated_from")
+        .eq("id", id)
+        .single();
+      if (!sel.error && sel.data) generated_from = sel.data.generated_from || null;
+    } catch {}
+    // 0) Best path: use RPC with tenant-scope and hard->soft fallback
+    try {
+      const { data, error } = await supabase.rpc("safe_delete_other_revenue", { p_id: id, p_mode: "auto" });
+      if (!error) {
+        await this._deactivateTemplateIfNeeded(generated_from);
+        return true;
+      }
+      const msg = String(error.message || "");
+      const rpcMissing = /PGRST202|schema cache|does not exist|404|function not found/i.test(msg);
+      const rpcDenied  = /permission|execute privilege|not allowed/i.test(msg);
+      if (!rpcMissing && !rpcDenied) {
+        // unexpected error from RPC, propagate
+        throw new Error(`RPC safe_delete_other_revenue: ${error.message}`);
+      }
+      // else fall through to direct delete
+    } catch (e) {
+      // ignore and try direct paths
+    }
+
+    const res = await supabase.from("other_revenues").delete().eq("id", id);
+    if (!res.error) {
+      await this._deactivateTemplateIfNeeded(generated_from);
+      return true;
+    }
+    const msg = String(res.error.message || res.error);
+    const likelyPolicy = /RLS|policy|permission|not\s+allowed|violates row-level security/i.test(msg);
+    const likelyFK      = /foreign key|violates foreign key constraint|still referenced/i.test(msg);
+    if (likelyPolicy || likelyFK) {
+      try {
+        await this.cancelOtherRevenue(id, "soft-delete fallback");
+        await this._deactivateTemplateIfNeeded(generated_from);
+        return true;
+      } catch (e) {
+        throw new Error(`deleteOtherRevenue: ${res.error.message} | fallback cancel failed: ${e?.message || e}`);
+      }
+    }
+    // Se chegamos aqui, delete falhou de forma não tratável
+    throw new Error(`deleteOtherRevenue: ${res.error.message}`);
+  },
+  
+  // util interno: desativa template gerador se informado
+  async _deactivateTemplateIfNeeded(templateId) {
+    if (!templateId) return;
+    try {
+      const { error } = await supabase
+        .from("other_revenue_templates")
+        .update({ active: false })
+        .eq("id", templateId);
+      if (error) console.warn("_deactivateTemplateIfNeeded:", error.message || error);
+    } catch (e) {
+      console.warn("_deactivateTemplateIfNeeded.catch:", e?.message || e);
+    }
+  },
+  // --- Outras Receitas: DELETE série futura (remove parcelas pendentes a partir desta) ---
+  async deleteOtherRevenueSeriesFrom(id) {
+    if (!id) throw new Error("deleteOtherRevenueSeriesFrom: 'id' é obrigatório");
+    // Busca referência com fallback
+    let ref = null;
+    {
+      const res = await supabase
+        .from("other_revenues")
+        .select("id,status,title,due_date,generated_from,installment_index,installments_total")
+        .eq("id", id)
+        .single();
+      if (res.error) {
+        const msg = String(res.error.message || "");
+        const missing = /42703|column|does not exist|unknown column/i.test(msg);
+        if (!missing) throw new Error(`deleteOtherRevenueSeriesFrom.select: ${res.error.message}`);
+        const fallback = await supabase
+          .from("other_revenues")
+          .select("id,status,title,due_date")
+          .eq("id", id)
+          .single();
+        if (fallback.error) throw new Error(`deleteOtherRevenueSeriesFrom.select.fallback: ${fallback.error.message}`);
+        ref = fallback.data;
+      } else {
+        ref = res.data;
+      }
+    }
+
+    const parseParcel = (title) => {
+      const m = String(title || "").match(/\((\d+)\s*\/\s*(\d+)\)\s*$/);
+      return m ? { index: Number(m[1]), total: Number(m[2]) } : { index: 0, total: 0 };
+    };
+    const p = ref.installments_total ? { index: Number(ref.installment_index || 0), total: Number(ref.installments_total || 0) } : parseParcel(ref.title);
+    if (!p.total || p.total < 2) {
+      const { error: eDel } = await supabase.from("other_revenues").delete().eq("id", id);
+      if (eDel) {
+        // fallback: tentar cancelar (soft-delete)
+        try {
+          await this.cancelOtherRevenue(id, "soft-delete fallback");
+        } catch (e) {
+          throw new Error(`deleteOtherRevenueSeriesFrom.deleteSingle: ${eDel.message} | fallback cancel failed: ${e?.message || e}`);
+        }
+      }
+      // Desativa o template de origem se existir
+      if (ref.generated_from) {
+        try {
+          const { error: tplErr } = await supabase
+            .from("other_revenue_templates")
+            .update({ active: false })
+            .eq("id", ref.generated_from);
+          if (tplErr) {
+            console.warn("deleteOtherRevenueSeriesFrom.templateDeactivate:", tplErr.message || tplErr);
+          }
+        } catch (e) {
+          console.warn("deleteOtherRevenueSeriesFrom.templateDeactivate.catch:", e?.message || e);
+        }
+      }
+      return { deleted_count: 1 };
+    }
+
+    const idx = Math.max(1, Number(p.index || 1));
+
+    let q = supabase.from("other_revenues").delete().eq("status", "pending");
+    if (ref.generated_from) {
+      q = q.eq("generated_from", ref.generated_from).gte("installment_index", idx);
+    } else if (ref.installments_total) {
+      q = q.eq("installments_total", p.total).gte("installment_index", idx);
+      const base = String(ref.title || "").replace(/\s*\(\d+\s*\/\s*\d+\)\s*$/, "");
+      if (base) q = q.ilike("title", `${base}%`);
+    } else if (ref.due_date) {
+      const base = String(ref.title || "").replace(/\s*\(\d+\s*\/\s*\d+\)\s*$/, "");
+      q = q.gte("due_date", String(ref.due_date).slice(0,10));
+      if (base) q = q.ilike("title", `${base}%`);
+    }
+
+    let data = null; let error = null;
+    const delRes = await q.select("id");
+    data = delRes.data; error = delRes.error;
+    if (error) {
+      const msg = String(error.message || error);
+      const likelyPolicy = /RLS|policy|permission|not\s+allowed|violates row-level security/i.test(msg);
+      const likelyFK      = /foreign key|violates foreign key constraint|still referenced/i.test(msg);
+      if (likelyPolicy || likelyFK) {
+        // Fallback: cancelar em massa os pendentes futuros
+        const patch = {
+          status: "canceled",
+          canceled_at: new Date().toISOString(),
+          cancel_note: "soft-delete fallback",
+          paid_at: null,
+        };
+        let uq = supabase.from("other_revenues").update(patch).eq("status", "pending");
+        if (ref.generated_from) {
+          uq = uq.eq("generated_from", ref.generated_from).gte("installment_index", idx);
+        } else if (ref.installments_total) {
+          uq = uq.eq("installments_total", p.total).gte("installment_index", idx);
+          const base2 = String(ref.title || "").replace(/\s*\(\d+\s*\/\s*\d+\)\s*$/, "");
+          if (base2) uq = uq.ilike("title", `${base2}%`);
+        } else if (ref.due_date) {
+          const base2 = String(ref.title || "").replace(/\s*\(\d+\s*\/\s*\d+\)\s*$/, "");
+          uq = uq.gte("due_date", String(ref.due_date).slice(0,10));
+          if (base2) uq = uq.ilike("title", `${base2}%`);
+        }
+        const upRes = await uq.select("id");
+        if (upRes.error) throw new Error(`deleteOtherRevenueSeriesFrom.delete: ${error.message} | fallback cancel failed: ${upRes.error.message}`);
+        data = upRes.data;
+      } else {
+        throw new Error(`deleteOtherRevenueSeriesFrom.delete: ${error.message}`);
+      }
+    }
+
+    // Desativa o template de origem (se houver) para evitar futuras gerações automáticas
+    if (ref.generated_from) {
+      try {
+        const { error: tplErr } = await supabase
+          .from("other_revenue_templates")
+          .update({ active: false })
+          .eq("id", ref.generated_from);
+        if (tplErr) {
+          console.warn("deleteOtherRevenueSeriesFrom.templateDeactivate:", tplErr.message || tplErr);
+        }
+      } catch (e) {
+        console.warn("deleteOtherRevenueSeriesFrom.templateDeactivate.catch:", e?.message || e);
+      }
+    }
+
+    return { deleted_count: Array.isArray(data) ? data.length : 0 };
   },
   // --- Outras Receitas: UPDATE ---
 async updateOtherRevenue(id, changes = {}, { syncCompetenceWithDueDate = false } = {}) {

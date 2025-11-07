@@ -14,24 +14,19 @@ const statusLabels = {
 };
 
 function KpiCard({ title, value, tone = "neutral" }) {
-  const toneBox = {
-    danger: "border-red-300 bg-red-50",
-    warning: "border-amber-300 bg-amber-50",
-    success: "border-green-300 bg-green-50",
-    neutral: "border-slate-200 bg-white",
-  }[tone] || "border-slate-200 bg-white";
-
-  const toneText = {
-    danger: "text-red-800",
-    warning: "text-amber-800",
-    success: "text-green-800",
-    neutral: "text-slate-900",
-  }[tone] || "text-slate-900";
+  // Padrão "widget" do dashboard: cartão branco, borda sutil e leve sombra.
+  const accent = {
+    danger: "bg-rose-600",
+    warning: "bg-amber-500",
+    success: "bg-green-600",
+    neutral: "bg-slate-300",
+  }[tone] || "bg-slate-300";
 
   return (
-    <div className={`rounded border p-3 ${toneBox}`}>
-      <div className={`text-xs ${toneText} opacity-80`}>{title}</div>
-      <div className={`text-xl font-semibold ${toneText}`}>{value}</div>
+    <div className="rounded-lg border border-slate-200 bg-white shadow-sm p-4 overflow-hidden">
+      <div className={`h-1 w-full ${accent} rounded-t-md -mt-1 mb-3`} />
+      <div className="text-[11px] uppercase tracking-wide text-slate-500">{title}</div>
+      <div className="text-2xl font-semibold text-slate-900">{value}</div>
     </div>
   );
 }
@@ -829,9 +824,9 @@ function BulkPayByPayer({ rows, ym, onDone }) {
           onClick={() => setOpen((v) => !v)}
           className={[
             "inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium",
-            "border border-emerald-600 bg-emerald-600 text-white",
-            "hover:bg-emerald-700 hover:border-emerald-700",
-            "focus:outline-none focus:ring-2 focus:ring-emerald-400",
+            "border border-slate-300 bg-white text-slate-700",
+            "hover:bg-slate-50",
+            "focus:outline-none focus:ring-2 focus:ring-slate-300",
             "shadow-sm"
           ].join(" ")}
           title="Quitar várias mensalidades de um mesmo pagador"
@@ -852,7 +847,7 @@ function BulkPayByPayer({ rows, ym, onDone }) {
               <select
                 value={payerId}
                 onChange={(e) => setPayerId(e.target.value)}
-                className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
               >
                 <option value="">Selecione…</option>
                 {payerOptions.map((p) => (
@@ -876,7 +871,7 @@ function BulkPayByPayer({ rows, ym, onDone }) {
               </button>
               <button
                 onClick={confirmBulkPay}
-                className="rounded-md border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700 disabled:opacity-50"
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 disabled={busy || !payerId}
               >
                 {busy ? "Processando…" : "Confirmar pagamento"}
@@ -896,43 +891,56 @@ function BulkPayByPayer({ rows, ym, onDone }) {
 
   // ---------- Render ----------
   return (
-    <main className="p-6 space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold">{title}</h1>
-          <label className="text-sm text-slate-600">Mês:</label>
-          <input
-            type="month"
-            value={ym}
-            onChange={(e) => setYm(e.target.value.slice(0, 7))}
-            className="border rounded px-2 py-1"
-          />
-          <select value={status} onChange={(e) => setStatus(e.target.value)} className="border rounded px-2 py-1">
-            <option value="all">Todos</option>
-            <option value="pending">Pendentes</option>
-            <option value="paid">Pagos</option>
-            <option value="canceled">Cancelados</option>
-          </select>
-        </div>
+    <main className="p-0 md:p-6 space-y-6">
+      {/* Cabeçalho neutro (remoção do bloco vermelho agressivo) */}
+      <header className="px-4 md:px-6 py-4 md:py-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-xl md:text-2xl font-bold">{title}</h1>
+            <label className="text-sm opacity-90">Mês:</label>
+            <input
+              type="month"
+              value={ym}
+              onChange={(e) => setYm(e.target.value.slice(0, 7))}
+              className="rounded border px-2 py-1 text-slate-700 bg-white"
+            />
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              className="rounded border px-2 py-1 text-slate-700 bg-white"
+            >
+              <option value="all">Todos</option>
+              <option value="pending">Pendentes</option>
+              <option value="paid">Pagos</option>
+              <option value="canceled">Cancelados</option>
+            </select>
+          </div>
 
-        <div className="flex items-center gap-2">
-          {canPreview && (
-            <button onClick={openPreview} className="border rounded px-3 py-2">
-              Prévia de geração
-            </button>
-          )}
-          {canGenerate && (
-            <button 
-              onClick={doGenerate} 
-              className="border rounded px-3 py-2 bg-emerald-600 text-white" 
-              disabled={genLoading}
+          <div className="flex items-center gap-2">
+            {canPreview && (
+              <button
+                onClick={openPreview}
+                className="rounded px-3 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50"
               >
-              {genLoading ? "Gerando…" : "Gerar mensalidades"}
+                Prévia de geração
+              </button>
+            )}
+            {canGenerate && (
+              <button
+                onClick={doGenerate}
+                className="rounded px-3 py-2 bg-white text-slate-700 hover:bg-slate-50 border border-slate-300"
+                disabled={genLoading}
+              >
+                {genLoading ? "Gerando…" : "Gerar mensalidades"}
+              </button>
+            )}
+            <button
+              onClick={openReminderPreview}
+              className="rounded px-3 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50"
+            >
+              Prévia de lembretes
             </button>
-          )}
-          <button onClick={openReminderPreview} className="border rounded px-3 py-2">
-            Prévia de lembretes
-          </button>
+          </div>
         </div>
       </header>
 
@@ -947,84 +955,132 @@ function BulkPayByPayer({ rows, ym, onDone }) {
           <KpiCard
             title="Total faturado"
             value={fmtBRL(revKpis.receita_prevista_mes + revKpis.receita_recebida)}
+            tone="neutral"
           />
-          <KpiCard title="Recebido" value={fmtBRL(revKpis.receita_recebida)} />
+          <KpiCard
+            title="Recebido"
+            value={fmtBRL(revKpis.receita_recebida)}
+            tone="success"
+          />
           <KpiCard
             title="Pendente"
             value={fmtBRL(revKpis.receita_a_receber + revKpis.receita_atrasada)}
+            tone="warning"
           />
-          <KpiCard title="Em atraso" value={fmtBRL(revKpis.receita_atrasada)} />
+          <KpiCard
+            title="Em atraso"
+            value={fmtBRL(revKpis.receita_atrasada)}
+            tone="danger"
+          />
         </section>
       )}
 
-      {/* Tabela */}
+      {/* Lista responsiva */}
       {loading ? (
         <div className="p-4">Carregando…</div>
       ) : (
-        <div className="overflow-auto border rounded">
-          <table className="min-w-[900px] w-full">
-            <thead className="bg-slate-50">
-              <tr>
-                <Th>Aluno</Th>
-                <Th>Pagador</Th>
-                <Th>Vencimento</Th>
-                <Th>Valor</Th>
-                <Th>Status</Th>
-                <Th>Ações</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="p-4 text-center text-slate-500">
-                    Nenhum lançamento.
-                  </td>
-                </tr>
-              )}
-              {rows.map((r) => {
-                const id = r.id; 
+        <>
+          {/* Mobile: cards */}
+          <div className="md:hidden space-y-2 px-4">
+            {rows.length === 0 ? (
+              <div className="p-4 text-center text-slate-500 border rounded">Nenhum lançamento.</div>
+            ) : (
+              rows.map((r) => {
+                const id = r.id;
+                const statusText = r.status === "pending" ? (r.days_overdue > 0 ? "Atrasado" : "Pendente") : (statusLabels?.[r.status] ?? r.status ?? "—");
                 return (
-                  <tr key={id} className="border-t">
-                    <Td>{r.student_name_snapshot || r.student_name || "—"}</Td>
-                    <Td>{r.payer_name_snapshot || r.payer_name || "—"}</Td>
-                    <Td>{fmtBRDate(r.due_date)}</Td>
-                    <Td>{fmtBRL(r.amount)}</Td>
-                    <Td>
-                      {r.status === "pending"
-                        ? r.days_overdue > 0
-                          ? "Atrasado"
-                          : "Pendente"
-                        : statusLabels?.[r.status] ?? r.status ?? "—"}
-                      {r.status === "pending" && r.days_overdue > 0 && (
-                        <span className="ml-2 text-red-600 text-xs">({r.days_overdue}d)</span>
-                      )}
-                    </Td>
-                    <Td>
+                  <div key={id} className="rounded border p-3 bg-white">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-medium truncate">{r.student_name_snapshot || r.student_name || "—"}</div>
+                      <div className="text-sm whitespace-nowrap">{fmtBRL(r.amount)}</div>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-600 flex items-center justify-between">
+                      <span>Vence: {fmtBRDate(r.due_date)}</span>
+                      <span>
+                        {statusText}
+                        {r.status === "pending" && r.days_overdue > 0 && (
+                          <span className="ml-1 text-rose-700">({r.days_overdue}d)</span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="mt-2">
                       {r.status === "pending" ? (
                         canFinanceWrite ? (
-                          <>
-                            <Btn onClick={() => markPaid(id)}>Marcar pago</Btn>
-                            <Btn onClick={() => cancel(id)} variant="danger">
-                              Cancelar
-                            </Btn>
-                          </>
+                          <div className="flex gap-2">
+                            <Btn onClick={() => markPaid(id)}>Pago</Btn>
+                            <Btn onClick={() => cancel(id)} variant="danger">Cancelar</Btn>
+                          </div>
                         ) : (
                           <span className="text-xs text-slate-500">—</span>
                         )
-                      ) : canFinanceWrite ? (
-                        <Btn onClick={() => reopen(id)} variant="secondary">
-                          Reabrir
-                        </Btn>
                       ) : (
-                        <span className="text-xs text-slate-500">—</span>
+                        canFinanceWrite ? (
+                          <Btn onClick={() => reopen(id)} variant="secondary">Reabrir</Btn>
+                        ) : (
+                          <span className="text-xs text-slate-500">—</span>
+                        )
                       )}
-                    </Td>
-                  </tr>
+                    </div>
+                  </div>
                 );
-              })}
-            </tbody>
-          </table>
-        </div>
+              })
+            )}
+          </div>
+
+          {/* Desktop: tabela compacta (sem coluna Pagador) com cabeçalho no padrão (gradiente apenas na linha) */}
+          <div className="hidden md:block overflow-auto border rounded-md overflow-hidden mx-4 md:mx-0">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-gradient-to-r from-rose-900 to-rose-700 text-white">
+                  <th className="text-left text-xs font-semibold uppercase tracking-wide px-3 py-2">Aluno</th>
+                  <th className="text-left text-xs font-semibold uppercase tracking-wide px-3 py-2">Vencimento</th>
+                  <th className="text-left text-xs font-semibold uppercase tracking-wide px-3 py-2">Valor</th>
+                  <th className="text-left text-xs font-semibold uppercase tracking-wide px-3 py-2">Status</th>
+                  <th className="text-left text-xs font-semibold uppercase tracking-wide px-3 py-2">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="p-4 text-center text-slate-500">Nenhum lançamento.</td>
+                  </tr>
+                )}
+                {rows.map((r) => {
+                  const id = r.id;
+                  return (
+                    <tr key={id} className="border-t">
+                      <Td>{r.student_name_snapshot || r.student_name || "—"}</Td>
+                      <Td>{fmtBRDate(r.due_date)}</Td>
+                      <Td>{fmtBRL(r.amount)}</Td>
+                      <Td>
+                        {r.status === "pending" ? (r.days_overdue > 0 ? "Atrasado" : "Pendente") : (statusLabels?.[r.status] ?? r.status ?? "—")}
+                        {r.status === "pending" && r.days_overdue > 0 && (
+                          <span className="ml-2 text-red-600 text-xs">({r.days_overdue}d)</span>
+                        )}
+                      </Td>
+                      <Td>
+                        {r.status === "pending" ? (
+                          canFinanceWrite ? (
+                            <>
+                              <Btn onClick={() => markPaid(id)}>Pago</Btn>
+                              <Btn onClick={() => cancel(id)} variant="danger">Cancelar</Btn>
+                            </>
+                          ) : (
+                            <span className="text-xs text-slate-500">—</span>
+                          )
+                        ) : canFinanceWrite ? (
+                          <Btn onClick={() => reopen(id)} variant="secondary">Reabrir</Btn>
+                        ) : (
+                          <span className="text-xs text-slate-500">—</span>
+                        )}
+                      </Td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {/* Modal simples de prévia */}
@@ -1091,7 +1147,7 @@ function BulkPayByPayer({ rows, ym, onDone }) {
           {isAdmin && (
             <a
               href="/app/conta#comunicacao"
-              className="text-sm text-emerald-700 underline hover:no-underline"
+              className="text-sm text-slate-700 underline hover:no-underline"
               title="Configurar templates de e-mail do tenant"
             >
               Configurar templates
@@ -1148,7 +1204,7 @@ function BulkPayByPayer({ rows, ym, onDone }) {
   <div className="flex gap-2">
     <button
       onClick={() => sendReminders({ onlySelected: true })}
-      className="px-3 py-2 border rounded bg-emerald-600 text-white disabled:opacity-50"
+  className="px-3 py-2 border rounded bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
       disabled={sendingRem || selectedIds.size === 0}
       title="Enviar somente para os selecionados"
     >
@@ -1156,7 +1212,7 @@ function BulkPayByPayer({ rows, ym, onDone }) {
     </button>
     <button
       onClick={() => sendReminders({ onlySelected: false })}
-      className="px-3 py-2 border rounded bg-emerald-700 text-white disabled:opacity-50"
+  className="px-3 py-2 border rounded bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
       disabled={sendingRem || remRows.length === 0}
       title="Enviar para todos listados"
     >
@@ -1243,7 +1299,7 @@ function Btn({ children, onClick, variant = "primary" }) {
       ? "border-rose-600 text-rose-700"
       : variant === "secondary"
       ? "border-slate-400 text-slate-700"
-      : "border-emerald-600 text-emerald-700";
+  : "border-slate-300 text-slate-700";
   return (
     <button className={`${base} ${styles}`} onClick={onClick}>
       {children}

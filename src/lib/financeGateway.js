@@ -116,6 +116,47 @@ async function listOtherRevenues({ ym, status = "all", cost_center = null } = {}
 async function createOtherRevenue(payload) {
   return supabaseGateway.createOtherRevenue(payload);
 }
+// Criação de série parcelada (simple loop gerando N meses)
+async function createOtherRevenueInstallments({
+  ym,
+  title,
+  amount,
+  total_installments,
+  due_day = 5,
+  category = null,
+  cost_center = "extra",
+} = {}) {
+  const n = Math.max(1, Number(total_installments || 1));
+  const results = [];
+  // helper para avançar mês (YYYY-MM)
+  const addMonth = (ymStr, offset) => {
+    const [Y, M] = ymStr.split("-").map(Number);
+    const date = new Date(Y, M - 1 + offset, 1);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  };
+  for (let i = 0; i < n; i++) {
+    const currYm = addMonth(ym, i); // YYYY-MM
+    // due_date construído do dia escolhido
+    const due_date = `${currYm}-${String(due_day).padStart(2, "0")}`;
+    const row = await supabaseGateway.createOtherRevenue({
+      ym: currYm,
+      title: `${title} (${i + 1}/${n})`,
+      amount,
+      due_date,
+      category,
+      cost_center,
+      // sinaliza campos para se existirem nas colunas
+      installment_index: i + 1,
+      installments_total: n,
+      recurrence_kind: "installments",
+      frequency: "monthly",
+      start_month: `${ym}-01`,
+      end_month: `${addMonth(ym, n - 1)}-01`,
+    });
+    results.push(row);
+  }
+  return results;
+}
 async function markOtherRevenuePaid(id) {
   return supabaseGateway.markOtherRevenuePaid(id);
 }
@@ -127,6 +168,22 @@ async function reopenOtherRevenue(id) {
 }
 async function updateOtherRevenue(id, changes = {}, opts = {}) {
   return supabaseGateway.updateOtherRevenue(id, changes, opts);
+}
+async function cancelOtherRevenueSeriesFrom(id, note = null) {
+  return supabaseGateway.cancelOtherRevenueSeriesFrom(id, note);
+}
+async function ensureOtherRevenuesForMonth(ym) {
+  return supabaseGateway.ensureOtherRevenuesForMonth(ym);
+}
+async function deleteOtherRevenue(id) {
+  return supabaseGateway.deleteOtherRevenue(id);
+}
+async function deleteOtherRevenueSeriesFrom(id) {
+  return supabaseGateway.deleteOtherRevenueSeriesFrom(id);
+}
+// Criação de template para outras receitas (autogeração)
+async function createOtherRevenueTemplate(payload) {
+  return supabaseGateway.createOtherRevenueTemplate(payload);
 }
 
 // ---------- Professores (payout) ----------
@@ -277,10 +334,16 @@ export const financeGateway = {
   // Outras receitas
   listOtherRevenues,
   createOtherRevenue,
+  createOtherRevenueInstallments,
   markOtherRevenuePaid,
   cancelOtherRevenue,
   reopenOtherRevenue,
   updateOtherRevenue,
+  cancelOtherRevenueSeriesFrom,
+  ensureOtherRevenuesForMonth,
+  deleteOtherRevenue,
+  deleteOtherRevenueSeriesFrom,
+  createOtherRevenueTemplate,
 
   // Categorias de Despesas
   listExpenseCategories: () => supabaseGateway.listExpenseCategories(),

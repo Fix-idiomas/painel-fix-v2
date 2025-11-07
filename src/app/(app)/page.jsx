@@ -433,25 +433,26 @@ export default function Page() {
               <Kpi
                 title="Receita total"
                 value={maskMoney(combined?.total || 0)}
-                subtitle={`Recebido: ${maskMoney(combined?.received || 0)} • A vencer: ${maskMoney(combined?.upcoming || 0)} • Em atraso: ${maskMoney(combined?.overdue || 0)}`}
+                tone="neutral"
+                showBar
               />
-              <Kpi title="Receita recebida"  value={maskMoney(revKpis?.receita_recebida    || 0)} />
-              <Kpi title="Receita atrasada"  value={maskMoney(revKpis?.receita_atrasada    || 0)} />
-              <Kpi title="Receita a receber" value={maskMoney(revKpis?.receita_a_receber   || 0)} />
+              <Kpi title="Receita recebida"  value={maskMoney(revKpis?.receita_recebida    || 0)} tone="success" showBar />
+              <Kpi title="Receita atrasada"  value={maskMoney(revKpis?.receita_atrasada    || 0)} tone="danger" showBar />
+              <Kpi title="Receita a receber" value={maskMoney(revKpis?.receita_a_receber   || 0)} tone="warning" showBar />
             </section>
           )}
 
           {panelGroup === "gastos" && (
             <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <Kpi title="Gastos totais"    value={maskMoney(kpisExp.total)} />
-              <Kpi title="Gastos pagos"     value={maskMoney(kpisExp.paid)} />
-              <Kpi title="Gastos em atraso" value={maskMoney(kpisExp.overdue)} />
+              <Kpi title="Gastos totais"    value={maskMoney(kpisExp.total)}   tone="neutral" showBar />
+              <Kpi title="Gastos pagos"     value={maskMoney(kpisExp.paid)}    tone="success" showBar />
+              <Kpi title="Gastos em atraso" value={maskMoney(kpisExp.overdue)} tone="danger" showBar />
             </section>
           )}
 
           {panelGroup === "custos" && (
             <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <Kpi title="Custo professores" value={maskMoney(kpisExp.teachers || 0)} />
+              <Kpi title="Custo professores" value={maskMoney(kpisExp.teachers || 0)} tone="warning" showBar />
             </section>
           )}
         </>
@@ -620,21 +621,37 @@ export default function Page() {
   );
 }
 
-function Kpi({ title, value, tone = "neutral", subtitle }) {
+function Kpi({ title, value, tone = "neutral", subtitle, showBar = false }) {
+  // Quando showBar=true aplica padrão com faixa fina colorida e fundo branco.
+  if (showBar) {
+    const accent = {
+      danger: "bg-rose-600",
+      warning: "bg-amber-500",
+      success: "bg-green-600",
+      neutral: "bg-slate-300",
+    }[tone] || "bg-slate-300";
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white shadow-sm p-4 overflow-hidden">
+        <div className={`h-1 w-full ${accent} rounded-t-md -mt-1 mb-3`}></div>
+        <div className="text-[11px] uppercase tracking-wide text-slate-500">{title}</div>
+        <div className="text-2xl font-semibold text-slate-900">{value}</div>
+        {subtitle && <div className="mt-1 text-xs text-slate-600 whitespace-pre-line">{subtitle}</div>}
+      </div>
+    );
+  }
+  // Caso contrário mantém estilo anterior (tinted) para não afetar outros cards.
   const toneBox = {
     danger:  "border-red-300 bg-red-50",
     warning: "border-amber-300 bg-amber-50",
     success: "border-green-300 bg-green-50",
     neutral: "border-slate-200 bg-white",
   }[tone] || "border-slate-200 bg-white";
-
   const toneText = {
     danger:  "text-red-800",
     warning: "text-amber-800",
     success: "text-green-800",
     neutral: "text-slate-900",
   }[tone] || "text-slate-900";
-
   return (
     <div className={`rounded-xl border p-3 shadow-sm hover:shadow-md transition-shadow ${toneBox}`}>
       <div className={`text-xs ${toneText} opacity-80`}>{title}</div>

@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { financeGateway } from "@/lib/financeGateway";
+import Modal from "@/components/Modal";
 
 // ---------- utils ----------
 const ymNow = () => {
@@ -86,18 +87,27 @@ function OtherRevenuesPage() {
   const [rows, setRows] = useState([]);
   const [kpis, setKpis] = useState({ total: 0, paid: 0, pending: 0, overdue: 0 });
   const [loading, setLoading] = useState(true);
+  const [categories, setCategories] = useState([]);
 
   const [submitting, setSubmitting] = useState(false);
   const [canFinanceWrite] = useState(true); // plugue seu checker quando tiver
+
+  // modal de confirmação de cancelamento (parcela/série)
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelRow, setCancelRow] = useState(null);
 
   // modal de criação
   const [openNew, setOpenNew] = useState(false);
   const [newPayload, setNewPayload] = useState({
     title: "",
     amount: "",
-    due_date: "", // YYYY-MM-DD
     category: "",
     cost_center: "extra",
+    frequency: "monthly", // monthly | yearly
+    as_template: false,    // quando monthly: criar template recorrente indefinido
+    parcelas: "1",
+    due_day: "5",
+    due_month: String(new Date().getMonth() + 1).padStart(2, "0"), // usado quando yearly
   });
 
   // --- modal de edição ---
@@ -121,6 +131,35 @@ function OtherRevenuesPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ym, status, costCenter]);
+
+  // Ouve evento para abrir o modal de cancelamento (série/parcela)
+  useEffect(() => {
+    const handler = (ev) => {
+      const row = ev?.detail;
+      if (row) {
+        setCancelRow(row);
+        setCancelOpen(true);
+      }
+    };
+    window.addEventListener("open-cancel-modal", handler);
+    const reloader = () => {
+      load();
+    };
+    window.addEventListener("reload-other-revenues", reloader);
+    return () => window.removeEventListener("open-cancel-modal", handler);
+  }, []);
+
+  // carrega categorias para popular o select (com fallback para input)
+  useEffect(() => {
+    (async () => {
+      try {
+        const list = await financeGateway.listExpenseCategories();
+        setCategories(Array.isArray(list) ? list : []);
+      } catch {
+        setCategories([]);
+      }
+    })();
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -147,33 +186,121 @@ function OtherRevenuesPage() {
     await financeGateway.cancelOtherRevenue(id, note);
     await load();
   }
+  async function onCancelSeries(row) {
+    const total = Number(row.installments_total || 0);
+    const idx = Number(row.installment_index || 0);
+    const futureCount = total && idx ? total - idx + 1 : 0;
+    const confirmTxt = `Cancelar esta parcela e as próximas pendentes?\n` +
+      (futureCount > 0 ? `Total afetado (pendentes a partir desta): ${futureCount}. ` : ``) +
+      `Pagas anteriores permanecem.`;
+    if (!confirm(confirmTxt)) return;
+    const note = prompt("Motivo do cancelamento da série (opcional):") || null;
+    await financeGateway.cancelOtherRevenueSeriesFrom(row.id, note);
+    await load();
+  }
   async function onReopen(id) {
     await financeGateway.reopenOtherRevenue(id);
     await load();
   }
 
-  // criar nova receita (avulsa/manual)
+  // Helpers de série/parcelas
+  function getParcelInfo(row) {
+    const idx = Number(row?.installment_index || 0);
+    const tot = Number(row?.installments_total || 0);
+    if (idx > 0 && tot > 0) return { index: idx, total: tot };
+    const m = String(row?.title || "").match(/\((\d+)\s*\/\s*(\d+)\)\s*$/);
+    if (m) {
+      const i = Number(m[1]);
+      const t = Number(m[2]);
+      if (i > 0 && t > 0) return { index: i, total: t };
+    }
+    return { index: 0, total: 0 };
+  }
+
+  async function onCancelSeries(row) {
+    const p = getParcelInfo(row);
+    const futureCount = p.total && p.index ? p.total - p.index + 1 : 0;
+    const confirmTxt = `Cancelar esta parcela e as próximas pendentes?\n` +
+      (futureCount > 0 ? `Total afetado (pendentes a partir desta): ${futureCount}. ` : ``) +
+      `Pagas anteriores permanecem.`;
+    if (!confirm(confirmTxt)) return;
+    const note = prompt("Motivo do cancelamento da série (opcional):") || null;
+    await financeGateway.cancelOtherRevenueSeriesFrom(row.id, note);
+    await load();
+  }
+  function openCancelModal(row) {
+    setCancelRow(row);
+    setCancelOpen(true);
+  }
+  function closeCancelModal() {
+    setCancelOpen(false);
+    setCancelRow(null);
+  }
+
+  // criar nova receita
   async function onCreateNew(e) {
     e.preventDefault();
     if (submitting) return;
     setSubmitting(true);
     try {
-      const payload = {
-        ym, // competência vem do seletor
-        title: newPayload.title,
-        amount: Number(newPayload.amount || 0),
-        due_date: newPayload.due_date ? newPayload.due_date.slice(0, 10) : null,
-        category: newPayload.category || null,
-        cost_center: newPayload.cost_center || "extra",
-      };
-      await financeGateway.createOtherRevenue(payload);
+      if (newPayload.frequency === "yearly") {
+        // Criação anual (uma única receita no ano com o mês/dia escolhidos)
+        const year = String(ym).slice(0, 4);
+        const mm = String(newPayload.due_month || "01").padStart(2, "0");
+        const dd = String(Math.min(Math.max(Number(newPayload.due_day || 5), 1), 28)).padStart(2, "0");
+        const due_date = `${year}-${mm}-${dd}`;
+        await financeGateway.createOtherRevenue({
+          ym,
+          title: newPayload.title,
+          amount: Number(newPayload.amount || 0),
+          due_date,
+          category: newPayload.category || null,
+          cost_center: newPayload.cost_center || "extra",
+          // metadados (se colunas existirem)
+          recurrence_kind: "indefinite",
+          frequency: "yearly",
+          start_month: `${ym}-01`,
+        });
+      } else if (newPayload.as_template === true) {
+        // Template mensal indefinido: cria template e já gera o mês atual
+        await financeGateway.createOtherRevenueTemplate({
+          title: newPayload.title,
+          amount: Number(newPayload.amount || 0),
+          frequency: "monthly",
+          recurrence_type: "indefinite",
+          due_day: Number(newPayload.due_day || 5),
+          start_month: `${ym}-01`,
+          end_month: null,
+          active: true,
+          category: newPayload.category || null,
+          cost_center: newPayload.cost_center || "extra",
+        });
+        // Gera o mês atual imediatamente para o usuário ver
+        try { await financeGateway.ensureOtherRevenuesForMonth(ym); } catch {}
+      } else {
+        // Mensal: série de parcelas (se 1, vira 1/1)
+        const totalParcelas = Math.max(1, Number(newPayload.parcelas || 1));
+        await financeGateway.createOtherRevenueInstallments({
+          ym,
+          title: newPayload.title,
+          amount: Number(newPayload.amount || 0),
+          total_installments: totalParcelas,
+          due_day: Number(newPayload.due_day || 5),
+          category: newPayload.category || null,
+          cost_center: newPayload.cost_center || "extra",
+        });
+      }
       setOpenNew(false);
       setNewPayload({
         title: "",
         amount: "",
-        due_date: "",
         category: "",
         cost_center: "extra",
+        frequency: "monthly",
+        as_template: false,
+        parcelas: "1",
+        due_day: "5",
+        due_month: String(new Date().getMonth() + 1).padStart(2, "0"),
       });
       await load();
     } finally {
@@ -213,22 +340,38 @@ function OtherRevenuesPage() {
     await load();
   }
 
+  // ---------- render ----------
   return (
     <main className="p-6 space-y-6">
-      {/* Header / Filtros */}
-      <div className="flex flex-wrap items-end gap-3">
-        <h1 className="text-2xl font-semibold">Outras Receitas</h1>
-
+      {/* Toolbar de filtros e ações */}
+      <div className="flex flex-wrap gap-3 items-center">
         <div>
-          <label className="block text-xs mb-1 text-slate-600">Mês</label>
-          <input
-            type="month"
-            value={ym}
-            onChange={(e) => setYm(e.target.value)}
-            className="border rounded px-3 py-2"
-          />
+          <label className="block text-xs mb-1 text-slate-600">Competência</label>
+          <div className="flex gap-2 items-center">
+            <button
+              type="button"
+              onClick={() => {
+                const [Y,M] = ym.split('-').map(Number); const d=new Date(Y,M-1,1); d.setMonth(d.getMonth()-1); const newYm=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; setYm(newYm);
+              }}
+              className="border rounded px-2 py-1 text-xs"
+              title="Mês anterior"
+            >◄</button>
+            <input
+              type="month"
+              value={ym}
+              onChange={(e) => setYm(e.target.value)}
+              className="border rounded px-3 py-2"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const [Y,M] = ym.split('-').map(Number); const d=new Date(Y,M-1,1); d.setMonth(d.getMonth()+1); const newYm=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; setYm(newYm);
+              }}
+              className="border rounded px-2 py-1 text-xs"
+              title="Próximo mês"
+            >►</button>
+          </div>
         </div>
-
         <div>
           <label className="block text-xs mb-1 text-slate-600">Status</label>
           <select
@@ -238,11 +381,11 @@ function OtherRevenuesPage() {
           >
             <option value="all">Todos</option>
             <option value="pending">Pendentes</option>
-            <option value="paid">Pagos</option>
             <option value="canceled">Cancelados</option>
+            <option value="paid">Pagos</option>
+            <option value="overdue">Atrasados</option>
           </select>
         </div>
-
         <div>
           <label className="block text-xs mb-1 text-slate-600">Centro de custo</label>
           <select
@@ -256,21 +399,34 @@ function OtherRevenuesPage() {
             <option value="PF">PF</option>
           </select>
         </div>
-
         <button
           onClick={() => exportCSV(sorted, ym, status, costCenter)}
           className="border rounded px-3 py-2"
         >
           Exportar CSV
         </button>
-
         <div className="flex-1" />
-
         <button
           onClick={() => setOpenNew(true)}
           className="rounded bg-black text-white px-4 py-2"
         >
           Nova receita
+        </button>
+        <button
+          onClick={async () => {
+            const confirmGen = confirm("Gerar automaticamente receitas recorrentes (templates) para este mês?");
+            if (!confirmGen) return;
+            try {
+              await financeGateway.ensureOtherRevenuesForMonth(ym);
+              await load();
+              alert("Geração automática concluída.");
+            } catch (e) {
+              alert(e.message);
+            }
+          }}
+          className="rounded border px-4 py-2"
+        >
+          Gerar mês (templates)
         </button>
       </div>
 
@@ -297,6 +453,7 @@ function OtherRevenuesPage() {
                 <Th>Centro</Th>
                 <Th>Competência</Th>
                 <Th>Vencimento</Th>
+                <Th>Parcela</Th>
                 <Th className="text-right">Valor</Th>
                 <Th>Status</Th>
                 <Th>Ações</Th>
@@ -307,11 +464,22 @@ function OtherRevenuesPage() {
                 <tr key={r.id} className="border-t">
                   <Td className="max-w-[260px] truncate" title={r.title}>
                     {r.title}
+                    {(() => { const p = getParcelInfo(r); return p.total > 1; })() && (
+                      <span
+                        className="ml-2 align-middle text-[10px] px-1.5 py-0.5 rounded border bg-slate-50 text-slate-600"
+                        title={(function(){ const p=getParcelInfo(r); return `Série de ${p.total} parcelas — esta é a ${p.index}`; })()}
+                      >
+                        Série
+                      </span>
+                    )}
                   </Td>
                   <Td>{r.category || "—"}</Td>
                   <Td>{r.cost_center || "—"}</Td>
                   <Td>{fmtBRDate(r.competence_month)}</Td>
                   <Td>{fmtBRDate(r.due_date)}</Td>
+                  <Td className="whitespace-nowrap">
+                    {(() => { const p = getParcelInfo(r); return p.total > 0 ? `${p.index}/${p.total}` : "—"; })()}
+                  </Td>
                   <Td className="text-right">{fmtBRL(r.amount)}</Td>
                   <Td className="whitespace-nowrap">
                     <Badge status={r.status} />
@@ -324,6 +492,7 @@ function OtherRevenuesPage() {
                       row={r}
                       onPaid={onMarkPaid}
                       onCancel={onCancel}
+                      onCancelSeries={onCancelSeries}
                       onReopen={onReopen}
                       canWrite={canFinanceWrite}
                       onEdit={() => openEditModal(r)}
@@ -367,25 +536,107 @@ function OtherRevenuesPage() {
               </div>
 
               <div>
-                <label className="block text-xs mb-1">Vencimento (data)</label>
-                <input
-                  type="date"
+                <label className="block text-xs mb-1">Frequência *</label>
+                <select
                   className="w-full border rounded px-3 py-2"
-                  value={newPayload.due_date}
-                  onChange={(e) =>
-                    setNewPayload((p) => ({ ...p, due_date: e.target.value.slice(0, 10) }))
-                  }
+                  value={newPayload.frequency}
+                  onChange={(e) => setNewPayload((p) => ({ ...p, frequency: e.target.value, as_template: false }))}
+                  required
+                >
+                  <option value="monthly">Mensal</option>
+                  <option value="yearly">Anual</option>
+                </select>
+              </div>
+
+              {newPayload.frequency === "monthly" && !newPayload.as_template && (
+                <div>
+                  <label className="block text-xs mb-1">Nº parcelas *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    className="w-full border rounded px-3 py-2"
+                    value={newPayload.parcelas}
+                    onChange={(e) => setNewPayload((p) => ({ ...p, parcelas: e.target.value }))}
+                    required
+                  />
+                </div>
+              )}
+
+              {newPayload.frequency === "monthly" && (
+                <div className="md:col-span-2 flex items-center gap-2 border rounded px-3 py-2">
+                  <input
+                    id="as_template"
+                    type="checkbox"
+                    className="accent-black"
+                    checked={!!newPayload.as_template}
+                    onChange={(e) => setNewPayload((p) => ({ ...p, as_template: e.target.checked }))}
+                  />
+                  <label htmlFor="as_template" className="text-sm">
+                    Gerar automaticamente todo mês (recorrente indefinido)
+                  </label>
+                </div>
+              )}
+
+              {newPayload.frequency === "yearly" && (
+                <div>
+                  <label className="block text-xs mb-1">Mês do vencimento *</label>
+                  <select
+                    className="w-full border rounded px-3 py-2"
+                    value={newPayload.due_month}
+                    onChange={(e) => setNewPayload((p) => ({ ...p, due_month: e.target.value }))}
+                    required
+                  >
+                    {Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, "0")).map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs mb-1">Dia vencimento *</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="28"
+                  className="w-full border rounded px-3 py-2"
+                  value={newPayload.due_day}
+                  onChange={(e) => setNewPayload((p) => ({ ...p, due_day: e.target.value }))}
+                  required
                 />
+              </div>
+
+              <div className="md:col-span-2 text-xs text-slate-500">
+                {newPayload.frequency === "yearly" ? (
+                  <>Gera 1 receita anual com vencimento em {String(newPayload.due_day).padStart(2, "0")}/{newPayload.due_month}/{String(ym).slice(0,4)}.</>
+                ) : newPayload.as_template ? (
+                  <>Gerará automaticamente 1 receita por mês (dia {String(newPayload.due_day).padStart(2, "0")}) a partir de {ym}, até desativar.</>
+                ) : (
+                  <>Gera {newPayload.parcelas || 1} receita(s) mensal(is) iniciando em {ym}.</>
+                )}
               </div>
 
               <div>
                 <label className="block text-xs mb-1">Categoria</label>
-                <input
-                  className="w-full border rounded px-3 py-2"
-                  value={newPayload.category}
-                  onChange={(e) => setNewPayload((p) => ({ ...p, category: e.target.value }))}
-                  placeholder="ex.: evento, material…"
-                />
+                {Array.isArray(categories) && categories.length > 0 ? (
+                  <select
+                    className="w-full border rounded px-3 py-2"
+                    value={newPayload.category}
+                    onChange={(e) => setNewPayload((p) => ({ ...p, category: e.target.value }))}
+                  >
+                    <option value="">—</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="w-full border rounded px-3 py-2"
+                    value={newPayload.category}
+                    onChange={(e) => setNewPayload((p) => ({ ...p, category: e.target.value }))}
+                    placeholder="ex.: evento, material…"
+                  />
+                )}
               </div>
 
               <div>
@@ -420,6 +671,51 @@ function OtherRevenuesPage() {
             </div>
           </form>
         </div>
+      )}
+
+      {/* Modal: Cancelar — série/parcela */}
+      {cancelOpen && (
+        <Modal
+          open={cancelOpen}
+          onClose={closeCancelModal}
+          title="Cancelar receita"
+          footer={(
+            <>
+              <button
+                className="border rounded px-3 py-1"
+                onClick={closeCancelModal}
+              >
+                Fechar
+              </button>
+              {cancelRow && (
+                <>
+                  <button
+                    className="border rounded px-3 py-1"
+                    onClick={async () => {
+                      await onCancel(cancelRow.id);
+                      closeCancelModal();
+                    }}
+                  >
+                    Cancelar somente esta
+                  </button>
+                  <button
+                    className="rounded bg-black text-white px-3 py-1"
+                    onClick={async () => {
+                      await onCancelSeries(cancelRow);
+                      closeCancelModal();
+                    }}
+                  >
+                    Cancelar série
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        >
+          {cancelRow ? (
+            <CancelSeriesBody row={cancelRow} getParcelInfo={getParcelInfo} />
+          ) : null}
+        </Modal>
       )}
 
       {/* Modal Editar receita */}
@@ -464,12 +760,25 @@ function OtherRevenuesPage() {
 
               <div>
                 <label className="block text-xs mb-1">Categoria</label>
-                <input
-                  className="w-full border rounded px-3 py-2"
-                  value={editPayload.category}
-                  onChange={(e) => setEditPayload((p) => ({ ...p, category: e.target.value }))}
-                  placeholder="ex.: evento, material…"
-                />
+                {Array.isArray(categories) && categories.length > 0 ? (
+                  <select
+                    className="w-full border rounded px-3 py-2"
+                    value={editPayload.category}
+                    onChange={(e) => setEditPayload((p) => ({ ...p, category: e.target.value }))}
+                  >
+                    <option value="">—</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="w-full border rounded px-3 py-2"
+                    value={editPayload.category}
+                    onChange={(e) => setEditPayload((p) => ({ ...p, category: e.target.value }))}
+                    placeholder="ex.: evento, material…"
+                  />
+                )}
               </div>
 
               <div>
@@ -554,6 +863,13 @@ function Badge({ status }) {
   );
 }
 function RowActions({ row, onPaid, onCancel, onReopen, onEdit, canWrite = true }) {
+  function isSeries(row) {
+    const idx = Number(row?.installment_index || 0);
+    const tot = Number(row?.installments_total || 0);
+    if (idx > 0 && tot > 1) return true;
+    const m = String(row?.title || "").match(/\((\d+)\s*\/\s*(\d+)\)\s*$/);
+    return !!(m && Number(m[2]) > 1);
+  }
   return (
     <div className="flex gap-2">
       {canWrite && row.status !== "paid" && row.status !== "canceled" && (
@@ -568,11 +884,41 @@ function RowActions({ row, onPaid, onCancel, onReopen, onEdit, canWrite = true }
 
       {canWrite && row.status !== "canceled" && (
         <button
-          onClick={() => onCancel(row.id)}
+          onClick={() => {
+            if (isSeries(row)) {
+              // usa modal estilizado
+              const ev = new CustomEvent("open-cancel-modal", { detail: row });
+              window.dispatchEvent(ev);
+            } else {
+              onCancel(row.id);
+            }
+          }}
           className="text-xs rounded border px-2 py-1"
           title="Cancelar"
         >
           Cancelar
+        </button>
+      )}
+      {canWrite && (
+        <button
+          onClick={() => {
+            if (isSeries(row)) {
+              const confirmSeries = confirm("Excluir FUTURAS parcelas pendentes desta série? Pagas anteriores permanecem.");
+              if (!confirmSeries) return;
+              financeGateway.deleteOtherRevenueSeriesFrom(row.id)
+                .then(() => window.dispatchEvent(new Event("reload-other-revenues")))
+                .catch((e) => alert(e.message));
+            } else {
+              if (!confirm("Excluir definitivamente esta receita?")) return;
+              financeGateway.deleteOtherRevenue(row.id)
+                .then(() => window.dispatchEvent(new Event("reload-other-revenues")))
+                .catch((e) => alert(e.message));
+            }
+          }}
+          className="text-xs rounded border px-2 py-1 text-rose-700 border-rose-300"
+          title="Excluir permanentemente"
+        >
+          Excluir
         </button>
       )}
 
@@ -591,6 +937,30 @@ function RowActions({ row, onPaid, onCancel, onReopen, onEdit, canWrite = true }
           Editar
         </button>
       )}
+    </div>
+  );
+}
+
+// Corpo do modal de cancelamento (informativo)
+function CancelSeriesBody({ row, getParcelInfo }) {
+  const p = getParcelInfo(row);
+  const future = p.total && p.index ? p.total - p.index + 1 : 0;
+  return (
+    <div className="space-y-2 text-sm">
+      <p>
+        Título: <strong>{row.title}</strong>
+      </p>
+      {p.total > 0 && (
+        <p>
+          Parcela: <strong>{p.index}/{p.total}</strong>
+        </p>
+      )}
+      {p.total > 1 && (
+        <p className="text-slate-600">
+          Se optar por cancelar a série a partir desta, serão afetadas {future} parcela(s) pendentes.
+        </p>
+      )}
+      <p className="text-slate-600">Escolha abaixo a ação desejada.</p>
     </div>
   );
 }
