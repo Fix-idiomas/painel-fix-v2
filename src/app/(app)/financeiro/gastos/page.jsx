@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
@@ -66,6 +66,7 @@ export default function GastosPage() {
   const [status, setStatus] = useState("all"); // all | pending | paid | canceled
   const [costCenter, setCostCenter] = useState("all"); // all | PJ | PF
   const [updatingId, setUpdatingId] = useState(null);
+  const [showAdvFilters, setShowAdvFilters] = useState(false); // toggle filtros avançados (mobile)
 
   const [rows, setRows] = useState([]);
   const [kpis, setKpis] = useState({ total: 0, paid: 0, pending: 0, overdue: 0 });
@@ -504,47 +505,80 @@ export default function GastosPage() {
   // ---------- Render ----------
   return (
     <main className="p-6 space-y-8">
-      {/* Header / Filtros */}
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-bold">Gastos</h1>
-
-        <input
-          type="month"
-          value={ym}
-          onChange={(e) => setYm(e.target.value.slice(0, 7))}
-          className="border rounded px-2 py-1"
-        />
-
-        <select
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-          className="border rounded px-2 py-1"
-        >
-          <option value="all">Todos</option>
-          <option value="pending">Pendentes</option>
-          <option value="paid">Pagos</option>
-          <option value="canceled">Cancelados</option>
-        </select>
-
-        <select
-          value={costCenter}
-          onChange={(e) => setCostCenter(e.target.value)}
-          className="border rounded px-2 py-1"
-        >
-          <option value="all">Todos os centros</option>
-          <option value="PJ">PJ (Empresa)</option>
-          <option value="PF">PF (Pessoal)</option>
-        </select>
-
+      {/* Barra de filtros (sticky) */}
+      <div className="sticky top-0 z-30 -mx-6 px-6 py-3 bg-white/95 backdrop-blur border-b flex flex-wrap items-end gap-3">
+        <h1 className="text-2xl font-bold mr-2">Gastos</h1>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="block text-[11px] uppercase tracking-wide text-slate-600 mb-1">Mês</label>
+            <input
+              type="month"
+              value={ym}
+              onChange={(e) => setYm(e.target.value.slice(0, 7))}
+              className="border rounded px-2 py-1 text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] uppercase tracking-wide text-slate-600 mb-1">Status</label>
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              className="border rounded px-2 py-1 text-sm"
+            >
+              <option value="all">Todos</option>
+              <option value="pending">Pendentes</option>
+              <option value="paid">Pagos</option>
+              <option value="canceled">Cancelados</option>
+            </select>
+          </div>
+          {/* Centro só em desktop */}
+          <div className="hidden sm:block">
+            <label className="block text-[11px] uppercase tracking-wide text-slate-600 mb-1">Centro</label>
+            <select
+              value={costCenter}
+              onChange={(e) => setCostCenter(e.target.value)}
+              className="border rounded px-2 py-1 text-sm"
+            >
+              <option value="all">Todos os centros</option>
+              <option value="PJ">PJ (Empresa)</option>
+              <option value="PF">PF (Pessoal)</option>
+            </select>
+          </div>
+          {/* Toggle filtros avançados mobile */}
+          <button
+            type="button"
+            onClick={() => setShowAdvFilters((v) => !v)}
+            className="sm:hidden inline-flex items-center gap-1 px-2 py-1 text-sm border rounded"
+          >
+            Filtros
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-4 h-4 transition-transform ${showAdvFilters ? 'rotate-180' : ''}`}>
+              <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+            </svg>
+          </button>
+        </div>
         {canWriteDB && (
-          <>
-            <button onClick={onPreview} className="border rounded px-3 py-2">
-              Prévia / Gerar
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={onPreview} className="border rounded px-3 py-2 text-sm hover:bg-slate-50">
+              Prévia
             </button>
-            <button onClick={openAvulsoModal} className="border rounded px-3 py-2">
+            <button onClick={openAvulsoModal} className="border rounded px-3 py-2 text-sm bg-slate-900 text-white hover:bg-black">
               + Avulso
             </button>
-          </>
+          </div>
+        )}
+        {showAdvFilters && (
+          <div className="w-full sm:hidden mt-3">
+            <label className="block text-[11px] uppercase tracking-wide text-slate-600 mb-1">Centro</label>
+            <select
+              value={costCenter}
+              onChange={(e) => setCostCenter(e.target.value)}
+              className="border rounded px-2 py-1 text-sm w-full"
+            >
+              <option value="all">Todos os centros</option>
+              <option value="PJ">PJ (Empresa)</option>
+              <option value="PF">PF (Pessoal)</option>
+            </select>
+          </div>
         )}
       </div>
 
@@ -590,34 +624,14 @@ export default function GastosPage() {
                     <Td className="hidden sm:table-cell">{statusLabels[r.status] || r.status}</Td>
                     <Td className="py-2">
                       {canWriteDB ? (
-                        <div className="flex gap-2">
-                          {r.status === "pending" ? (
-                            <>
-                              <button
-                                onClick={() => markPaid(r.id)}
-                                className="px-2 py-1 border rounded"
-                                disabled={updatingId === r.id}
-                              >
-                                Pago
-                              </button>
-                              <button
-                                onClick={() => cancel(r.id)}
-                                className="px-2 py-1 border rounded"
-                                disabled={updatingId === r.id}
-                              >
-                                Cancelar
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              onClick={() => reopen(r.id)}
-                              className="px-2 py-1 border rounded"
-                              disabled={updatingId === r.id}
-                            >
-                              Reabrir
-                            </button>
-                          )}
-                        </div>
+                        <RowActions
+                          entry={r}
+                          updatingId={updatingId}
+                          onPaid={(e) => markPaid(e.id)}
+                          onCancel={(e) => cancel(e.id)}
+                          onReopen={(e) => reopen(e.id)}
+                          onDelete={(e) => delEntry(e.id)}
+                        />
                       ) : (
                         <span className="text-xs text-slate-500">—</span>
                       )}
@@ -650,34 +664,16 @@ export default function GastosPage() {
                       <div className="text-sm font-mono tabular-nums font-semibold">{fmtBRL(r.amount)}</div>
                     </div>
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
+                  <div className="mt-2">
                     {canWriteDB ? (
-                      r.status === "pending" ? (
-                        <>
-                          <button
-                            onClick={() => markPaid(r.id)}
-                            className="px-2 py-1 border rounded"
-                            disabled={updatingId === r.id}
-                              >
-                                Pago
-                          </button>
-                          <button
-                            onClick={() => cancel(r.id)}
-                            className="px-2 py-1 border rounded"
-                            disabled={updatingId === r.id}
-                          >
-                            Cancelar
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          onClick={() => reopen(r.id)}
-                          className="px-2 py-1 border rounded"
-                          disabled={updatingId === r.id}
-                        >
-                          Reabrir
-                        </button>
-                      )
+                      <RowActions
+                        entry={r}
+                        updatingId={updatingId}
+                        onPaid={(e) => markPaid(e.id)}
+                        onCancel={(e) => cancel(e.id)}
+                        onReopen={(e) => reopen(e.id)}
+                        onDelete={(e) => delEntry(e.id)}
+                      />
                     ) : (
                       <span className="text-xs text-slate-500">—</span>
                     )}
@@ -1124,4 +1120,75 @@ function Th({ children, className = "" }) {
 }
 function Td({ children, className = "" }) {
   return <td className={`px-2 py-2 sm:px-3 sm:py-2 ${className}`}>{children}</td>;
+}
+
+function RowActions({ entry, updatingId, onPaid, onCancel, onReopen, onDelete }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    function onDocClick(e) {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target)) setOpen(false);
+    }
+    if (open) document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  const isPending = entry.status === 'pending';
+  const isBusy = updatingId === entry.id;
+
+  return (
+    <div className="relative inline-block text-left" ref={ref}>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-gray-300 hover:bg-gray-50"
+        onClick={() => setOpen((v) => !v)}
+      >
+        ⋯ Ações
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`}>
+          <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 w-36 origin-top-right rounded-md border bg-white shadow-lg z-30">
+          <div className="py-1 text-sm">
+            {isPending ? (
+              <>
+                <button
+                  disabled={isBusy}
+                  onClick={() => { setOpen(false); onPaid(entry); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Marcar pago
+                </button>
+                <button
+                  disabled={isBusy}
+                  onClick={() => { setOpen(false); onCancel(entry); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+              </>
+            ) : (
+              <button
+                disabled={isBusy}
+                onClick={() => { setOpen(false); onReopen(entry); }}
+                className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Reabrir
+              </button>
+            )}
+            <div className="my-1 border-t" />
+            <button
+              disabled={isBusy}
+              onClick={() => { setOpen(false); onDelete(entry); }}
+              className="w-full text-left px-3 py-1.5 text-red-700 hover:bg-red-50 disabled:opacity-50"
+            >
+              Excluir
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

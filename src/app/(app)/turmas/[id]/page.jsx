@@ -402,9 +402,9 @@ useEffect(() => {
     isProfessor && !effectiveTeacherId && (teachers?.length ?? 0) > 0;
 
   return (
-    <main className="p-6 space-y-8">
+    <main className="p-4 sm:p-6 space-y-8 overflow-x-hidden sm:overflow-x-visible">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
         <div>
           <h1 className="text-2xl font-bold">{turma.name}</h1>
 
@@ -415,7 +415,7 @@ useEffect(() => {
             </div>
           )}
 
-          <div className="text-slate-600 mt-2">
+          <div className="text-slate-600 mt-2 break-words">
             Professor: <b>{teacherName}</b> • Capacidade: <b>{turma.capacity}</b> • Alunos:{" "}
             <b>{members.length}</b>
             <br className="hidden sm:block" />
@@ -428,10 +428,10 @@ useEffect(() => {
           </div>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex gap-2 gap-y-2 flex-wrap sm:flex-nowrap sm:justify-end">
           <button
             onClick={() => router.push("/turmas")}
-            className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+            className="text-sm px-2 py-1.5 sm:px-3 sm:py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
           >
             Voltar
           </button>
@@ -440,7 +440,7 @@ useEffect(() => {
           {!isProfessor && (
             <button
               onClick={openEditTurma}
-              className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+              className="text-sm px-2 py-1.5 sm:px-3 sm:py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
             >
               Editar turma
             </button>
@@ -449,15 +449,23 @@ useEffect(() => {
           {/* Relatório liberado para todos (se quiser restringir, mova para !isProfessor) */}
           <Link
             href={`/relatorios/assiduidade?turma=${turma.id}&ym=${ym}`}
-            className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+            className="text-sm px-2 py-1.5 sm:px-3 sm:py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
           >
             Relatório
           </Link>
         </div>
       </div>
 
+      {/* Subnav sticky (anchors) */}
+      <div className="sticky top-0 z-20 bg-white/90 backdrop-blur border-b">
+        <div className="flex items-center gap-4 py-2 text-sm">
+          <a href="#alunos" className="px-2 py-1 rounded hover:bg-gray-100">Alunos</a>
+          <a href="#sessoes" className="px-2 py-1 rounded hover:bg-gray-100">Sessões</a>
+        </div>
+      </div>
+
       {/* Alunos (somente não-professor enxerga controles) */}
-      <section className="border rounded overflow-hidden">
+      <section id="alunos" className="border rounded overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:p-4 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
           <h2 className="font-semibold">Alunos da turma</h2>
 
@@ -488,40 +496,65 @@ useEffect(() => {
         {members.length === 0 ? (
           <div className="p-4">Nenhum aluno nesta turma.</div>
         ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <Th>Aluno</Th>
-                <Th>Status</Th>
-                {!isProfessor && <Th>Ações</Th>}
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            {/* Mobile cards */}
+            <div className="sm:hidden divide-y">
               {members.map((m) => (
-                <tr key={m.id} className="border-t">
-                  <Td>{m.name}</Td>
-                  <Td>{m.status}</Td>
+                <div key={m.id} className="p-3 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-medium">{m.name}</div>
+                    <div className="text-xs text-slate-600">{m.status}</div>
+                  </div>
                   {!isProfessor && (
-                    <Td className="py-2">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => onRemoveMember(m.id)}
-                          className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
-                        >
-                          Remover
-                        </button>
-                      </div>
-                    </Td>
+                    <button
+                      onClick={() => onRemoveMember(m.id)}
+                      className="px-2 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
+                    >
+                      Remover
+                    </button>
                   )}
-                </tr>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+
+            {/* Desktop table */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
+                  <tr>
+                    <Th>Aluno</Th>
+                    <Th>Status</Th>
+                    {!isProfessor && <Th>Ações</Th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {members.map((m) => (
+                    <tr key={m.id} className="border-t odd:bg-gray-50">
+                      <Td>{m.name}</Td>
+                      <Td>{m.status}</Td>
+                      {!isProfessor && (
+                        <Td className="py-2">
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => onRemoveMember(m.id)}
+                              className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        </Td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
 
       {/* Sessões */}
-      <section className="border rounded overflow-hidden">
+      <section id="sessoes" className="border rounded overflow-hidden">
         <div className="flex items-center justify-between p-3 sm:p-4 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
           <h2 className="font-semibold">Aulas / Sessões</h2>
           <button
@@ -535,41 +568,75 @@ useEffect(() => {
         {sessions.length === 0 ? (
           <div className="p-4">Nenhuma sessão cadastrada.</div>
         ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <Th>Data</Th>
-                <Th>Duração (h)</Th>
-                <Th>Resumo</Th>
-                <Th>Ações</Th>
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            {/* Mobile cards */}
+            <div className="sm:hidden divide-y">
               {sessions.map((s) => (
-                <tr key={s.id} className="border-t">
-                  <Td>{fmtBR(s.date)}</Td>
-                  <Td>{fmtNum(s.duration_hours)}</Td>
-                  <Td>{s.notes || "—"}</Td>
-                  <Td className="py-2">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => openEditSession(s)}
-                        className="px-3 py-1.5 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-                      >
-                        Abrir / Editar
-                      </button>
-                      <button
-                        onClick={() => onDeleteSess(s)}
-                        className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
-                      >
-                        Excluir
-                      </button>
-                    </div>
-                  </Td>
-                </tr>
+                <div key={s.id} className="p-3 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium">{fmtBR(s.date)}</div>
+                    <div className="text-xs text-slate-600">{fmtNum(s.duration_hours)} h</div>
+                  </div>
+                  <div className="text-sm text-slate-700">
+                    {s.notes || "—"}
+                  </div>
+                  <div className="pt-2 flex gap-2">
+                    <button
+                      onClick={() => openEditSession(s)}
+                      className="px-3 py-1.5 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+                    >
+                      Abrir / Editar
+                    </button>
+                    <button
+                      onClick={() => onDeleteSess(s)}
+                      className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
+                    >
+                      Excluir
+                    </button>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+
+            {/* Desktop table */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
+                  <tr>
+                    <Th>Data</Th>
+                    <Th>Duração (h)</Th>
+                    <Th>Resumo</Th>
+                    <Th>Ações</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sessions.map((s) => (
+                    <tr key={s.id} className="border-t odd:bg-gray-50">
+                      <Td>{fmtBR(s.date)}</Td>
+                      <Td>{fmtNum(s.duration_hours)}</Td>
+                      <Td>{s.notes || "—"}</Td>
+                      <Td className="py-2">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => openEditSession(s)}
+                            className="px-3 py-1.5 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+                          >
+                            Abrir / Editar
+                          </button>
+                          <button
+                            onClick={() => onDeleteSess(s)}
+                            className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
+                          >
+                            Excluir
+                          </button>
+                        </div>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
 

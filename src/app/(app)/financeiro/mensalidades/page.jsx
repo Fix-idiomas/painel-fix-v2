@@ -1,7 +1,7 @@
 // src/app/(app)/financeiro/mensalidades/page.jsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
 import { computeRevenueKPIs } from "@/lib/finance";
@@ -829,11 +829,11 @@ function BulkPayByPayer({ rows, ym, onDone }) {
             "focus:outline-none focus:ring-2 focus:ring-slate-300",
             "shadow-sm"
           ].join(" ")}
-          title="Quitar várias mensalidades de um mesmo pagador"
-          aria-label="Pagar +  de um aluno"
+          title="Registrar recebimento de vários boletos do mesmo pagador"
+          aria-label="+ Receber de um aluno"
         >
           <span className="i-lucide-users h-4 w-4" />
-          Pagar + de um aluno
+          + Receber de um aluno
           <span className={`i-lucide-chevron-down h-4 w-4 transition ${open ? "rotate-180" : ""}`} />
         </button>
       </div>
@@ -892,59 +892,54 @@ function BulkPayByPayer({ rows, ym, onDone }) {
   // ---------- Render ----------
   return (
     <main className="p-0 md:p-6 space-y-6">
-      {/* Cabeçalho neutro (remoção do bloco vermelho agressivo) */}
-      <header className="px-4 md:px-6 py-4 md:py-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-xl md:text-2xl font-bold">{title}</h1>
-            <label className="text-sm opacity-90">Mês:</label>
-            <input
-              type="month"
-              value={ym}
-              onChange={(e) => setYm(e.target.value.slice(0, 7))}
-              className="rounded border px-2 py-1 text-slate-700 bg-white"
-            />
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              className="rounded border px-2 py-1 text-slate-700 bg-white"
-            >
-              <option value="all">Todos</option>
-              <option value="pending">Pendentes</option>
-              <option value="paid">Pagos</option>
-              <option value="canceled">Cancelados</option>
-            </select>
+      {/* Barra de filtros sticky */}
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b px-4 md:px-6 py-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <h1 className="text-xl md:text-2xl font-bold mr-2">{title}</h1>
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="block text-[11px] uppercase tracking-wide text-slate-600 mb-1">Mês</label>
+              <input
+                type="month"
+                value={ym}
+                onChange={(e) => setYm(e.target.value.slice(0, 7))}
+                className="rounded border px-2 py-1 text-sm text-slate-700 bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] uppercase tracking-wide text-slate-600 mb-1">Status</label>
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                className="rounded border px-2 py-1 text-sm text-slate-700 bg-white"
+              >
+                <option value="all">Todos</option>
+                <option value="pending">Pendentes</option>
+                <option value="paid">Pagos</option>
+                <option value="canceled">Cancelados</option>
+              </select>
+            </div>
           </div>
-
-          <div className="flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2">
             {canPreview && (
               <button
                 onClick={openPreview}
-                className="rounded px-3 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50"
+                className="rounded px-3 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 text-sm"
               >
-                Prévia de geração
-              </button>
-            )}
-            {canGenerate && (
-              <button
-                onClick={doGenerate}
-                className="rounded px-3 py-2 bg-white text-slate-700 hover:bg-slate-50 border border-slate-300"
-                disabled={genLoading}
-              >
-                {genLoading ? "Gerando…" : "Gerar mensalidades"}
+                Prévia
               </button>
             )}
             <button
               onClick={openReminderPreview}
-              className="rounded px-3 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50"
+              className="rounded px-3 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 text-sm"
             >
-              Prévia de lembretes
+              Lembretes
             </button>
           </div>
         </div>
       </header>
 
-      {/* Botão/painel "Pagar + de um aluno" (somente write) */}
+  {/* Botão/painel "+ Receber de um aluno" (somente write) */}
       <BulkPayByPayer rows={rows} ym={ym} onDone={load} />
 
       
@@ -1004,21 +999,15 @@ function BulkPayByPayer({ rows, ym, onDone }) {
                       </span>
                     </div>
                     <div className="mt-2">
-                      {r.status === "pending" ? (
-                        canFinanceWrite ? (
-                          <div className="flex gap-2">
-                            <Btn onClick={() => markPaid(id)}>Pago</Btn>
-                            <Btn onClick={() => cancel(id)} variant="danger">Cancelar</Btn>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-slate-500">—</span>
-                        )
+                      {canFinanceWrite ? (
+                        <RowActions
+                          entry={{ id, status: r.status }}
+                          onPaid={(e) => markPaid(e.id)}
+                          onCancel={(e) => cancel(e.id)}
+                          onReopen={(e) => reopen(e.id)}
+                        />
                       ) : (
-                        canFinanceWrite ? (
-                          <Btn onClick={() => reopen(id)} variant="secondary">Reabrir</Btn>
-                        ) : (
-                          <span className="text-xs text-slate-500">—</span>
-                        )
+                        <span className="text-xs text-slate-500">—</span>
                       )}
                     </div>
                   </div>
@@ -1059,17 +1048,13 @@ function BulkPayByPayer({ rows, ym, onDone }) {
                         )}
                       </Td>
                       <Td>
-                        {r.status === "pending" ? (
-                          canFinanceWrite ? (
-                            <>
-                              <Btn onClick={() => markPaid(id)}>Pago</Btn>
-                              <Btn onClick={() => cancel(id)} variant="danger">Cancelar</Btn>
-                            </>
-                          ) : (
-                            <span className="text-xs text-slate-500">—</span>
-                          )
-                        ) : canFinanceWrite ? (
-                          <Btn onClick={() => reopen(id)} variant="secondary">Reabrir</Btn>
+                        {canFinanceWrite ? (
+                          <RowActions
+                            entry={{ id, status: r.status }}
+                            onPaid={(e) => markPaid(e.id)}
+                            onCancel={(e) => cancel(e.id)}
+                            onReopen={(e) => reopen(e.id)}
+                          />
                         ) : (
                           <span className="text-xs text-slate-500">—</span>
                         )}
@@ -1304,5 +1289,104 @@ function Btn({ children, onClick, variant = "primary" }) {
     <button className={`${base} ${styles}`} onClick={onClick}>
       {children}
     </button>
+  );
+}
+
+// Dropdown de ações por linha (Padronizado)
+function RowActions({ entry, onPaid, onCancel, onReopen }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    function onDocClick(e) {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target)) setOpen(false);
+    }
+    if (open) document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  const isPending = entry.status === 'pending';
+
+  return (
+    <>
+      <div className="relative inline-block text-left" ref={ref}>
+        <button
+          type="button"
+          onClick={() => setOpen(v => !v)}
+          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-50"
+        >
+          ⋯ Ações
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`}>
+            <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+          </svg>
+        </button>
+        {/* Dropdown para >= sm */}
+        {open && (
+          <div className="hidden sm:block absolute right-0 mt-1 w-40 origin-top-right rounded-md border bg-white shadow-lg z-40">
+            <div className="py-1 text-sm">
+              {isPending ? (
+                <>
+                  <button
+                    onClick={() => { setOpen(false); onPaid?.(entry); }}
+                    className="w-full text-left px-3 py-1.5 hover:bg-slate-50"
+                  >
+                    Marcar pago
+                  </button>
+                  <button
+                    onClick={() => { setOpen(false); onCancel?.(entry); }}
+                    className="w-full text-left px-3 py-1.5 hover:bg-slate-50"
+                  >
+                    Cancelar
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => { setOpen(false); onReopen?.(entry); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-slate-50"
+                >
+                  Reabrir
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+      {/* Overlay centralizado para mobile */}
+      {open && (
+        <div className="sm:hidden fixed inset-0 z-50 bg-black/40 flex items-center justify-center" onClick={() => setOpen(false)}>
+          <div className="w-[86vw] max-w-xs rounded-lg border bg-white shadow-lg overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-3 py-2 font-medium text-white/95 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)]">Ações</div>
+            <div className="py-1 text-sm">
+              {isPending ? (
+                <>
+                  <button
+                    onClick={() => { setOpen(false); onPaid?.(entry); }}
+                    className="w-full text-left px-4 py-2 hover:bg-slate-50"
+                  >
+                    Marcar pago
+                  </button>
+                  <button
+                    onClick={() => { setOpen(false); onCancel?.(entry); }}
+                    className="w-full text-left px-4 py-2 hover:bg-slate-50"
+                  >
+                    Cancelar
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => { setOpen(false); onReopen?.(entry); }}
+                  className="w-full text-left px-4 py-2 hover:bg-slate-50"
+                >
+                  Reabrir
+                </button>
+              )}
+            </div>
+            <div className="px-3 py-2 border-t text-right">
+              <button className="px-3 py-1.5 text-sm border rounded hover:bg-slate-50" onClick={() => setOpen(false)}>Fechar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
