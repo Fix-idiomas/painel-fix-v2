@@ -74,6 +74,7 @@ export default function GastosPage() {
 
   // Recorrentes
   const [templates, setTemplates] = useState([]);
+  const [tplSearch, setTplSearch] = useState("");
   const [categories, setCategories] = useState([]);
   const [openEditTpl, setOpenEditTpl] = useState(false);
   const [savingTpl, setSavingTpl] = useState(false);
@@ -158,6 +159,16 @@ export default function GastosPage() {
       .map((r) => r.t);
     return augmented;
   }, [templates, formTpl.title, tplId]);
+
+  // Filtro dos recorrentes (busca por título, categoria e centro)
+  const filteredTemplates = useMemo(() => {
+    const q = normalizeTitle(tplSearch);
+    if (!q) return templates;
+    return (templates || []).filter((t) => {
+      const hay = [t.title, t.category, t.cost_center].map((v) => normalizeTitle(v || ""));
+      return hay.some((h) => h.includes(q));
+    });
+  }, [templates, tplSearch]);
 
   // Avulso
   const [openAvulso, setOpenAvulso] = useState(false);
@@ -688,16 +699,32 @@ export default function GastosPage() {
       {/* Recorrentes (somente se canWriteDB === true) */}
       {canWriteDB && (
         <section className="border rounded-xl overflow-hidden shadow-sm">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">
-            <span>Despesas recorrentes</span>
-            <button onClick={openCreateTpl} className="border rounded px-3 py-1.5 bg-white/10 hover:bg-white/20 text-sm transition-colors">
-              + Nova recorrente
-            </button>
+          <div className="px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 drop-shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold whitespace-nowrap">Despesas recorrentes</span>
+                  <span className="text-xs opacity-90">{filteredTemplates.length}{templates?.length ? ` / ${templates.length}` : ""}</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <input
+                  value={tplSearch}
+                  onChange={(e) => setTplSearch(e.target.value)}
+                  placeholder="Buscar recorrentes (título, categoria, centro)"
+                  className="flex-1 sm:w-80 px-3 py-1.5 rounded border border-white/30 bg-white/90 text-slate-900 placeholder-slate-500 focus:outline-none"
+                  aria-label="Buscar recorrentes"
+                />
+                <button onClick={openCreateTpl} className="border rounded px-3 py-1.5 bg-white/10 hover:bg-white/20 text-sm transition-colors whitespace-nowrap">
+                  + Nova recorrente
+                </button>
+              </div>
+            </div>
           </div>
-          {templates.length === 0 ? (
+          {(templates?.length || 0) === 0 ? (
             <div className="p-4">Nenhuma recorrente cadastrada.</div>
           ) : (
-            <div className="max-h-96 w-full">
+            <div className="max-h-[60vh] w-full overflow-auto">
               {/* Tabela (>= sm) */}
               <div className="hidden sm:block overflow-x-auto">
                 <table className="min-w-[800px] w-full text-xs sm:text-sm">
@@ -714,7 +741,7 @@ export default function GastosPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {templates.map((t) => (
+                  {filteredTemplates.map((t) => (
                     <tr key={t.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
                       <Td className="truncate max-w-[240px] sm:max-w-none">{t.title}</Td>
                       <Td className="hidden sm:table-cell">{t.category || "-"}</Td>
@@ -743,8 +770,8 @@ export default function GastosPage() {
                 </table>
               </div>
               {/* Cards (xs) */}
-              <div className="sm:hidden divide-y overflow-auto max-h-96">
-                {templates.map((t) => (
+              <div className="sm:hidden divide-y">
+                {filteredTemplates.map((t) => (
                   <div key={t.id} className="p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
