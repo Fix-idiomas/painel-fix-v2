@@ -49,6 +49,10 @@ export default function TurmasPage() {
   const [teachers, setTeachers] = useState([]);
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
+  // filtros locais
+  const [q, setQ] = useState("");
+  // Começa em "- Selecione -" para todos os perfis
+  const [teacherFilter, setTeacherFilter] = useState("none");
 
   // seleção para gerenciar membros
   const [selectedTurma, setSelectedTurma] = useState(null);
@@ -121,6 +125,8 @@ export default function TurmasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
+  // Sem sincronismo adicional: o default é sempre "none" para todos
+
 
 
   // Tenta obter um teacherId/Name efetivo para professor
@@ -152,6 +158,21 @@ export default function TurmasPage() {
       teacherMatchesTurma(t, effectiveTeacherId, effectiveTeacherName)
     );
   }, [turmas, isProfessor, effectiveTeacherId, effectiveTeacherName]);
+
+  // Filtro por nome/professor (apenas client-side, não altera RBAC)
+  const filteredTurmas = useMemo(() => {
+    const term = (q || "").trim().toLowerCase();
+    const teacherIdSel = String(teacherFilter || "all");
+    // Quando o seletor estiver em "- Selecione -", não mostrar nenhuma turma
+    if (teacherIdSel === "none") return [];
+
+    return visibleTurmas.filter((t) => {
+      const nameOk = !term || String(t.name || "").toLowerCase().includes(term);
+      const teacherOk =
+        teacherIdSel === "all" || String(t.teacher_id || "") === teacherIdSel;
+      return nameOk && teacherOk;
+    });
+  }, [visibleTurmas, q, teacherFilter]);
 
   async function openManageMembers(t) {
     // 🔒 professor não pode gerenciar alunos
@@ -294,16 +315,47 @@ export default function TurmasPage() {
         )}
       </div>
 
+      {/* Filtros */}
+      <div className="sticky top-0 z-10 -mx-6 px-6 bg-white/90 backdrop-blur border-b py-3">
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+          <div className="flex-1">
+            <label className="block text-xs text-slate-600 mb-1">Buscar por nome da turma</label>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Ex.: Inglês Kids, T1, Aline..."
+              className="border rounded px-3 py-2 w-full"
+            />
+          </div>
+          <div className="w-full sm:w-72">
+            <label className="block text-xs text-slate-600 mb-1">Professor</label>
+            <select
+              value={teacherFilter}
+              onChange={(e) => setTeacherFilter(e.target.value)}
+              className="border rounded px-3 py-2 w-full bg-white"
+            >
+              <option value="none"> - Selecione -</option>
+              <option value="all">Todos</option>
+              {teachers.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
       <section className="border rounded">
         {loading ? (
           <div className="p-4">Carregando…</div>
-        ) : visibleTurmas.length === 0 ? (
-          <div className="p-4">Nenhuma turma encontrada.</div>
+        ) : filteredTurmas.length === 0 ? (
+          <div className="p-4 text-sm text-slate-600">
+            {teacherFilter === "none" ? "Busque suas turmas no seletor acima." : "Nenhuma turma encontrada."}
+          </div>
         ) : (
           <>
             {/* Mobile cards */}
             <div className="sm:hidden divide-y">
-              {visibleTurmas.map((t) => (
+              {filteredTurmas.map((t) => (
                 <div key={t.id} className="p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -368,7 +420,7 @@ export default function TurmasPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleTurmas.map((t) => (
+                  {filteredTurmas.map((t) => (
                     <tr key={t.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-100 transition-colors">
                       <Td>
                         <Link href={`/turmas/${t.id}`} className="underline hover:no-underline">
