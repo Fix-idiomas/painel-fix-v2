@@ -1,6 +1,7 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams, useRouter } from "next/navigation";
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
@@ -399,109 +400,152 @@ function OtherRevenuesPage() {
             <option value="PF">PF</option>
           </select>
         </div>
-        <button
-          onClick={() => exportCSV(sorted, ym, status, costCenter)}
-          className="border rounded px-3 py-2"
-        >
-          Exportar CSV
-        </button>
         <div className="flex-1" />
-        <button
-          onClick={() => setOpenNew(true)}
-          className="rounded bg-black text-white px-4 py-2"
-        >
-          Nova receita
-        </button>
-        <button
-          onClick={async () => {
-            const confirmGen = confirm("Gerar automaticamente receitas recorrentes (templates) para este mês?");
-            if (!confirmGen) return;
-            try {
-              await financeGateway.ensureOtherRevenuesForMonth(ym);
-              await load();
-              alert("Geração automática concluída.");
-            } catch (e) {
-              alert(e.message);
-            }
-          }}
-          className="rounded border px-4 py-2"
-        >
-          Gerar mês (templates)
-        </button>
+        <div className="ml-auto flex items-center gap-2 flex-wrap sm:flex-nowrap">
+          <button
+            onClick={() => exportCSV(sorted, ym, status, costCenter)}
+            className="border rounded px-3 py-2 text-sm hover:bg-slate-50"
+          >
+            Exportar CSV
+          </button>
+          <button
+            onClick={() => setOpenNew(true)}
+            className="border rounded px-3 py-2 text-sm bg-slate-900 text-white hover:bg-black"
+          >
+            Nova receita
+          </button>
+          <button
+            onClick={async () => {
+              const confirmGen = confirm("Gerar automaticamente receitas recorrentes (templates) para este mês?");
+              if (!confirmGen) return;
+              try {
+                await financeGateway.ensureOtherRevenuesForMonth(ym);
+                await load();
+                alert("Geração automática concluída.");
+              } catch (e) {
+                alert(e.message);
+              }
+            }}
+            className="border rounded px-3 py-2 text-sm hover:bg-slate-50"
+          >
+            Gerar mês (templates)
+          </button>
+        </div>
       </div>
 
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Kpi title="Total" value={fmtBRL(kpis.total)} />
-        <Kpi title="Pagas" value={fmtBRL(kpis.paid)} />
-        <Kpi title="Pendentes" value={fmtBRL(kpis.pending)} />
-        <Kpi title="Atrasadas" value={fmtBRL(kpis.overdue)} />
+        <Kpi title="Total" value={fmtBRL(kpis.total)} tone="neutral" />
+        <Kpi title="Pagas" value={fmtBRL(kpis.paid)} tone="success" />
+        <Kpi title="Pendentes" value={fmtBRL(kpis.pending)} tone="warning" />
+        <Kpi title="Atrasadas" value={fmtBRL(kpis.overdue)} tone="danger" />
       </div>
 
-      {/* Tabela */}
+      {/* Tabela + Cards (como Gastos) */}
       {loading ? (
         <div className="p-4">Carregando…</div>
       ) : sorted.length === 0 ? (
         <div className="p-4 border rounded">Sem receitas para este filtro.</div>
       ) : (
-        <div className="border rounded overflow-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <Th>Título</Th>
-                <Th>Categoria</Th>
-                <Th>Centro</Th>
-                <Th>Competência</Th>
-                <Th>Vencimento</Th>
-                <Th>Parcela</Th>
-                <Th className="text-right">Valor</Th>
-                <Th>Status</Th>
-                <Th>Ações</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((r) => (
-                <tr key={r.id} className="border-t">
-                  <Td className="max-w-[260px] truncate" title={r.title}>
-                    {r.title}
-                    {(() => { const p = getParcelInfo(r); return p.total > 1; })() && (
-                      <span
-                        className="ml-2 align-middle text-[10px] px-1.5 py-0.5 rounded border bg-slate-50 text-slate-600"
-                        title={(function(){ const p=getParcelInfo(r); return `Série de ${p.total} parcelas — esta é a ${p.index}`; })()}
-                      >
-                        Série
-                      </span>
-                    )}
-                  </Td>
-                  <Td>{r.category || "—"}</Td>
-                  <Td>{r.cost_center || "—"}</Td>
-                  <Td>{fmtBRDate(r.competence_month)}</Td>
-                  <Td>{fmtBRDate(r.due_date)}</Td>
-                  <Td className="whitespace-nowrap">
-                    {(() => { const p = getParcelInfo(r); return p.total > 0 ? `${p.index}/${p.total}` : "—"; })()}
-                  </Td>
-                  <Td className="text-right">{fmtBRL(r.amount)}</Td>
-                  <Td className="whitespace-nowrap">
-                    <Badge status={r.status} />
-                    {r.status === "pending" && r.days_overdue > 0 && (
-                      <span className="ml-2 text-red-600 text-xs">({r.days_overdue}d)</span>
-                    )}
-                  </Td>
-                  <Td>
-                    <RowActions
-                      row={r}
-                      onPaid={onMarkPaid}
-                      onCancel={onCancel}
-                      onCancelSeries={onCancelSeries}
-                      onReopen={onReopen}
-                      canWrite={canFinanceWrite}
-                      onEdit={() => openEditModal(r)}
-                    />
-                  </Td>
+        <div className="w-full">
+          {/* Tabela (>= sm) */}
+          <div className="hidden sm:block overflow-x-auto border rounded">
+            <table className="min-w-[900px] w-full text-xs sm:text-sm">
+              <thead className="sticky top-0 z-10 bg-white/90 border-b">
+                <tr>
+                  <Th>Título</Th>
+                  <Th>Categoria</Th>
+                  <Th>Centro</Th>
+                  <Th>Competência</Th>
+                  <Th>Vencimento</Th>
+                  <Th>Parcela</Th>
+                  <Th className="text-right">Valor</Th>
+                  <Th>Status</Th>
+                  <Th>Ações</Th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {sorted.map((r) => (
+                  <tr key={r.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
+                    <Td className="max-w-[260px] truncate" title={r.title}>
+                      {r.title}
+                      {(() => { const p = getParcelInfo(r); return p.total > 1; })() && (
+                        <span
+                          className="ml-2 align-middle text-[10px] px-1.5 py-0.5 rounded border bg-slate-50 text-slate-600"
+                          title={(function(){ const p=getParcelInfo(r); return `Série de ${p.total} parcelas — esta é a ${p.index}`; })()}
+                        >
+                          Série
+                        </span>
+                      )}
+                    </Td>
+                    <Td>{r.category || "—"}</Td>
+                    <Td>{r.cost_center || "—"}</Td>
+                    <Td>{fmtBRDate(r.competence_month)}</Td>
+                    <Td>{fmtBRDate(r.due_date)}</Td>
+                    <Td className="whitespace-nowrap">
+                      {(() => { const p = getParcelInfo(r); return p.total > 0 ? `${p.index}/${p.total}` : "—"; })()}
+                    </Td>
+                    <Td className="text-right">{fmtBRL(r.amount)}</Td>
+                    <Td className="whitespace-nowrap">
+                      <Badge status={r.status} />
+                      {r.status === "pending" && r.days_overdue > 0 && (
+                        <span className="ml-2 text-red-600 text-xs">({r.days_overdue}d)</span>
+                      )}
+                    </Td>
+                    <Td>
+                      <RowActions
+                        row={r}
+                        onPaid={onMarkPaid}
+                        onCancel={onCancel}
+                        onCancelSeries={onCancelSeries}
+                        onReopen={onReopen}
+                        canWrite={canFinanceWrite}
+                        onEdit={() => openEditModal(r)}
+                      />
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Cards (xs) */}
+          <div className="sm:hidden divide-y border rounded">
+            {sorted.map((r) => (
+              <div key={r.id} className="p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-medium text-slate-900 truncate" title={r.title}>{r.title}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      <span className="whitespace-nowrap">{fmtBRDate(r.due_date)}</span>
+                      {r.category && <span className="truncate max-w-[140px]">{r.category}</span>}
+                      {r.cost_center && (
+                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">{r.cost_center}</span>
+                      )}
+                      {(() => { const p = getParcelInfo(r); return p.total > 0 ? (
+                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 whitespace-nowrap">{`${p.index}/${p.total}`}</span>
+                      ) : null; })()}
+                      <Badge status={r.status} />
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs font-mono tabular-nums font-semibold">{fmtBRL(r.amount)}</div>
+                  </div>
+                </div>
+                <div className="mt-2">
+                  <RowActions
+                    row={r}
+                    onPaid={onMarkPaid}
+                    onCancel={onCancel}
+                    onCancelSeries={onCancelSeries}
+                    onReopen={onReopen}
+                    canWrite={canFinanceWrite}
+                    onEdit={() => openEditModal(r)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -818,11 +862,18 @@ function OtherRevenuesPage() {
 }
 
 // ---------- subcomponentes ----------
-function Kpi({ title, value }) {
+function Kpi({ title, value, tone = "neutral" }) {
+  const accent = {
+    danger: "bg-rose-600",
+    warning: "bg-amber-500",
+    success: "bg-green-600",
+    neutral: "bg-slate-300",
+  }[tone] || "bg-slate-300";
   return (
-    <div className="rounded border p-4">
-      <div className="text-xs text-slate-600">{title}</div>
-      <div className="text-xl font-semibold">{value}</div>
+    <div className="rounded-lg border border-slate-200 bg-white shadow-sm p-4 overflow-hidden">
+      <div className={`h-1 mx-4 ${accent} rounded-full mb-3`}></div>
+      <div className="text-[11px] uppercase tracking-wide text-slate-600">{title}</div>
+      <div className="text-base sm:text-xl font-semibold text-slate-900">{value}</div>
     </div>
   );
 }
@@ -863,80 +914,138 @@ function Badge({ status }) {
   );
 }
 function RowActions({ row, onPaid, onCancel, onReopen, onEdit, canWrite = true }) {
-  function isSeries(row) {
-    const idx = Number(row?.installment_index || 0);
-    const tot = Number(row?.installments_total || 0);
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
+  const [pos, setPos] = useState(null);
+
+  useEffect(() => {
+    function onDocClick(e) {
+      const target = e.target;
+      if (btnRef.current && btnRef.current.contains(target)) return;
+      if (menuRef.current && menuRef.current.contains(target)) return;
+      setOpen(false);
+    }
+    function onEsc(e) { if (e.key === 'Escape') setOpen(false); }
+    function update() {
+      if (!btnRef.current) return;
+      const rect = btnRef.current.getBoundingClientRect();
+      const estWidth = 180; // approximate menu width
+      const padding = 8;
+      const left = Math.min(Math.max(padding, rect.right - estWidth), window.innerWidth - estWidth - padding);
+      const top = rect.bottom + 4;
+      setPos({ top, left });
+    }
+    if (open) {
+      update();
+      document.addEventListener('mousedown', onDocClick);
+      window.addEventListener('resize', update);
+      window.addEventListener('scroll', update, true);
+      document.addEventListener('keydown', onEsc);
+      return () => {
+        document.removeEventListener('mousedown', onDocClick);
+        window.removeEventListener('resize', update);
+        window.removeEventListener('scroll', update, true);
+        document.removeEventListener('keydown', onEsc);
+      };
+    }
+  }, [open]);
+
+  function isSeries(r) {
+    const idx = Number(r?.installment_index || 0);
+    const tot = Number(r?.installments_total || 0);
     if (idx > 0 && tot > 1) return true;
-    const m = String(row?.title || "").match(/\((\d+)\s*\/\s*(\d+)\)\s*$/);
+    const m = String(r?.title || "").match(/\((\d+)\s*\/\s*(\d+)\)\s*$/);
     return !!(m && Number(m[2]) > 1);
   }
+
+  if (!canWrite) return <span className="text-xs text-slate-500">—</span>;
+
   return (
-    <div className="flex gap-2">
-      {canWrite && row.status !== "paid" && row.status !== "canceled" && (
-        <button
-          onClick={() => onPaid(row.id)}
-          className="text-xs rounded border px-2 py-1"
-          title="Marcar como pago"
-        >
-          Pagar
-        </button>
-      )}
+    <div className="inline-block text-left">
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-gray-300 hover:bg-gray-50"
+        onClick={() => setOpen((v) => !v)}
+        ref={btnRef}
+      >
+        ⋯ Ações
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`}>
+          <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
+        </svg>
+      </button>
+      {open && pos && createPortal(
+        <div ref={menuRef} style={{ position: 'fixed', top: pos.top, left: pos.left }} className="w-40 origin-top-right rounded-md border bg-white shadow-lg z-50">
+          <div className="py-1 text-sm">
+            {row.status !== 'paid' && row.status !== 'canceled' && (
+              <button
+                onClick={() => { setOpen(false); onPaid(row.id); }}
+                className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
+              >
+                Marcar pago
+              </button>
+            )}
 
-      {canWrite && row.status !== "canceled" && (
-        <button
-          onClick={() => {
-            if (isSeries(row)) {
-              // usa modal estilizado
-              const ev = new CustomEvent("open-cancel-modal", { detail: row });
-              window.dispatchEvent(ev);
-            } else {
-              onCancel(row.id);
-            }
-          }}
-          className="text-xs rounded border px-2 py-1"
-          title="Cancelar"
-        >
-          Cancelar
-        </button>
-      )}
-      {canWrite && (
-        <button
-          onClick={() => {
-            if (isSeries(row)) {
-              const confirmSeries = confirm("Excluir FUTURAS parcelas pendentes desta série? Pagas anteriores permanecem.");
-              if (!confirmSeries) return;
-              financeGateway.deleteOtherRevenueSeriesFrom(row.id)
-                .then(() => window.dispatchEvent(new Event("reload-other-revenues")))
-                .catch((e) => alert(e.message));
-            } else {
-              if (!confirm("Excluir definitivamente esta receita?")) return;
-              financeGateway.deleteOtherRevenue(row.id)
-                .then(() => window.dispatchEvent(new Event("reload-other-revenues")))
-                .catch((e) => alert(e.message));
-            }
-          }}
-          className="text-xs rounded border px-2 py-1 text-rose-700 border-rose-300"
-          title="Excluir permanentemente"
-        >
-          Excluir
-        </button>
-      )}
+            {row.status !== 'canceled' && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  if (isSeries(row)) {
+                    const ev = new CustomEvent('open-cancel-modal', { detail: row });
+                    window.dispatchEvent(ev);
+                  } else {
+                    onCancel(row.id);
+                  }
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+            )}
 
-      {canWrite && row.status !== "pending" && (
-        <button
-          onClick={() => onReopen(row.id)}
-          className="text-xs rounded border px-2 py-1"
-          title="Reabrir"
-        >
-          Reabrir
-        </button>
-      )}
+            {row.status !== 'pending' && (
+              <button
+                onClick={() => { setOpen(false); onReopen(row.id); }}
+                className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
+              >
+                Reabrir
+              </button>
+            )}
 
-      {canWrite && (
-        <button onClick={onEdit} className="text-xs rounded border px-2 py-1" title="Editar">
-          Editar
-        </button>
-      )}
+            <div className="my-1 border-t" />
+
+            <button
+              onClick={async () => {
+                setOpen(false);
+                try {
+                  if (isSeries(row)) {
+                    const confirmSeries = confirm('Excluir FUTURAS parcelas pendentes desta série? Pagas anteriores permanecem.');
+                    if (!confirmSeries) return;
+                    await financeGateway.deleteOtherRevenueSeriesFrom(row.id);
+                  } else {
+                    const confirmOne = confirm('Excluir definitivamente esta receita?');
+                    if (!confirmOne) return;
+                    await financeGateway.deleteOtherRevenue(row.id);
+                  }
+                  window.dispatchEvent(new Event('reload-other-revenues'));
+                } catch (e) {
+                  alert(e.message);
+                }
+              }}
+              className="w-full text-left px-3 py-1.5 text-red-700 hover:bg-red-50"
+            >
+              Excluir
+            </button>
+
+            <button
+              onClick={() => { setOpen(false); onEdit(); }}
+              className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
+            >
+              Editar
+            </button>
+          </div>
+        </div>, document.body)
+      }
     </div>
   );
 }

@@ -384,17 +384,17 @@ export default function Page() {
     <main className="p-6 space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <h1 className="text-2xl font-bold">Início</h1>
-          <label className="text-sm text-slate-600">Mês:</label>
+          <label className="text-sm text-slate-600 whitespace-nowrap">Mês:</label>
           <input
             type="month"
             value={ym}
             onChange={(e) => setYm(e.target.value.slice(0, 7))}
-            className="rounded-lg border px-3 py-2 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-600 focus:border-gray-600"
+            className="rounded-lg border px-3 py-2 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-600 focus:border-gray-600 w-[170px] sm:w-auto"
           />
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
           <select
             value={panelGroup}
             onChange={(e) => setPanelGroup(e.target.value)}

@@ -69,6 +69,9 @@ function WeekGrid({ days, events, onOpen }) {
 
   return (
     <div className="border rounded-lg bg-white overflow-hidden">
+      {/* Scroller horizontal para mobile */}
+      <div className="w-full overflow-x-auto">
+        <div className="min-w-[720px]">
       {/* Cabeçalho (datas + dia da semana) */}
       <div
         className="grid border-b"
@@ -187,6 +190,8 @@ function WeekGrid({ days, events, onOpen }) {
               </div>
             );
           })}
+        </div>
+      </div>
         </div>
       </div>
     </div>

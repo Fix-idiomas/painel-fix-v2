@@ -334,27 +334,27 @@ if (error) {
 return (
   <div className="p-4 space-y-4">
     {/* Toolbar topo — conforme combinado */}
-    <div className="flex flex-wrap items-center justify-between gap-4">
+    <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4">
       <h1 className="text-2xl font-bold tracking-tight">Agenda</h1>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-2">
         {/* Semana anterior / próxima */}
         <button
           onClick={goPrevWeek}
-          className="px-3 py-1.5 border rounded-md shadow-sm bg-white hover:bg-slate-50 disabled:opacity-50"
+          className="px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm border rounded-md shadow-sm bg-white hover:bg-slate-50 disabled:opacity-50"
           disabled={!!selectedDay}
           aria-label="Semana anterior"
         >
           ◀
         </button>
 
-        <span className="text-sm text-slate-600 w-[200px] text-center">
+        <span className="text-xs sm:text-sm text-slate-600 w-[140px] sm:w-[220px] text-center">
           {selectedDay ? `Dia ${selectedDay}` : weekLabel}
         </span>
 
         <button
           onClick={goNextWeek}
-          className="px-3 py-1.5 border rounded-md shadow-sm bg-white hover:bg-slate-50 disabled:opacity-50"
+          className="px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm border rounded-md shadow-sm bg-white hover:bg-slate-50 disabled:opacity-50"
           disabled={!!selectedDay}
           aria-label="Próxima semana"
         >
@@ -364,22 +364,22 @@ return (
         {/* Hoje */}
         <button
           onClick={goThisWeek}
-          className="px-3 py-1.5 border rounded-md shadow-sm bg-white hover:bg-slate-50 ml-2"
+          className="px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm border rounded-md shadow-sm bg-white hover:bg-slate-50 ml-0 sm:ml-2"
         >
           Hoje
         </button>
 
         {/* Toggle Semana/Dia (pílulas) */}
-        <div className="ml-2 inline-flex border rounded-lg overflow-hidden shadow-sm">
+        <div className="ml-0 sm:ml-2 inline-flex border rounded-lg overflow-hidden shadow-sm">
           <button
             onClick={() => setSelectedDay(null)}
-            className={`px-3 py-1.5 text-sm ${!selectedDay ? "bg-slate-900 text-white" : "bg-white"}`}
+            className={`px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm ${!selectedDay ? "bg-slate-900 text-white" : "bg-white"}`}
           >
             Semana
           </button>
           <button
             onClick={() => setSelectedDay(todayISO())}
-            className={`px-3 py-1.5 text-sm ${selectedDay ? "bg-slate-900 text-white" : "bg-white"}`}
+            className={`px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm ${selectedDay ? "bg-slate-900 text-white" : "bg-white"}`}
           >
             Dia
           </button>

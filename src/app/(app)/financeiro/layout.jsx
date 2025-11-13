@@ -18,7 +18,7 @@ export default function FinanceiroLayout({ children }) {
       {/* Subnav Financeiro */}
       <div className="sticky top-0 z-10 border-b bg-white">
         <div className="mx-auto w-full max-w-6xl px-4">
-          <nav className="flex gap-2 py-3">
+          <nav className="grid grid-cols-2 gap-2 py-3 sm:flex sm:flex-nowrap">
             {items.map((it) => {
               const active = pathname.startsWith(it.href);
               return (
@@ -26,7 +26,7 @@ export default function FinanceiroLayout({ children }) {
                   key={it.href}
                   href={it.href}
                   className={[
-                    "rounded px-3 py-1.5 text-sm border",
+                    "rounded px-3 py-1.5 text-xs sm:text-sm border w-full sm:w-auto text-center sm:text-left whitespace-normal sm:whitespace-nowrap",
                     active
                       ? "bg-black text-white border-black"
                       : "bg-white text-slate-700 hover:bg-slate-50",

@@ -568,12 +568,15 @@ export default function GastosPage() {
           </button>
         </div>
         {canWriteDB && (
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2 flex-wrap sm:flex-nowrap">
             <button onClick={onPreview} className="border rounded px-3 py-2 text-sm hover:bg-slate-50">
               Prévia
             </button>
             <button onClick={openAvulsoModal} className="border rounded px-3 py-2 text-sm bg-slate-900 text-white hover:bg-black">
               + Avulso
+            </button>
+            <button onClick={openCreateTpl} className="border rounded px-3 py-2 text-sm bg-slate-900 text-white hover:bg-black">
+              + Nova recorrente
             </button>
           </div>
         )}
@@ -594,7 +597,7 @@ export default function GastosPage() {
       </div>
 
       {/* KPIs */}
-      <section className="grid sm:grid-cols-4 gap-3">
+      <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard title="Total do mês" value={fmtBRL(kpis.total)} tone="neutral" />
         <KpiCard title="Pagos" value={fmtBRL(kpis.paid)} tone="success" />
         <KpiCard title="Pendentes" value={fmtBRL(kpis.pending)} tone="warning" />
@@ -602,7 +605,7 @@ export default function GastosPage() {
       </section>
 
       {/* Lançamentos do mês */}
-      <section className="border rounded-xl overflow-hidden shadow-sm">
+      <section className="border rounded-xl shadow-sm">
         <div className="px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">Lançamentos do mês</div>
         {loading ? (
           <div className="p-4">Carregando…</div>
@@ -698,7 +701,7 @@ export default function GastosPage() {
 
       {/* Recorrentes (somente se canWriteDB === true) */}
       {canWriteDB && (
-        <section className="border rounded-xl overflow-hidden shadow-sm">
+        <section className="border rounded-xl shadow-sm">
           <div className="px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 drop-shadow-sm">
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
               <div className="flex-1 min-w-0">
@@ -707,17 +710,14 @@ export default function GastosPage() {
                   <span className="text-xs opacity-90">{filteredTemplates.length}{templates?.length ? ` / ${templates.length}` : ""}</span>
                 </div>
               </div>
-              <div className="flex items-center gap-2 w-full sm:w-auto">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
                 <input
                   value={tplSearch}
                   onChange={(e) => setTplSearch(e.target.value)}
                   placeholder="Buscar recorrentes (título, categoria, centro)"
-                  className="flex-1 sm:w-80 px-3 py-1.5 rounded border border-white/30 bg-white/90 text-slate-900 placeholder-slate-500 focus:outline-none"
+                  className="w-full sm:w-80 px-3 py-1.5 rounded border border-white/30 bg-white/90 text-slate-900 placeholder-slate-500 focus:outline-none"
                   aria-label="Buscar recorrentes"
                 />
-                <button onClick={openCreateTpl} className="border rounded px-3 py-1.5 bg-white/10 hover:bg-white/20 text-sm transition-colors whitespace-nowrap">
-                  + Nova recorrente
-                </button>
               </div>
             </div>
           </div>
@@ -1127,9 +1127,9 @@ function KpiCard({ title, value, tone = "neutral" }) {
   }[tone] || "bg-slate-300";
   return (
     <div className="rounded-lg border border-slate-200 bg-white shadow-sm p-4 overflow-hidden">
-      <div className={`h-1 w-full ${accent} rounded-t-md -mt-1 mb-3`}></div>
-      <div className="text-[11px] uppercase tracking-wide text-slate-500">{title}</div>
-      <div className="text-2xl font-semibold text-slate-900">{value}</div>
+      <div className={`h-1 mx-4 ${accent} rounded-full mb-3`}></div>
+      <div className="text-[11px] uppercase tracking-wide text-slate-600">{title}</div>
+      <div className="text-base sm:text-xl font-semibold text-slate-900">{value}</div>
     </div>
   );
 }

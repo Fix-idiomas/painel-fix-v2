@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { financeGateway, ADAPTER_NAME } from "@/lib/financeGateway";
+import { useRouter } from "next/navigation";
+import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
 import Link from "next/link";
 
@@ -19,6 +20,7 @@ const fmtYmdBR = (s) => {
 const PAYER_MODE = { SELF: "self", EXISTING: "existing", NEW: "new" };
 
 export default function AlunosPage() {
+  const router = useRouter();
   const [list, setList] = useState([]);
   const [payers, setPayers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -62,6 +64,9 @@ export default function AlunosPage() {
   const [payerModeEdit, setPayerModeEdit] = useState(PAYER_MODE.SELF);
   const [payerIdEdit, setPayerIdEdit] = useState("");
   const [newPayerEdit, setNewPayerEdit] = useState({ name: "", email: "" });
+
+  // menu de ações (mobile)
+  const [actionFor, setActionFor] = useState(null); // objeto aluno ou null
 
   async function load() {
     setLoading(true);
@@ -283,32 +288,28 @@ export default function AlunosPage() {
   }
 
   return (
-    <main className="p-6 space-y-6">
+    <main className="p-6 space-y-6 max-w-6xl mx-auto">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="text-xs text-slate-500">
-          Adapter: <b>{ADAPTER_NAME}</b>
-        </div>
-
         {/* 🔎 Campo de busca */}
-        <div className="flex items-center gap-2 ml-auto">
+        <div className="flex flex-wrap items-center gap-2 ml-auto w-full sm:w-auto">
           <input
             type="text"
             placeholder="Buscar por nome ou CPF…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="border rounded px-3 py-2 w-72"
+            className="border rounded px-2 py-1.5 text-sm w-full sm:w-80"
           />
-          <button onClick={() => setQuery("")} className="border rounded px-3 py-2">
+          <button onClick={() => setQuery("")} className="border rounded px-2 py-1.5 text-xs sm:text-sm">
             Limpar
           </button>
-          <button onClick={() => setOpenCreate(true)} className="border rounded px-3 py-2">
+          <button onClick={() => setOpenCreate(true)} className="rounded px-2 py-1.5 text-xs sm:text-sm bg-black text-white">
             + Cadastrar aluno
           </button>
         </div>
       </div>
 
-      {/* Tabela */}
-      <section className="border rounded overflow-auto">
+      {/* Lista responsiva */}
+      <section>
         {loading ? (
           <div className="p-4">Carregando…</div>
         ) : filtered.length === 0 ? (
@@ -316,45 +317,92 @@ export default function AlunosPage() {
             {query ? "Nenhum aluno encontrado para a busca." : "Nenhum aluno cadastrado."}
           </div>
         ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <Th>Nome</Th>
-                <Th>Mensalidade</Th>
-                <Th>Venc.</Th>
-                <Th>Nascimento</Th>
-                <Th>Status</Th>
-                <Th>Ações</Th>
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            {/* Mobile: cards */}
+            <div className="md:hidden space-y-2">
               {filtered.map((s) => (
-                <tr key={s.id} className="border-t">
-                  <Td>{s.name}</Td>
-                  <Td>{fmtBRL(s.monthly_value)}</Td>
-                  <Td>{s.due_day}</Td>
-                  <Td>{s.birth_date ? fmtYmdBR(s.birth_date) : "-"}</Td>
-                  <Td>{s.status}</Td>
-                  <Td className="py-2">
-                    <div className="flex gap-2">
-                      <button onClick={() => openEditModal(s)} className="px-2 py-1 border rounded">
-                        Editar
-                      </button>
-                      <Link href={`/alunos/${s.id}/evolucao`} className="px-2 py-1 border rounded">
-                        Evolução
-                      </Link>
-                      <button onClick={() => onToggleStatus(s)} className="px-2 py-1 border rounded">
-                        {s.status === "ativo" ? "Inativar" : "Ativar"}
-                      </button>
-                      <button onClick={() => onDelete(s)} className="px-2 py-1 border rounded">
-                        Excluir
-                      </button>
-                    </div>
-                  </Td>
-                </tr>
+                <div key={s.id} className="rounded border bg-white p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-medium truncate">{s.name}</div>
+                    <span className={s.status === "ativo" ? "inline-block rounded-full bg-emerald-50 text-emerald-700 px-2 py-0.5 text-xs" : "inline-block rounded-full bg-slate-100 text-slate-700 px-2 py-0.5 text-xs"}>
+                      {s.status}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-600 flex items-center justify-between gap-3">
+                    <span>Mens.: {fmtBRL(s.monthly_value)}</span>
+                    <span>Venc.: {s.due_day}</span>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-600 flex items-center justify-between gap-3">
+                    <span>Nasc.: {s.birth_date ? fmtYmdBR(s.birth_date) : "-"}</span>
+                  </div>
+                  <div className="mt-2 flex justify-end">
+                    <button
+                      className="px-2 py-1.5 text-xs border rounded"
+                      onClick={() => setActionFor(s)}
+                    >
+                      Ações
+                    </button>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+
+            {/* Desktop: tabela */}
+            <div className="hidden md:block border rounded-xl overflow-auto shadow-sm">
+              <table className="w-full min-w-[980px] text-sm">
+                <thead className="sticky top-0 z-10 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95">
+                  <tr>
+                    <Th>Nome</Th>
+                    <Th>Mensalidade</Th>
+                    <Th>Venc.</Th>
+                    <Th>Nascimento</Th>
+                    <Th>Status</Th>
+                    <Th>Ações</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((s, idx) => (
+                    <tr key={s.id} className={`border-t hover:bg-slate-50 ${idx % 2 ? "bg-slate-50/50" : "bg-white"}`}>
+                      <Td>{s.name}</Td>
+                      <Td>{fmtBRL(s.monthly_value)}</Td>
+                      <Td>{s.due_day}</Td>
+                      <Td>{s.birth_date ? fmtYmdBR(s.birth_date) : "-"}</Td>
+                      <Td>
+                        <span className={s.status === "ativo" ? "inline-block rounded-full bg-emerald-50 text-emerald-700 px-2 py-0.5 text-xs" : "inline-block rounded-full bg-slate-100 text-slate-700 px-2 py-0.5 text-xs"}>
+                          {s.status}
+                        </span>
+                      </Td>
+                      <Td className="py-2">
+                        <div className="hidden md:flex gap-2 justify-end">
+                          <button onClick={() => openEditModal(s)} className="px-2 py-1.5 text-xs border rounded hover:bg-slate-50">
+                            Editar
+                          </button>
+                          <Link href={`/alunos/${s.id}/evolucao`} className="px-2 py-1.5 text-xs border rounded hover:bg-slate-50">
+                            Evolução
+                          </Link>
+                          <button onClick={() => onToggleStatus(s)} className="px-2 py-1.5 text-xs border rounded hover:bg-slate-50">
+                            {s.status === "ativo" ? "Inativar" : "Ativar"}
+                          </button>
+                          <button onClick={() => onDelete(s)} className="px-2 py-1.5 text-xs border rounded border-rose-200 text-rose-700 hover:bg-rose-50">
+                            Excluir
+                          </button>
+                        </div>
+                        <div className="md:hidden flex justify-end">
+                          <button
+                            className="px-2 py-1.5 text-xs border rounded bg-white"
+                            onClick={() => setActionFor(s)}
+                            aria-label={`Ações para ${s.name}`}
+                          >
+                            Ações
+                          </button>
+                        </div>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
 
@@ -663,6 +711,57 @@ export default function AlunosPage() {
             </div>
           </div>
         </form>
+      </Modal>
+
+      {/* Action sheet (mobile) */}
+      <Modal
+        open={!!actionFor}
+        onClose={() => setActionFor(null)}
+        title={actionFor ? `Ações — ${actionFor.name}` : "Ações"}
+        footer={(
+          <button className="px-3 py-2 border rounded" onClick={() => setActionFor(null)}>Fechar</button>
+        )}
+      >
+        {actionFor && (
+          <div className="grid gap-2">
+            <button
+              className="w-full px-3 py-2 border rounded hover:bg-slate-50 text-left"
+              onClick={() => {
+                setActionFor(null);
+                openEditModal(actionFor);
+              }}
+            >
+              Editar
+            </button>
+            <button
+              className="w-full px-3 py-2 border rounded hover:bg-slate-50 text-left"
+              onClick={() => {
+                setActionFor(null);
+                router.push(`/alunos/${actionFor.id}/evolucao`);
+              }}
+            >
+              Evolução
+            </button>
+            <button
+              className="w-full px-3 py-2 border rounded hover:bg-slate-50 text-left"
+              onClick={async () => {
+                setActionFor(null);
+                await onToggleStatus(actionFor);
+              }}
+            >
+              {actionFor.status === "ativo" ? "Inativar" : "Ativar"}
+            </button>
+            <button
+              className="w-full px-3 py-2 border rounded border-rose-200 text-rose-700 hover:bg-rose-50 text-left"
+              onClick={async () => {
+                setActionFor(null);
+                await onDelete(actionFor);
+              }}
+            >
+              Excluir
+            </button>
+          </div>
+        )}
       </Modal>
 
       {/* Modal de confirmação (edição) */}
