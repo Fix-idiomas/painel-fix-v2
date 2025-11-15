@@ -23,11 +23,15 @@ export async function middleware(req) {
     data: { session },
   } = await supabase.auth.getSession();
 
-  // Root: decide destino em uma única passada (evita duplo redirect)
+  // Raiz: se autenticado, permanece em '/'; se não, vai para login preservando next
   if (pathname === '/') {
-    const url = req.nextUrl.clone();
-    url.pathname = session ? '/recepcao' : '/login';
-    return NextResponse.redirect(url);
+    if (!session) {
+      const url = req.nextUrl.clone();
+      url.pathname = '/login';
+      url.searchParams.set('next', '/');
+      return NextResponse.redirect(url);
+    }
+    return res;
   }
 
   // Público (acesso livre)
