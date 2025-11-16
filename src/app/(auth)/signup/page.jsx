@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabaseClient";
 export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const router = useRouter();
@@ -15,6 +16,18 @@ export default function SignupPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
+
+    // Validações básicas de UX
+    if ((password || "").length < 8) {
+      setLoading(false);
+      setError("Senha precisa ter ao menos 8 caracteres.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setLoading(false);
+      setError("As senhas não coincidem.");
+      return;
+    }
 
     const { data, error } = await supabase.auth.signUp({ email, password });
     if (error) {
@@ -59,6 +72,7 @@ export default function SignupPage() {
                 placeholder="Email"
                 className="w-full border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-slate-300"
                 required
+                autoComplete="email"
               />
             </div>
 
@@ -70,6 +84,22 @@ export default function SignupPage() {
                 placeholder="Senha"
                 className="w-full border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-slate-300"
                 required
+                minLength={8}
+                autoComplete="new-password"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">Mínimo 8 caracteres.</p>
+            </div>
+
+            <div>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Confirmar senha"
+                className="w-full border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-slate-300"
+                required
+                minLength={8}
+                autoComplete="new-password"
               />
             </div>
 
