@@ -287,11 +287,24 @@ export const supabaseGateway = {
   // ALUNOS (CRUD + evolução)
   // ==============================
   async listStudents() {
+    // Tenta incluir photo_url; se coluna ainda não aplicada, faz fallback sem ela
+    const sel = "id,name,status,monthly_value,due_day,birth_date,payer_id,email,endereco,cpf,photo_url";
     const { data, error } = await supabase
       .from("students")
-      .select("id,name,status,monthly_value,due_day,birth_date,payer_id,email,endereco,cpf")
+      .select(sel)
       .order("name", { ascending: true });
-    if (error) mapErr("listStudents", error);
+    if (error) {
+      const msg = (error.message || "").toLowerCase();
+      if (msg.includes("photo_url") && msg.includes("does not exist")) {
+        const { data: dataFallback, error: errorFallback } = await supabase
+          .from("students")
+          .select("id,name,status,monthly_value,due_day,birth_date,payer_id,email,endereco,cpf")
+          .order("name", { ascending: true });
+        if (errorFallback) mapErr("listStudents(fallback)", errorFallback);
+        return (dataFallback || []).map(r => ({ ...r, photo_url: null }));
+      }
+      mapErr("listStudents", error);
+    }
     return data || [];
   },
 
@@ -385,6 +398,12 @@ async updateStudent(id, changes = {}) {
     patch.cpf = cpf || null;
   }
 
+  // photo_url (path no storage; null remove)
+  if (changes.photo_url !== undefined) {
+    const p = String(changes.photo_url || "").trim();
+    patch.photo_url = p || null;
+  }
+
   if (Object.keys(patch).length === 0) {
     throw new Error("updateStudent: nada para atualizar");
   }
@@ -393,7 +412,7 @@ async updateStudent(id, changes = {}) {
     .from("students")
     .update(patch)
     .eq("id", id)
-    .select("id, name, status, monthly_value, due_day, birth_date, payer_id, email, endereco, cpf, updated_at")
+    .select("id, name, status, monthly_value, due_day, birth_date, payer_id, email, endereco, cpf, photo_url, updated_at")
     .single();
 
   if (error) {
