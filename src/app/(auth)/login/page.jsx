@@ -1,6 +1,7 @@
 "use client";
 import { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function LoginPage() {
@@ -165,6 +166,11 @@ function LoginInner() {
 
             {error && <div className="text-red-600 text-sm mt-2">{error}</div>}
           </form>
+
+          <div className="mt-3 text-xs text-slate-600 text-center">
+            Ainda não tem conta?{' '}
+            <Link href="/signup" className="underline hover:opacity-80">Criar conta</Link>
+          </div>
         </div>
 
         {/* Rodapé opcional */}

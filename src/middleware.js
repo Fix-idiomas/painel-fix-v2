@@ -37,13 +37,14 @@ export async function middleware(req) {
   // Público (acesso livre)
   const isPublic =
     pathname === '/login' ||
+    pathname === '/signup' ||
     pathname === '/reset-password' ||
-    pathname.startsWith('/(auth)') || // diretório de auth
+    pathname.startsWith('/(auth)') || // diretório de auth (grupos não aparecem na URL real)
     pathname.startsWith('/assets/') ||
     /\.(?:png|jpg|jpeg|gif|svg|ico|css|js|txt|map)$/.test(pathname);
 
-  // Já autenticado acessando /login → manda para home autenticada
-  if (session && pathname === '/login') {
+  // Já autenticado acessando /login ou /signup → manda para home autenticada
+  if (session && (pathname === '/login' || pathname === '/signup')) {
     const url = req.nextUrl.clone();
     url.pathname = '/recepcao';
     return NextResponse.redirect(url);

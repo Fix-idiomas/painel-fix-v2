@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function SignupPage() {
@@ -22,7 +23,6 @@ export default function SignupPage() {
       return;
     }
 
-    // Se o projeto estiver com "Confirm email" DESATIVADO, já há sessão e podemos chamar o RPC agora.
     if (data.session) {
       const { error: rpcError } = await supabase.rpc("bootstrap_tenant_and_admin", {
         p_tenant_name: "Escola do Novo Cliente",
@@ -32,43 +32,68 @@ export default function SignupPage() {
         setError(`Falha ao criar tenant/admin: ${rpcError.message}`);
         return;
       }
-      alert("Cadastro concluído! Você já é admin do seu tenant.");
-      // como admin, pode ir direto para a área logada:
       router.push("/alunos");
       return;
     }
 
-    // Se "Confirm email" estiver ATIVADO (sem sessão aqui), só avise e mande logar:
     setLoading(false);
-    alert("Usuário criado! Confirme o email (se exigido) e faça login. Ao entrar a gente provisiona o tenant.");
     router.push("/login");
   }
 
   return (
-    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
-      <form onSubmit={handleSignup} style={{ border: "1px solid #ccc", padding: 32, borderRadius: 12, minWidth: 320 }}>
-        <h2>Cadastro (novo cliente)</h2>
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Email"
-          style={{ width: "100%", marginBottom: 12, padding: 8 }}
-          required
-        />
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Senha"
-          style={{ width: "100%", marginBottom: 12, padding: 8 }}
-          required
-        />
-        <button type="submit" style={{ width: "100%", padding: 10 }} disabled={loading}>
-          {loading ? "Cadastrando..." : "Cadastrar"}
-        </button>
-        {error && <div style={{ color: "red", marginTop: 12 }}>{error}</div>}
-      </form>
+    <div className="min-h-screen flex items-center justify-center px-4 bg-gradient-to-b from-slate-50 to-white">
+      <div className="w-full max-w-md">
+        <div className="flex flex-col items-center mb-6">
+          <img src="/logo.png" alt="DASH — Sistema de Gestão" className="h-32 md:h-32 w-auto opacity-90" />
+        </div>
+
+        <div className="bg-white/90 backdrop-blur border border-slate-200 rounded-xl shadow-sm p-6">
+          <h2 className="text-lg font-semibold mb-4">Criar conta</h2>
+
+          <form onSubmit={handleSignup} className="space-y-3">
+            <div>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Email"
+                className="w-full border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-slate-300"
+                required
+              />
+            </div>
+
+            <div>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Senha"
+                className="w-full border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-slate-300"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full rounded-lg bg-black text-white px-4 py-2 disabled:opacity-60"
+            >
+              {loading ? "Cadastrando..." : "Cadastrar"}
+            </button>
+
+            {error && <div className="text-red-600 text-sm mt-2">{error}</div>}
+          </form>
+
+          <div className="mt-3 text-xs text-slate-600 text-center">
+            Já tem conta?{' '}
+            <Link href="/login" className="underline hover:opacity-80">Entrar</Link>
+          </div>
+        </div>
+
+        <div className="mt-4 text-center text-xs text-slate-500">
+          © {new Date().getFullYear()} DASH • Sistema de Gestão
+        </div>
+      </div>
     </div>
   );
 }
