@@ -461,8 +461,9 @@ async function saveEditPerms() {
 
           {/* Modal de cadastro — só aparece se tiver permissão */}
           {canManageUsers && showCreateModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-              <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl">
+            <div className="fixed inset-0 h-[100dvh] z-50 flex sm:items-center items-end sm:justify-center justify-stretch bg-black/40 p-2 sm:p-0">
+              <div className="w-full sm:max-w-lg rounded-t-xl sm:rounded-xl bg-white shadow-xl flex flex-col max-h-[92dvh] sm:max-h-[85vh] overflow-hidden min-h-0">
+                <div className="p-5 flex-1 min-h-0 flex flex-col">
                 <div className="mb-4">
                   <h4 className="text-lg font-semibold">Cadastrar Usuário</h4>
                   <p className="text-sm text-neutral-600">
@@ -470,7 +471,8 @@ async function saveEditPerms() {
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3">
+                  {/* Corpo rolável no mobile */}
+                  <div className="grid grid-cols-1 gap-3 overflow-y-auto max-h-[60dvh] sm:max-h-none pr-1 flex-1 min-h-0">
                   <div>
                     <label className="block text-xs font-medium mb-1">Nome</label>
                     <input
@@ -612,9 +614,11 @@ async function saveEditPerms() {
                       Você pode ajustar depois. Essas permissões afetam o que o usuário enxerga/edita no app.
                     </p>
                   </div>
+                  </div>
                 </div>
 
-                <div className="mt-5 flex items-center justify-end gap-2">
+                {/* Rodapé fixo dentro do card */}
+                <div className="border-t px-5 py-3 pb-[env(safe-area-inset-bottom)] flex items-center justify-end gap-2">
                   <button
                     className="rounded-lg border px-3 py-2 text-sm"
                     onClick={() => setShowCreateModal(false)}
@@ -632,7 +636,7 @@ async function saveEditPerms() {
                   </button>
                 </div>
 
-                {createMsg && <div className="mt-3 text-sm">{createMsg}</div>}
+                {createMsg && <div className="px-5 pb-4 text-sm">{createMsg}</div>}
               </div>
             </div>
           )}
@@ -640,8 +644,9 @@ async function saveEditPerms() {
       )}
 {/* ⬇️ Modal de Edição — coloque no final do JSX (perto do modal de cadastro) */}
 {editTarget && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-    <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl">
+  <div className="fixed inset-0 h-[100dvh] z-50 flex sm:items-center items-end sm:justify-center justify-stretch bg-black/40 p-2 sm:p-0">
+    <div className="w-full sm:max-w-lg rounded-t-xl sm:rounded-xl bg-white shadow-xl flex flex-col max-h-[92dvh] sm:max-h-[85vh] overflow-hidden min-h-0">
+      <div className="p-5 flex-1 min-h-0 flex flex-col">
       <div className="mb-4">
         <h4 className="text-lg font-semibold">Editar permissões</h4>
         <p className="text-sm text-neutral-600">
@@ -649,7 +654,8 @@ async function saveEditPerms() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+      {/* Corpo rolável no mobile */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm overflow-y-auto max-h-[60dvh] sm:max-h-none pr-1 flex-1 min-h-0">
         <div className="rounded-lg border p-3">
           <div className="font-medium mb-1">Turmas</div>
           <label className="flex items-center gap-2">
@@ -710,8 +716,10 @@ async function saveEditPerms() {
           </label>
         </div>
       </div>
+      </div>
 
-      <div className="mt-5 flex items-center justify-end gap-2">
+      {/* Rodapé fixo dentro do card */}
+      <div className="border-t px-5 py-3 pb-[env(safe-area-inset-bottom)] flex items-center justify-end gap-2">
         <button
           className="rounded-lg border px-3 py-2 text-sm"
           onClick={() => { setEditTarget(null); setEditPerms(null); setEditMsg(null); }}
@@ -729,7 +737,7 @@ async function saveEditPerms() {
         </button>
       </div>
 
-      {editMsg && <div className="mt-3 text-sm">{editMsg}</div>}
+      {editMsg && <div className="px-5 pb-4 text-sm">{editMsg}</div>}
     </div>
   </div>
 )}
