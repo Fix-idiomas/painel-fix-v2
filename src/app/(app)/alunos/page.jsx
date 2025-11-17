@@ -61,6 +61,7 @@ export default function AlunosPage() {
   const [photoFileEdit, setPhotoFileEdit] = useState(null);
   const [photoPreviewEdit, setPhotoPreviewEdit] = useState("");
   const [photoPreviewIsObject, setPhotoPreviewIsObject] = useState(false);
+  const [processingFile, setProcessingFile] = useState(false);
   const [editPhotoPath, setEditPhotoPath] = useState("");
   const [payerModeEdit, setPayerModeEdit] = useState(PAYER_MODE.SELF);
   const [payerIdEdit, setPayerIdEdit] = useState("");
@@ -226,11 +227,12 @@ export default function AlunosPage() {
       try {
         const { data: tId, error: tErr } = await supabase.rpc("current_tenant_id");
         if (tErr || !tId) throw new Error("tenant_id indisponível para salvar a foto");
-        const ext = photoFileEdit.type?.includes("webp") ? "webp" : "jpg";
+        const mime = photoFileEdit.type || "image/jpeg";
+        const ext = mime.includes("webp") ? "webp" : (mime.includes("png") ? "png" : "jpg");
         const path = `tenant/${tId}/students/${editId}.${ext}`;
         const up = await supabase.storage.from("student-photos").upload(path, photoFileEdit, {
           upsert: true,
-          contentType: photoFileEdit.type || "image/jpeg",
+          contentType: mime,
         });
         if (up.error) throw up.error;
         const signed = await getSignedUrl(path, { silent: true });
@@ -507,7 +509,7 @@ export default function AlunosPage() {
         footer={(
           <>
             <button onClick={closeEdit} className="px-3 py-2 border rounded disabled:opacity-50" disabled={savingEdit}>Cancelar</button>
-            <button onClick={onSubmitEdit} className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50" disabled={savingEdit}>{savingEdit ? "Salvando…" : "Salvar"}</button>
+            <button onClick={onSubmitEdit} className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50" disabled={savingEdit || processingFile}>{savingEdit ? "Salvando…" : "Salvar"}</button>
           </>
         )}
       >
@@ -531,38 +533,140 @@ export default function AlunosPage() {
                   <input
                     id="fileEdit"
                     type="file"
-                    accept="image/jpeg,image/webp"
+                    accept="image/jpeg,image/png,image/webp,application/pdf"
                     className="sr-only"
                     onChange={(e) => {
-                      const f = e.target.files?.[0] || null;
-                      if (!f) {
+                      const handleClear = () => {
                         if (photoPreviewEdit && photoPreviewIsObject) URL.revokeObjectURL(photoPreviewEdit);
                         setPhotoFileEdit(null);
                         setPhotoPreviewEdit("");
                         setPhotoPreviewIsObject(false);
+                      };
+                      const f = e.target.files?.[0] || null;
+                      if (!f) {
+                        handleClear();
+                        return;
+                      }
+                      const isPdf = f.type === "application/pdf";
+                      const isImage = /^image\/(jpeg|png|webp)$/i.test(f.type || "");
+                      if (!isPdf && !isImage) {
+                        alert("Formato não suportado. Use JPEG/PNG/WebP ou PDF.");
+                        e.target.value = "";
                         return;
                       }
                       if (f.size > 1024 * 1024) {
-                        alert("Imagem muito grande (máx. 1 MB).");
+                        alert(isPdf ? "PDF muito grande (máx. 1 MB)." : "Imagem muito grande (máx. 1 MB).");
                         e.target.value = "";
                         return;
                       }
                       if (photoPreviewEdit && photoPreviewIsObject) URL.revokeObjectURL(photoPreviewEdit);
-                      const url = URL.createObjectURL(f);
-                      setPhotoFileEdit(f);
-                      setPhotoPreviewEdit(url);
-                      setPhotoPreviewIsObject(true);
+
+                      if (isPdf) {
+                        (async () => {
+                          try {
+                            setProcessingFile(true);
+                            const { default: pdfjsLib } = await import("pdfjs-dist/build/pdf");
+                            const WORKER_VERSION = "4.4.168";
+                            pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${WORKER_VERSION}/pdf.worker.min.js`;
+                            const ab = await f.arrayBuffer();
+                            const loadingTask = pdfjsLib.getDocument({ data: ab });
+                            const pdf = await loadingTask.promise;
+                            const page = await pdf.getPage(1);
+                            const baseViewport = page.getViewport({ scale: 1 });
+                            const target = 512;
+                            const scale = target / Math.max(baseViewport.width, baseViewport.height);
+                            const viewport = page.getViewport({ scale });
+                            const canvas = document.createElement("canvas");
+                            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+                            canvas.width = Math.round(viewport.width);
+                            canvas.height = Math.round(viewport.height);
+                            const renderTask = page.render({ canvasContext: ctx, viewport });
+                            await renderTask.promise;
+                            const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.9));
+                            if (!blob) throw new Error("Falha ao gerar imagem do PDF.");
+                            if (blob.size > 1024 * 1024) {
+                              alert("Imagem gerada a partir do PDF ficou acima de 1 MB. Tente um PDF menor.");
+                              e.target.value = "";
+                              handleClear();
+                              return;
+                            }
+                            const fileOut = new File([blob], "avatar.webp", { type: "image/webp" });
+                            const url = URL.createObjectURL(fileOut);
+                            setPhotoFileEdit(fileOut);
+                            setPhotoPreviewEdit(url);
+                            setPhotoPreviewIsObject(true);
+                          } catch (err) {
+                            console.warn("Falha ao processar PDF:", err?.message || String(err));
+                            alert("Falha ao processar PDF. Use um arquivo PDF simples (apenas a primeira página).");
+                            e.target.value = "";
+                            handleClear();
+                          } finally {
+                            setProcessingFile(false);
+                          }
+                        })();
+                      } else {
+                        // Imagem: se não for WebP, converter para WebP padronizado (até ~512px)
+                        if (!/image\/webp/i.test(f.type || "")) {
+                          (async () => {
+                            try {
+                              setProcessingFile(true);
+                              const img = new Image();
+                              const objUrl = URL.createObjectURL(f);
+                              const loadImg = () => new Promise((resolve, reject) => {
+                                img.onload = () => resolve();
+                                img.onerror = reject;
+                                img.src = objUrl;
+                              });
+                              await loadImg();
+                              const maxSide = Math.max(img.width, img.height) || 1;
+                              const target = 512;
+                              const scale = Math.min(1, target / maxSide);
+                              const w = Math.round(img.width * scale);
+                              const h = Math.round(img.height * scale);
+                              const canvas = document.createElement("canvas");
+                              canvas.width = Math.max(1, w);
+                              canvas.height = Math.max(1, h);
+                              const ctx = canvas.getContext("2d");
+                              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                              URL.revokeObjectURL(objUrl);
+                              const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.9));
+                              if (!blob) throw new Error("Falha ao converter imagem para WebP.");
+                              if (blob.size > 1024 * 1024) {
+                                alert("Imagem convertida ficou acima de 1 MB. Tente uma imagem menor.");
+                                e.target.value = "";
+                                handleClear();
+                                return;
+                              }
+                              const fileOut = new File([blob], "avatar.webp", { type: "image/webp" });
+                              const url = URL.createObjectURL(fileOut);
+                              setPhotoFileEdit(fileOut);
+                              setPhotoPreviewEdit(url);
+                              setPhotoPreviewIsObject(true);
+                            } catch (err) {
+                              console.warn("Falha ao processar imagem:", err?.message || String(err));
+                              alert("Falha ao processar a imagem. Tente outro arquivo.");
+                              e.target.value = "";
+                              handleClear();
+                            } finally {
+                              setProcessingFile(false);
+                            }
+                          })();
+                        } else {
+                          const url = URL.createObjectURL(f);
+                          setPhotoFileEdit(f);
+                          setPhotoPreviewEdit(url);
+                          setPhotoPreviewIsObject(true);
+                        }
+                      }
                     }}
                   />
                   <label
                     htmlFor="fileEdit"
                     className="px-3 py-2 text-sm border rounded bg-white hover:bg-slate-50 cursor-pointer"
                   >Escolher arquivo</label>
-                  <span className="text-xs text-slate-600 truncate max-w-[260px]">
-                    {photoFileEdit ? photoFileEdit.name : "Nenhum arquivo escolhido"}
-                  </span>
+                  <span className="text-xs text-slate-600 truncate max-w-[260px]">{processingFile ? "Processando arquivo…" : (photoFileEdit ? photoFileEdit.name : "Nenhum arquivo escolhido")}</span>
                 </div>
-                <div className="text-[11px] text-slate-500 mt-1">JPEG/WebP até 1 MB. Ideal quadrada (1:1).</div>
+                <div className="text-[11px] text-slate-500 mt-1">JPEG/PNG/PDF serão convertidos para WebP (1ª página no caso de PDF) até 1 MB. Ideal quadrada (1:1).</div>
               </div>
             </div>
           </div>
