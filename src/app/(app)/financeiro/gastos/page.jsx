@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
 import Modal from "@/components/Modal";
@@ -1156,6 +1157,9 @@ function Td({ children, className = "" }) {
 function RowActions({ entry, updatingId, onPaid, onCancel, onReopen, onDelete }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  const btnRef = useRef(null);
+  const [coords, setCoords] = useState({ top: 0, left: 0 });
+  const [isDesktop, setIsDesktop] = useState(false);
   useEffect(() => {
     function onDocClick(e) {
       if (!ref.current) return;
@@ -1165,8 +1169,85 @@ function RowActions({ entry, updatingId, onPaid, onCancel, onReopen, onDelete })
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [open]);
 
+  // Detecta desktop (>= sm)
+  useEffect(() => {
+    const mq = typeof window !== 'undefined' ? window.matchMedia('(min-width: 640px)') : null;
+    const update = () => setIsDesktop(!!mq?.matches);
+    update();
+    mq?.addEventListener?.('change', update);
+    return () => mq?.removeEventListener?.('change', update);
+  }, []);
+
+  // Calcula posição fixa do dropdown no desktop e fecha ao rolar
+  useEffect(() => {
+    if (!open || !isDesktop) return;
+    const recalc = () => {
+      const el = btnRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const width = 144; // w-36
+      const estHeight = 200; // altura aproximada do menu
+      const left = Math.min(Math.max(8, r.right - width), window.innerWidth - width - 8);
+      let top = r.bottom + 4;
+      if (top + estHeight > window.innerHeight - 8) {
+        // inverte para abrir para cima, se não couber para baixo
+        top = Math.max(8, r.top - estHeight - 4);
+      }
+      setCoords({ top, left });
+    };
+    const onScroll = () => setOpen(false);
+    recalc();
+    window.addEventListener('resize', recalc);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      window.removeEventListener('resize', recalc);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [open, isDesktop]);
+
   const isPending = entry.status === 'pending';
   const isBusy = updatingId === entry.id;
+
+  const menu = (
+    <div className="w-36 origin-top-right rounded-md border bg-white shadow-lg z-50">
+      <div className="py-1 text-sm">
+        {isPending ? (
+          <>
+            <button
+              disabled={isBusy}
+              onClick={() => { setOpen(false); onPaid(entry); }}
+              className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Marcar pago
+            </button>
+            <button
+              disabled={isBusy}
+              onClick={() => { setOpen(false); onCancel(entry); }}
+              className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Cancelar
+            </button>
+          </>
+        ) : (
+          <button
+            disabled={isBusy}
+            onClick={() => { setOpen(false); onReopen(entry); }}
+            className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
+          >
+            Reabrir
+          </button>
+        )}
+        <div className="my-1 border-t" />
+        <button
+          disabled={isBusy}
+          onClick={() => { setOpen(false); onDelete(entry); }}
+          className="w-full text-left px-3 py-1.5 text-red-700 hover:bg-red-50 disabled:opacity-50"
+        >
+          Excluir
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="relative inline-block text-left" ref={ref}>
@@ -1174,6 +1255,7 @@ function RowActions({ entry, updatingId, onPaid, onCancel, onReopen, onDelete })
         type="button"
         className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-gray-300 hover:bg-gray-50"
         onClick={() => setOpen((v) => !v)}
+        ref={btnRef}
       >
         ⋯ Ações
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`}>
@@ -1181,44 +1263,18 @@ function RowActions({ entry, updatingId, onPaid, onCancel, onReopen, onDelete })
         </svg>
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 w-36 origin-top-right rounded-md border bg-white shadow-lg z-50">
-          <div className="py-1 text-sm">
-            {isPending ? (
-              <>
-                <button
-                  disabled={isBusy}
-                  onClick={() => { setOpen(false); onPaid(entry); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
-                >
-                  Marcar pago
-                </button>
-                <button
-                  disabled={isBusy}
-                  onClick={() => { setOpen(false); onCancel(entry); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
-                >
-                  Cancelar
-                </button>
-              </>
-            ) : (
-              <button
-                disabled={isBusy}
-                onClick={() => { setOpen(false); onReopen(entry); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
-              >
-                Reabrir
-              </button>
-            )}
-            <div className="my-1 border-t" />
-            <button
-              disabled={isBusy}
-              onClick={() => { setOpen(false); onDelete(entry); }}
-              className="w-full text-left px-3 py-1.5 text-red-700 hover:bg-red-50 disabled:opacity-50"
-            >
-              Excluir
-            </button>
-          </div>
-        </div>
+        isDesktop
+          ? createPortal(
+              <div style={{ position: 'fixed', top: coords.top, left: coords.left, zIndex: 9999 }}>
+                {menu}
+              </div>,
+              document.body
+            )
+          : (
+              <div className="absolute right-0 mt-1 z-50">
+                {menu}
+              </div>
+            )
       )}
     </div>
   );
