@@ -569,8 +569,12 @@ export default function GastosPage() {
         </div>
         {canWriteDB && (
           <div className="ml-auto flex items-center gap-2 flex-wrap sm:flex-nowrap">
-            <button onClick={onPreview} className="border rounded px-3 py-2 text-sm hover:bg-slate-50">
-              Prévia
+            <button
+              onClick={onPreview}
+              title="Mostra a prévia e permite gerar os lançamentos recorrentes deste mês"
+              className="border rounded px-3 py-2 text-sm hover:bg-slate-50"
+            >
+              Prévia e gerar recorrentes
             </button>
             <button onClick={openAvulsoModal} className="border rounded px-3 py-2 text-sm bg-slate-900 text-white hover:bg-black">
               + Avulso
@@ -1177,7 +1181,7 @@ function RowActions({ entry, updatingId, onPaid, onCancel, onReopen, onDelete })
         </svg>
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 w-36 origin-top-right rounded-md border bg-white shadow-lg z-30">
+        <div className="absolute right-0 mt-1 w-36 origin-top-right rounded-md border bg-white shadow-lg z-50">
           <div className="py-1 text-sm">
             {isPending ? (
               <>
