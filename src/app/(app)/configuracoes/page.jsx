@@ -116,8 +116,9 @@ export default function ConfiguracoesPage() {
       if (jsonErrors.theme || jsonErrors.nav) {
         throw new Error("Corrija os erros de JSON antes de salvar.");
       }
-      await supabaseGateway.upsertTenantSettings({
-        brand_name:     form.brand_name || null,
+      const payload = {
+        // Envie somente se houver valor não vazio; evita violar NOT NULL no backend
+        // brand_name: definido apenas quando preenchido
         logo_url:       form.brand_logo_url || null, // ← mapeia de volta
         subtitle:       form.subtitle || null,
         nav_layout:     form.nav_layout || null,
@@ -125,7 +126,11 @@ export default function ConfiguracoesPage() {
         header_density: form.header_density || null,
         theme:          form.theme || {},
         nav_overrides:  form.nav_overrides || [],
-      });
+      };
+      const trimmedBrand = (form.brand_name ?? "").trim();
+      if (trimmedBrand) payload.brand_name = trimmedBrand;
+
+      await supabaseGateway.upsertTenantSettings(payload);
       setOk("Configurações salvas.");
     } catch (e) {
       setErr(e?.message || "Falha ao salvar.");
