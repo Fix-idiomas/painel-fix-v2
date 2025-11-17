@@ -360,7 +360,10 @@ export default function AlunosPage() {
         ) : viewMode === "cards" ? (
           <div className="grid gap-2 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
             {filtered.map((s) => (
-              <div key={s.id} className="rounded border bg-white p-3">
+              <div
+                key={s.id}
+                className="rounded-xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-3 shadow hover:shadow-lg transition-shadow duration-200"
+              >
                 <div className="flex items-center gap-3">
                   <AvatarAluno student={s} size="md" imageUrl={s.photo_url ? signedMap[String(s.photo_url).trim()] : undefined} />
                   <div className="min-w-0 flex-1">
@@ -374,7 +377,7 @@ export default function AlunosPage() {
                   <span className={s.status === "ativo" ? "inline-block rounded-full bg-emerald-50 text-emerald-700 px-2 py-0.5 text-xs" : "inline-block rounded-full bg-slate-100 text-slate-700 px-2 py-0.5 text-xs"}>{s.status}</span>
                 </div>
                 <div className="mt-2 flex justify-end">
-                  <button className="px-2 py-1.5 text-xs border rounded" onClick={() => setActionFor(s)} aria-label={`Ações para ${s.name}`}>Ações</button>
+                  <button className="px-2 py-1.5 text-xs border border-slate-300 rounded bg-white shadow-sm hover:bg-slate-50" onClick={() => setActionFor(s)} aria-label={`Ações para ${s.name}`}>Ações</button>
                 </div>
               </div>
             ))}
@@ -409,10 +412,10 @@ export default function AlunosPage() {
                     </Td>
                     <Td className="py-2">
                       <div className="flex gap-2 justify-end">
-                        <button onClick={() => openEditModal(s)} className="px-2 py-1.5 text-xs border rounded hover:bg-slate-50">Editar</button>
-                        <Link href={`/alunos/${s.id}/evolucao`} className="px-2 py-1.5 text-xs border rounded hover:bg-slate-50">Evolução</Link>
-                        <button onClick={() => onToggleStatus(s)} className="px-2 py-1.5 text-xs border rounded hover:bg-slate-50">{s.status === "ativo" ? "Inativar" : "Ativar"}</button>
-                        <button onClick={() => onDelete(s)} className="px-2 py-1.5 text-xs border rounded border-rose-200 text-rose-700 hover:bg-rose-50">Excluir</button>
+                        <button onClick={() => openEditModal(s)} className="px-2 py-1.5 text-xs border border-slate-300 rounded bg-white shadow-sm hover:bg-slate-50">Editar</button>
+                        <Link href={`/alunos/${s.id}/evolucao`} className="px-2 py-1.5 text-xs border border-slate-300 rounded bg-white shadow-sm hover:bg-slate-50">Evolução</Link>
+                        <button onClick={() => onToggleStatus(s)} className="px-2 py-1.5 text-xs border border-slate-300 rounded bg-white shadow-sm hover:bg-slate-50">{s.status === "ativo" ? "Inativar" : "Ativar"}</button>
+                        <button onClick={() => onDelete(s)} className="px-2 py-1.5 text-xs border rounded border-rose-200 text-rose-700 bg-white shadow-sm hover:bg-rose-50">Excluir</button>
                       </div>
                     </Td>
                   </tr>

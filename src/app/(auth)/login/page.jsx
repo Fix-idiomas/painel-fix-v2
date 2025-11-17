@@ -53,14 +53,11 @@ function LoginInner() {
       return;
     }
     if (!tData) {
-      const { error: bootErr } = await supabase.rpc("bootstrap_tenant_and_admin", {
-        p_tenant_name: "Escola (novo cliente)",
-      });
-      if (bootErr) {
-        setLoading(false);
-        setError("Falha ao criar tenant: " + bootErr.message);
-        return;
-      }
+      // Sem tenant configurado ainda → leva para o onboarding, que executa o RPC
+      setLoading(false);
+      router.replace("/onboarding");
+      router.refresh();
+      return;
     }
 
     const next = searchParams?.get("next") || "/recepcao";

@@ -39,6 +39,7 @@ export default function SignupPage() {
     if (data.session) {
       const { error: rpcError } = await supabase.rpc("bootstrap_tenant_and_admin", {
         p_tenant_name: "Escola do Novo Cliente",
+        p_display_name: email || "Admin",
       });
       setLoading(false);
       if (rpcError) {

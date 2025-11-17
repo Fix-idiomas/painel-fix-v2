@@ -837,7 +837,6 @@ function BulkPayByPayer({ rows, ym, onDone }) {
           <span className={`i-lucide-chevron-down h-4 w-4 transition ${open ? "rotate-180" : ""}`} />
         </button>
       </div>
-                className="rounded bg-black text-white px-3 py-2 text-sm disabled:opacity-60"
       {/* Painel inline (sem Modal) */}
       {open && (
         <div className="mt-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
