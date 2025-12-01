@@ -20,6 +20,7 @@ function LoginInner() {
   const [error, setError] = useState("");
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   // estado do fluxo "Esqueci minha senha"
   const [forgotOpen, setForgotOpen] = useState(false);
@@ -129,14 +130,25 @@ function LoginInner() {
             </div>
 
             <div>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Senha"
-                className="w-full border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-slate-300"
-                required
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Senha"
+                  className="w-full border rounded-lg px-3 py-2 pr-24 outline-none focus:ring-2 focus:ring-slate-300"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-pressed={showPassword}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs px-2 py-1 border rounded hover:bg-slate-50"
+                  title={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                >
+                  {showPassword ? "Ocultar senha" : "Mostrar senha"}
+                </button>
+              </div>
             </div>
 
             <div className="flex items-center justify-between">
