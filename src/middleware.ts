@@ -6,12 +6,12 @@
 //  - Rotas privadas sem sessão → '/login?next=<rota>'
 //  - Exclui estáticos e /api do matcher para performance
 //  - Usa createMiddlewareClient para refresh silencioso do token
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { createMiddlewareClient } from '@supabase/auth-helpers-nextjs';
 
-export async function middleware(req) {
+export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
-  const { pathname, searchParams } = req.nextUrl;
+  const { pathname } = req.nextUrl;
 
   // Ignora explicitamente assets já filtrados pelo matcher (defensive)
   if (pathname.startsWith('/_next') || pathname.startsWith('/api/')) {

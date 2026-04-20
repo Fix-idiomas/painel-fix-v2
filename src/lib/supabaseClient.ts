@@ -1,4 +1,3 @@
-// src/lib/supabaseClient.js
 import { createBrowserSupabaseClient } from '@supabase/auth-helpers-nextjs';
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -9,11 +8,9 @@ if (!url || !anon) {
   throw new Error('Supabase não configurado (URL/ANON)');
 }
 
-// createBrowserSupabaseClient garante integração com cookies para middleware/server components
 export const supabase = createBrowserSupabaseClient({ supabaseUrl: url, supabaseKey: anon });
 
-// Helper opcional: ler claims do token atual
-export async function getClaims() {
+export async function getClaims(): Promise<Record<string, unknown> | null> {
   const { data } = await supabase.auth.getSession();
   const token = data?.session?.access_token;
   if (!token) return null;
@@ -21,7 +18,7 @@ export async function getClaims() {
   try {
     return JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
   } catch (e) {
-    console.warn('[getClaims] erro ao decodificar payload:', e?.message);
+    console.warn('[getClaims] erro ao decodificar payload:', (e as Error)?.message);
     return null;
   }
 }

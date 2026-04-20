@@ -1149,7 +1149,6 @@ async function previewGenerateExpenses({ ym }) {
 
 /** Gera efetivamente os lançamentos do mês (a partir da prévia) */
 async function generateExpenses({ ym }) {
-  const monthStart = isoMonthStart(ym);
   const list = await previewGenerateExpenses({ ym });
   const inserted = [];
 

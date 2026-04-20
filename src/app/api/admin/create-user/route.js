@@ -6,8 +6,15 @@ const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Client com service role (admin) para operações no Auth e consultas server-side
-const admin = createClient(URL, SERVICE_KEY);
+let _admin = null;
+function getAdmin() {
+  if (_admin) return _admin;
+  if (!URL || !SERVICE_KEY) {
+    throw new Error("Supabase admin não configurado (URL/SERVICE_ROLE_KEY).");
+  }
+  _admin = createClient(URL, SERVICE_KEY);
+  return _admin;
+}
 
 // Recupera o chamador (via token Bearer) e um client "pub" que respeita RLS
 async function getCaller(req) {
@@ -37,7 +44,7 @@ async function findUserIdByEmail(email) {
   let page = 1;
   const perPage = 200;
   while (page < 20) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    const { data, error } = await getAdmin().auth.admin.listUsers({ page, perPage });
     if (error) break;
     const found = data?.users?.find(
       (u) => u.email?.toLowerCase() === String(email).toLowerCase()
@@ -105,7 +112,7 @@ if (!tenant_id_server) {
   return NextResponse.json({ error: "Sem tenant associado ao chamador (owner/admin)." }, { status: 403 });
 }
     // Cria no Auth
-    const { data: created, error: createErr } = await admin.auth.admin.createUser({
+    const { data: created, error: createErr } = await getAdmin().auth.admin.createUser({
       email,
       password,
       email_confirm: true,
@@ -116,7 +123,7 @@ if (!tenant_id_server) {
     if (!createErr && created?.user?.id) {
       const newUserId = created.user.id;
 
-      const { error: insertErr } = await admin
+      const { error: insertErr } = await getAdmin()
         .from("user_claims")
         .insert([{
           user_id: newUserId,
@@ -149,7 +156,7 @@ if (!tenant_id_server) {
         );
       }
 
-      const { data: existingClaims, error: claimsErr } = await admin
+      const { data: existingClaims, error: claimsErr } = await getAdmin()
         .from("user_claims")
         .select("tenant_id")
         .eq("user_id", existingUserId);

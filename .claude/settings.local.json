@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs find *)",
+      "Bash(xargs wc *)",
+      "Bash(find /c/Users/vinic/painel-fix-v2/src -type f \\\\\\( -name \"*.jsx\" -o -name \"*.js\" \\\\\\) -exec grep -l \"useState\\\\|useEffect\\\\|useContext\" {} \\\\;)",
+      "Bash(npm audit *)",
+      "Bash(node -e \"console.log\\(require\\('./node_modules/next/package.json'\\).version\\)\")"
+    ]
+  }
+}
