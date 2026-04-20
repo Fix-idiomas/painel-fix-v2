@@ -5,7 +5,13 @@
       "Bash(xargs wc *)",
       "Bash(find /c/Users/vinic/painel-fix-v2/src -type f \\\\\\( -name \"*.jsx\" -o -name \"*.js\" \\\\\\) -exec grep -l \"useState\\\\|useEffect\\\\|useContext\" {} \\\\;)",
       "Bash(npm audit *)",
-      "Bash(node -e \"console.log\\(require\\('./node_modules/next/package.json'\\).version\\)\")"
+      "Bash(node -e \"console.log\\(require\\('./node_modules/next/package.json'\\).version\\)\")",
+      "Bash(npx next:*)",
+      "Bash(npm install:*)",
+      "Bash(npm test:*)",
+      "Read(//c/Users/vinic/painel-fix-v2/src/lib/gateways/**)",
+      "Read(//c/Users/vinic/painel-fix-v2/src/lib/gateways/__tests__/**)",
+      "Read(//c/Users/vinic/painel-fix-v2/**)"
     ]
   }
 }
