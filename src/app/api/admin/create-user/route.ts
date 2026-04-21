@@ -1,13 +1,13 @@
-// src/app/api/admin/create-user/route.js
-import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+// src/app/api/admin/create-user/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-let _admin = null;
-function getAdmin() {
+let _admin: SupabaseClient | null = null;
+function getAdmin(): SupabaseClient {
   if (_admin) return _admin;
   if (!URL || !SERVICE_KEY) {
     throw new Error("Supabase admin não configurado (URL/SERVICE_ROLE_KEY).");
@@ -16,11 +16,23 @@ function getAdmin() {
   return _admin;
 }
 
+type HttpError = { status: number; message: string };
+
+type CreateUserBody = {
+  email?: string;
+  password?: string;
+  name?: string;
+  phone?: string;
+  cpf?: string;
+  role?: string;
+  perms?: Record<string, unknown>;
+};
+
 // Recupera o chamador (via token Bearer) e um client "pub" que respeita RLS
-async function getCaller(req) {
+async function getCaller(req: NextRequest): Promise<{ user: { id: string; email?: string }; pub: SupabaseClient }> {
   const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!token) throw { status: 401, message: "Não autenticado." };
+  if (!token) throw { status: 401, message: "Não autenticado." } as HttpError;
 
   const pub = createClient(URL, ANON_KEY, {
     global: { headers: { Authorization: `Bearer ${token}` } },
@@ -28,11 +40,11 @@ async function getCaller(req) {
   });
 
   const { data, error } = await pub.auth.getUser();
-  if (error || !data?.user) throw { status: 401, message: "Sessão inválida." };
+  if (error || !data?.user) throw { status: 401, message: "Sessão inválida." } as HttpError;
   return { user: data.user, pub };
 }
 
-function sanitizeIdentification(s) {
+function sanitizeIdentification(s: unknown): string {
   if (typeof s !== "string") return "";
   let out = s.trim().replace(/[<>]/g, "");
   if (out.length > 40) out = out.slice(0, 40);
@@ -40,14 +52,14 @@ function sanitizeIdentification(s) {
 }
 
 // Procura um usuário existente no Auth pelo e-mail (paginado)
-async function findUserIdByEmail(email) {
+async function findUserIdByEmail(email: string): Promise<string | null> {
   let page = 1;
   const perPage = 200;
   while (page < 20) {
     const { data, error } = await getAdmin().auth.admin.listUsers({ page, perPage });
     if (error) break;
     const found = data?.users?.find(
-      (u) => u.email?.toLowerCase() === String(email).toLowerCase()
+      (u: { email?: string }) => u.email?.toLowerCase() === String(email).toLowerCase()
     );
     if (found) return found.id;
     if (!data || (data.users?.length ?? 0) < perPage) break;
@@ -56,21 +68,21 @@ async function findUserIdByEmail(email) {
   return null;
 }
 
-export async function POST(req) {
+export async function POST(req: NextRequest) {
   try {
     const { user: caller, pub } = await getCaller(req);
 
-    const body = await req.json().catch(() => ({}));
+    const body = (await req.json().catch(() => ({}))) as CreateUserBody;
     const { email, password, name, phone, cpf, perms } = body || {};
     let { role } = body || {};
 
-    const permsObj = perms && typeof perms === "object" ? { ...perms } : {};
+    const permsObj: Record<string, unknown> = perms && typeof perms === "object" ? { ...perms } : {};
     const systemRole = (String(role).toLowerCase() === "admin") ? "admin" : "user";
 
     // Guarda rótulo livre em perms.meta.label (até existir coluna própria)
     if (role && typeof role === "string" && role.toLowerCase() !== "admin") {
-      permsObj.meta ??= {};
-      permsObj.meta.label = role;
+      (permsObj as { meta?: Record<string, unknown> }).meta ??= {};
+      (permsObj as { meta: Record<string, unknown> }).meta.label = role;
     }
 
     if (!email || !password) return NextResponse.json({ error: "Email e senha são obrigatórios." }, { status: 400 });
@@ -85,32 +97,32 @@ export async function POST(req) {
     }
 
     // Valida que o chamador controla este tenant
-  // **Resolver tenant_id no server, a partir do chamador (owner/admin)**
-let tenant_id_server = null;
-// 1) Owner?
-{
-  const { data: owned, error: ownErr } = await pub
-    .from("tenants")
-    .select("id")
-    .eq("owner_user_id", caller.id)
-    .limit(1);
-  if (ownErr) return NextResponse.json({ error: ownErr.message || "Falha ao identificar tenant (owner)." }, { status: 500 });
-  if (owned?.[0]) tenant_id_server = owned[0].id;
-}
-// 2) Se não for owner, admin via claim
-if (!tenant_id_server) {
-  const { data: adminClaim, error: claimErr } = await pub
-    .from("user_claims")
-    .select("tenant_id")
-    .eq("user_id", caller.id)
-    .eq("role", "admin")
-    .limit(1);
-  if (claimErr) return NextResponse.json({ error: claimErr.message || "Falha ao identificar tenant (admin)." }, { status: 500 });
-  if (adminClaim?.[0]) tenant_id_server = adminClaim[0].tenant_id;
-}
-if (!tenant_id_server) {
-  return NextResponse.json({ error: "Sem tenant associado ao chamador (owner/admin)." }, { status: 403 });
-}
+    // **Resolver tenant_id no server, a partir do chamador (owner/admin)**
+    let tenant_id_server: string | null = null;
+    // 1) Owner?
+    {
+      const { data: owned, error: ownErr } = await pub
+        .from("tenants")
+        .select("id")
+        .eq("owner_user_id", caller.id)
+        .limit(1);
+      if (ownErr) return NextResponse.json({ error: ownErr.message || "Falha ao identificar tenant (owner)." }, { status: 500 });
+      if (owned?.[0]) tenant_id_server = owned[0].id;
+    }
+    // 2) Se não for owner, admin via claim
+    if (!tenant_id_server) {
+      const { data: adminClaim, error: claimErr } = await pub
+        .from("user_claims")
+        .select("tenant_id")
+        .eq("user_id", caller.id)
+        .eq("role", "admin")
+        .limit(1);
+      if (claimErr) return NextResponse.json({ error: claimErr.message || "Falha ao identificar tenant (admin)." }, { status: 500 });
+      if (adminClaim?.[0]) tenant_id_server = adminClaim[0].tenant_id;
+    }
+    if (!tenant_id_server) {
+      return NextResponse.json({ error: "Sem tenant associado ao chamador (owner/admin)." }, { status: 403 });
+    }
     // Cria no Auth
     const { data: created, error: createErr } = await getAdmin().auth.admin.createUser({
       email,
@@ -165,7 +177,7 @@ if (!tenant_id_server) {
         return NextResponse.json({ error: "Falha ao checar vínculos do usuário." }, { status: 500 });
       }
 
-      const isAlreadyMemberHere = (existingClaims || []).some(r => r.tenant_id === tenant_id);
+      const isAlreadyMemberHere = (existingClaims || []).some((r: { tenant_id: string }) => r.tenant_id === tenant_id_server);
       if (isAlreadyMemberHere) {
         return NextResponse.json({ userId: existingUserId, status: "already_member" }, { status: 200 });
       }
@@ -178,9 +190,10 @@ if (!tenant_id_server) {
 
     return NextResponse.json({ error: "Falha ao criar usuário no Auth." }, { status: 500 });
   } catch (err) {
+    const e = err as HttpError | Error;
     return NextResponse.json(
-      { error: err?.message || "Erro inesperado." },
-      { status: err?.status || 500 }
+      { error: (e as HttpError)?.message || "Erro inesperado." },
+      { status: (e as HttpError)?.status || 500 }
     );
   }
 }

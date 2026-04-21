@@ -13,7 +13,7 @@ beforeEach(() => {
 
 describe("paymentGateway.previewGenerateMonth", () => {
   it("throws when ym is missing", async () => {
-    await expect(paymentGateway.previewGenerateMonth({})).rejects.toThrow("obrigatório");
+    await expect(paymentGateway.previewGenerateMonth({} as never)).rejects.toThrow("obrigatório");
   });
 
   it("filters students with zero value", async () => {
@@ -33,7 +33,7 @@ describe("paymentGateway.previewGenerateMonth", () => {
 
 describe("paymentGateway.listPayments", () => {
   it("throws when ym is missing", async () => {
-    await expect(paymentGateway.listPayments({})).rejects.toThrow("obrigatório");
+    await expect(paymentGateway.listPayments({} as never)).rejects.toThrow("obrigatório");
   });
 
   it("calculates days_overdue for pending payments", async () => {

@@ -50,13 +50,13 @@ describe("expenseGateway.createExpenseTemplate", () => {
 describe("expenseGateway.createExpenseEntry", () => {
   it("throws when due_date is missing", async () => {
     await expect(
-      expenseGateway.createExpenseEntry({ amount: 100, description: "Test" })
+      expenseGateway.createExpenseEntry({ amount: 100, description: "Test" } as never)
     ).rejects.toThrow("due_date");
   });
 
   it("throws when description is missing", async () => {
     await expect(
-      expenseGateway.createExpenseEntry({ due_date: "2024-03-15", amount: 100 })
+      expenseGateway.createExpenseEntry({ due_date: "2024-03-15", amount: 100 } as never)
     ).rejects.toThrow("description");
   });
 

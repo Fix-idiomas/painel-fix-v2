@@ -1,7 +1,18 @@
-// Server Route: /api/send-mail  (Next.js App Router)
-export async function POST(req) {
+// Server Route: /api/admin/update-user-perms  (Next.js App Router)
+// NOTE: apesar do path, o handler atual contém a lógica antiga de envio de
+// e-mail (Mailgun). Provável código morto/duplicado — manter até validar.
+import type { NextRequest } from "next/server";
+
+type SendMailBody = {
+  to: string | string[];
+  subject: string;
+  html?: string;
+  text?: string;
+};
+
+export async function POST(req: NextRequest) {
   try {
-    const { to, subject, html, text } = await req.json();
+    const { to, subject, html, text } = (await req.json()) as SendMailBody;
 
     if (!to || !subject || (!html && !text)) {
       return new Response(
@@ -24,7 +35,7 @@ export async function POST(req) {
     // aceita string "a@b,c@d" ou array
     const recipients = Array.isArray(to)
       ? to
-      : String(to).split(",").map(s => s.trim()).filter(Boolean);
+      : String(to).split(",").map((s) => s.trim()).filter(Boolean);
 
     const form = new URLSearchParams();
     form.set("from", FROM);
@@ -53,6 +64,7 @@ export async function POST(req) {
     const data = await res.json();
     return new Response(JSON.stringify({ ok: true, id: data.id }), { status: 200 });
   } catch (e) {
-    return new Response(JSON.stringify({ error: e.message || String(e) }), { status: 500 });
+    const msg = e instanceof Error ? e.message : String(e);
+    return new Response(JSON.stringify({ error: msg }), { status: 500 });
   }
 }

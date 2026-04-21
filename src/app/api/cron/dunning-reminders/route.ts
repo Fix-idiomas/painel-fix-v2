@@ -10,12 +10,22 @@ import { financeGateway } from "@/lib/financeGateway";
  * Teste local: GET http://localhost:3000/api/cron/dunning-reminders
  */
 
+type PaymentRow = {
+  payer_id: string;
+  student_name: string;
+  due_date: string;
+  amount: number | string;
+  days_overdue: number | string;
+};
+
+type Payer = { id: string; name?: string; email?: string };
+
 export async function GET() {
   try {
     const ym = new Date().toISOString().slice(0, 7);
 
     // 1) Buscar lançamentos do mês pendentes
-    const { rows } = await financeGateway.listPayments({ ym, status: "pending" });
+    const { rows } = (await financeGateway.listPayments({ ym, status: "pending" })) as { rows: PaymentRow[] };
 
     // 2) Filtrar os que estão em atraso (days_overdue > 0)
     const overdue = rows.filter((r) => Number(r.days_overdue || 0) > 0);
@@ -24,18 +34,18 @@ export async function GET() {
     }
 
     // 3) Payers do sistema (mock) → para mapear payer_id → email
-    const payers = await financeGateway.listPayers();
-    const payerById = new Map(payers.map((p) => [p.id, p]));
+    const payers = (await financeGateway.listPayers()) as Payer[];
+    const payerById = new Map<string, Payer>(payers.map((p) => [p.id, p]));
 
     // 4) Agrupar por pagador (só envia para quem tiver email definido)
-    const groups = new Map(); // payer_id -> array de rows
+    const groups = new Map<string, PaymentRow[]>();
     for (const r of overdue) {
       const py = payerById.get(r.payer_id);
       const email = py?.email?.trim();
       if (!email) continue; // sem e-mail não envia
 
       if (!groups.has(r.payer_id)) groups.set(r.payer_id, []);
-      groups.get(r.payer_id).push(r);
+      groups.get(r.payer_id)!.push(r);
     }
 
     if (groups.size === 0) {
@@ -48,11 +58,11 @@ export async function GET() {
 
     // 5) Enviar um e-mail por pagador com a lista de pendências
     const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-    const results = [];
+    const results: Array<{ to: string; ok: boolean; status: number; json: unknown }> = [];
 
     for (const [payer_id, items] of groups.entries()) {
-      const payer = payerById.get(payer_id);
-      const to = payer.email;
+      const payer = payerById.get(payer_id)!;
+      const to = payer.email!;
       const payerName = payer.name || "Responsável";
 
       // Monta uma tabelinha HTML com as pendências

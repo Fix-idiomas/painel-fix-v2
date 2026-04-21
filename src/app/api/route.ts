@@ -1,4 +1,4 @@
-// src/app/api/route.js
+// src/app/api/route.ts
 import { NextResponse } from "next/server";
 
 /**

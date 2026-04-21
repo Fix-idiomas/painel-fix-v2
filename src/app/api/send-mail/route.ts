@@ -1,10 +1,18 @@
-// src/app/api/send-mail/route.js
+// src/app/api/send-mail/route.ts
 import { cookies } from "next/headers";
 import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
+import type { NextRequest } from "next/server";
 
-export async function POST(req) {
+type SendMailBody = {
+  to: string | string[];
+  subject: string;
+  html?: string;
+  text?: string;
+};
+
+export async function POST(req: NextRequest) {
   try {
-    const { to, subject, html, text } = await req.json();
+    const { to, subject, html, text } = (await req.json()) as SendMailBody;
 
     if (!to || !subject || (!html && !text)) {
       return new Response(JSON.stringify({ error: "Campos obrigatórios: to, subject e html ou text" }), { status: 400 });
@@ -19,7 +27,7 @@ export async function POST(req) {
     }
 
     // Tenta descobrir o brand do tenant atual (quando houver sessão)
-    let fromName = null;
+    let fromName: string | null = null;
     try {
       const supabase = createRouteHandlerClient({ cookies });
       const { data: tenantId } = await supabase.rpc("current_tenant_id");
@@ -38,7 +46,7 @@ export async function POST(req) {
     // aceita string "a@b,c@d" ou array
     const recipients = Array.isArray(to)
       ? to
-      : String(to).split(",").map(s => s.trim()).filter(Boolean);
+      : String(to).split(",").map((s) => s.trim()).filter(Boolean);
 
     const form = new URLSearchParams();
     form.set("from", FROM);
@@ -66,6 +74,7 @@ export async function POST(req) {
     const data = await res.json();
     return new Response(JSON.stringify({ ok: true, id: data.id }), { status: 200 });
   } catch (e) {
-    return new Response(JSON.stringify({ error: e.message || String(e) }), { status: 500 });
+    const msg = e instanceof Error ? e.message : String(e);
+    return new Response(JSON.stringify({ error: msg }), { status: 500 });
   }
 }

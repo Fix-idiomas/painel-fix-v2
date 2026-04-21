@@ -23,7 +23,7 @@ describe("teacherGateway.listTeachers", () => {
 
 describe("teacherGateway.createTeacher", () => {
   it("throws when name is missing", async () => {
-    await expect(teacherGateway.createTeacher({})).rejects.toThrow("'name' é obrigatório");
+    await expect(teacherGateway.createTeacher({} as never)).rejects.toThrow("'name' é obrigatório");
   });
 
   it("throws when pay_day is out of range", async () => {
@@ -52,7 +52,7 @@ describe("teacherGateway.updateTeacher", () => {
   it("normalizes rate_rules", async () => {
     mock._result = { data: { id: "1" }, error: null };
     await teacherGateway.updateTeacher("1", {
-      rate_rules: [{ min: "1", max: "5", rate: "50" }],
+      rate_rules: [{ min: "1", max: "5", rate: "50" }] as never,
     });
     // Should not throw — means normalization worked
   });
@@ -61,7 +61,7 @@ describe("teacherGateway.updateTeacher", () => {
 describe("teacherGateway.setTeacherStatus", () => {
   it("rejects invalid status", async () => {
     await expect(
-      teacherGateway.setTeacherStatus("1", "suspended")
+      teacherGateway.setTeacherStatus("1", "suspended" as never)
     ).rejects.toThrow("status inválido");
   });
 });
@@ -82,13 +82,13 @@ describe("teacherGateway.sumTeacherPayoutByMonth", () => {
     let callCount = 0;
     mock.from.mockImplementation(() => {
       callCount++;
-      const c = {
+      const c: Record<string, unknown> = {
         select: vi.fn(() => c),
         eq: vi.fn(() => c),
         gte: vi.fn(() => c),
         lt: vi.fn(() => c),
         single: vi.fn(() => c),
-        then: (resolve) => {
+        then: (resolve: (r: { data: unknown; error: unknown }) => unknown) => {
           if (callCount === 1) {
             return resolve({ data: null, error: null });
           }

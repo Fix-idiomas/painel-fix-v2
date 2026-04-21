@@ -33,10 +33,10 @@ describe("studentGateway.listStudents", () => {
     mock.from();
     mock.from.mockImplementation(() => {
       callCount++;
-      const c = {
+      const c: Record<string, unknown> = {
         select: vi.fn(() => c),
         order: vi.fn(() => c),
-        then: (resolve) => {
+        then: (resolve: (r: { data: unknown; error: unknown }) => unknown) => {
           if (callCount === 1) {
             return resolve({ data: null, error: { message: "column photo_url does not exist" } });
           }
@@ -53,7 +53,7 @@ describe("studentGateway.listStudents", () => {
 
 describe("studentGateway.createStudent", () => {
   it("throws when name is missing", async () => {
-    await expect(studentGateway.createStudent({})).rejects.toThrow("Nome é obrigatório");
+    await expect(studentGateway.createStudent({} as never)).rejects.toThrow("Nome é obrigatório");
   });
 
   it("creates a student successfully", async () => {
@@ -97,7 +97,7 @@ describe("studentGateway.updateStudent", () => {
 describe("studentGateway.setStudentStatus", () => {
   it("rejects invalid status", async () => {
     await expect(
-      studentGateway.setStudentStatus("1", "foo")
+      studentGateway.setStudentStatus("1", "foo" as never)
     ).rejects.toThrow("status inválido");
   });
 
