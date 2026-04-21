@@ -36,7 +36,7 @@ describe("studentGateway.listStudents", () => {
       const c: Record<string, unknown> = {
         select: vi.fn(() => c),
         order: vi.fn(() => c),
-        then: (resolve: (r: { data: unknown; error: unknown }) => unknown) => {
+        then: (resolve: (_r: { data: unknown; error: unknown }) => unknown) => {
           if (callCount === 1) {
             return resolve({ data: null, error: { message: "column photo_url does not exist" } });
           }

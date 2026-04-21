@@ -88,7 +88,7 @@ describe("teacherGateway.sumTeacherPayoutByMonth", () => {
         gte: vi.fn(() => c),
         lt: vi.fn(() => c),
         single: vi.fn(() => c),
-        then: (resolve: (r: { data: unknown; error: unknown }) => unknown) => {
+        then: (resolve: (_r: { data: unknown; error: unknown }) => unknown) => {
           if (callCount === 1) {
             return resolve({ data: null, error: null });
           }

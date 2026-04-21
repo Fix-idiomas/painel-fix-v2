@@ -1,13 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { financeGateway } from "@/lib/financeGateway";
+import { sendMailgun } from "@/lib/mailgun";
 
 /**
  * Cron diário (configurado no vercel.json) para enviar lembretes de mensalidades em atraso.
  * - Agrupa por pagador (um e-mail por pessoa)
  * - Monta tabela HTML com os títulos em atraso
- * - Usa /api/send-mail para enviar
+ * - Chama Mailgun diretamente via helper (não faz HTTP para /api/send-mail)
  *
- * Teste local: GET http://localhost:3000/api/cron/dunning-reminders
+ * Proteção: requer header `Authorization: Bearer ${CRON_SECRET}`.
+ * A Vercel envia automaticamente esse header para rotas listadas em vercel.json/crons.
  */
 
 type PaymentRow = {
@@ -20,7 +22,13 @@ type PaymentRow = {
 
 type Payer = { id: string; name?: string; email?: string };
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const secret = process.env.CRON_SECRET;
+  const header = req.headers.get("authorization") || req.headers.get("Authorization");
+  if (!secret || header !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
+  }
+
   try {
     const ym = new Date().toISOString().slice(0, 7);
 
@@ -33,7 +41,7 @@ export async function GET() {
       return NextResponse.json({ ok: true, sent: 0, msg: "Sem pendências em atraso." });
     }
 
-    // 3) Payers do sistema (mock) → para mapear payer_id → email
+    // 3) Payers do sistema → para mapear payer_id → email
     const payers = (await financeGateway.listPayers()) as Payer[];
     const payerById = new Map<string, Payer>(payers.map((p) => [p.id, p]));
 
@@ -42,7 +50,7 @@ export async function GET() {
     for (const r of overdue) {
       const py = payerById.get(r.payer_id);
       const email = py?.email?.trim();
-      if (!email) continue; // sem e-mail não envia
+      if (!email) continue;
 
       if (!groups.has(r.payer_id)) groups.set(r.payer_id, []);
       groups.get(r.payer_id)!.push(r);
@@ -57,15 +65,13 @@ export async function GET() {
     }
 
     // 5) Enviar um e-mail por pagador com a lista de pendências
-    const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-    const results: Array<{ to: string; ok: boolean; status: number; json: unknown }> = [];
+    const results: Array<{ to: string; ok: boolean; status: number; detail: string | null }> = [];
 
     for (const [payer_id, items] of groups.entries()) {
       const payer = payerById.get(payer_id)!;
       const to = payer.email!;
       const payerName = payer.name || "Responsável";
 
-      // Monta uma tabelinha HTML com as pendências
       const tableRows = items
         .map(
           (r) => `
@@ -104,14 +110,13 @@ export async function GET() {
         </div>
       `;
 
-      const resp = await fetch(`${base}/api/send-mail`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, subject, html }),
+      const r = await sendMailgun({ to, subject, html });
+      results.push({
+        to,
+        ok: r.ok,
+        status: r.ok ? 200 : (r.status ?? 500),
+        detail: r.ok ? null : (r.error ?? null),
       });
-
-      const json = await resp.json().catch(() => ({}));
-      results.push({ to, ok: resp.ok, status: resp.status, json });
     }
 
     const sent = results.filter((r) => r.ok).length;

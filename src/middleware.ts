@@ -9,6 +9,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createMiddlewareClient } from '@supabase/auth-helpers-nextjs';
 
+// Rotas de debug/dev que não devem ser acessíveis em produção.
+const DEV_ONLY_PREFIXES = ['/debug-jwt', '/debug-payments', '/debug/', '/dev/'];
+
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
   const { pathname } = req.nextUrl;
@@ -16,6 +19,15 @@ export async function middleware(req: NextRequest) {
   // Ignora explicitamente assets já filtrados pelo matcher (defensive)
   if (pathname.startsWith('/_next') || pathname.startsWith('/api/')) {
     return res;
+  }
+
+  // Bloqueia rotas de debug em produção (NODE_ENV === 'production' cobre
+  // tanto deploys de produção quanto de preview no Vercel).
+  if (
+    process.env.NODE_ENV === 'production' &&
+    DEV_ONLY_PREFIXES.some((p) => pathname === p || pathname.startsWith(p))
+  ) {
+    return new NextResponse(null, { status: 404 });
   }
 
   const supabase = createMiddlewareClient({ req, res });

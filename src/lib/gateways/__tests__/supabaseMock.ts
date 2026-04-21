@@ -55,7 +55,7 @@ export function createSupabaseMock(): SupabaseMock {
       chain[m] = vi.fn(() => chain);
     }
     // Make it thenable so `await supabase.from(...).select(...)` works
-    chain.then = (resolve: (r: MockResult) => unknown) => resolve(mock._result);
+    chain.then = (resolve: (_r: MockResult) => unknown) => resolve(mock._result);
     return chain;
   }
 

@@ -2,77 +2,34 @@
 import { cookies } from "next/headers";
 import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
 import type { NextRequest } from "next/server";
-
-type SendMailBody = {
-  to: string | string[];
-  subject: string;
-  html?: string;
-  text?: string;
-};
+import { sendMailgun, type MailgunInput } from "@/lib/mailgun";
 
 export async function POST(req: NextRequest) {
   try {
-    const { to, subject, html, text } = (await req.json()) as SendMailBody;
-
-    if (!to || !subject || (!html && !text)) {
-      return new Response(JSON.stringify({ error: "Campos obrigatórios: to, subject e html ou text" }), { status: 400 });
+    const supabase = createRouteHandlerClient({ cookies });
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      return new Response(JSON.stringify({ error: "Não autenticado." }), { status: 401 });
     }
 
-    const API_KEY = process.env.MAILGUN_API_KEY;
-    const DOMAIN  = process.env.MAILGUN_DOMAIN;   // ex: "mg.seudominio.com"
-    const DEFAULT_FROM = process.env.MAILGUN_FROM || `Fix Idiomas <no-reply@${DOMAIN}>`;
+    const body = (await req.json()) as MailgunInput;
 
-    if (!API_KEY || !DOMAIN) {
-      return new Response(JSON.stringify({ error: "Config de Mailgun ausente (env vars)" }), { status: 500 });
-    }
-
-    // Tenta descobrir o brand do tenant atual (quando houver sessão)
+    // Descobre o brand do tenant atual, se houver
     let fromName: string | null = null;
     try {
-      const supabase = createRouteHandlerClient({ cookies });
       const { data: tenantId } = await supabase.rpc("current_tenant_id");
       if (tenantId) {
         const { data: settings } = await supabase.rpc("get_tenant_settings");
         const name = String(settings?.brand_name || "").trim();
         if (name) fromName = name;
       }
-    } catch { /* mantém o DEFAULT_FROM */ }
+    } catch { /* usa DEFAULT_FROM */ }
 
-    // Mantém o endereço do FROM (entre <...>) e troca apenas o nome, se disponível
-    const addrMatch = DEFAULT_FROM.match(/<([^>]+)>/);
-    const addr = addrMatch ? addrMatch[1] : `no-reply@${DOMAIN}`;
-    const FROM = fromName ? `${fromName} <${addr}>` : DEFAULT_FROM;
-
-    // aceita string "a@b,c@d" ou array
-    const recipients = Array.isArray(to)
-      ? to
-      : String(to).split(",").map((s) => s.trim()).filter(Boolean);
-
-    const form = new URLSearchParams();
-    form.set("from", FROM);
-    form.set("to", recipients.join(","));
-    form.set("subject", subject);
-    if (html) form.set("html", html);
-    if (text) form.set("text", text);
-
-    const res = await fetch(`https://api.mailgun.net/v3/${DOMAIN}/messages`, {
-      method: "POST",
-      headers: {
-        Authorization: "Basic " + (typeof btoa === "function"
-          ? btoa(`api:${API_KEY}`)
-          : Buffer.from(`api:${API_KEY}`).toString("base64")),
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: form.toString(),
-    });
-
-    if (!res.ok) {
-      const msg = await res.text();
-      return new Response(JSON.stringify({ error: "Falha Mailgun", detail: msg }), { status: 502 });
+    const result = await sendMailgun({ ...body, fromName });
+    if (result.ok) {
+      return new Response(JSON.stringify({ ok: true, id: result.id }), { status: 200 });
     }
-
-    const data = await res.json();
-    return new Response(JSON.stringify({ ok: true, id: data.id }), { status: 200 });
+    return new Response(JSON.stringify({ error: result.error ?? "Erro ao enviar e-mail." }), { status: result.status ?? 500 });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return new Response(JSON.stringify({ error: msg }), { status: 500 });
