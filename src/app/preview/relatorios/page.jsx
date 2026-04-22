@@ -117,15 +117,46 @@ export default function RelatoriosPreview() {
 
   const max = Math.max(1, ...data.map((x) => x.gross));
 
+  function handleExport() {
+    if (data.length === 0) return;
+    const rows = [
+      ["Mes", "Bruta", "Recebido", "Liquida", "Despesas"],
+      ...data.map((m) => [
+        m.ym,
+        m.gross.toFixed(2),
+        m.recebido.toFixed(2),
+        m.net.toFixed(2),
+        m.expenses.toFixed(2),
+      ]),
+    ];
+    const csv = rows
+      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(";"))
+      .join("\n");
+    const bom = "\uFEFF";
+    const blob = new Blob([bom + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `relatorio-receita-${currentYm()}-${n}m.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <PreviewShell
       active="relatorios"
       crumb="Análise"
       title="Relatórios"
       rightAction={
-        <button className="p-btn p-btn-ghost hidden sm:inline-flex">
+        <button
+          className="p-btn p-btn-ghost"
+          onClick={handleExport}
+          disabled={loading || data.length === 0}
+        >
           <Download className="h-4 w-4" />
-          <span>Exportar</span>
+          <span className="hidden sm:inline">Exportar</span>
         </button>
       }
     >

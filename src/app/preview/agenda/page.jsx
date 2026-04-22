@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PreviewShell from "../_components/PreviewShell";
+import PreviewModal, { FormError, ModalActions } from "../_components/PreviewModal";
 import { financeGateway } from "@/lib/financeGateway";
 import {
   ChevronLeft,
@@ -106,27 +107,30 @@ export default function AgendaPreview() {
   const [teacherMap, setTeacherMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  async function load() {
+    try {
+      setError(null);
+      const [tu, teachers] = await Promise.all([
+        financeGateway.listTurmas(),
+        financeGateway.listTeachers(),
+      ]);
+      setTurmas(Array.isArray(tu) ? tu : []);
+      const map = {};
+      for (const t of teachers || []) map[t.id] = t.name;
+      setTeacherMap(map);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const [tu, teachers] = await Promise.all([
-          financeGateway.listTurmas(),
-          financeGateway.listTeachers(),
-        ]);
-        if (cancelled) return;
-        setTurmas(Array.isArray(tu) ? tu : []);
-        const map = {};
-        for (const t of teachers || []) map[t.id] = t.name;
-        setTeacherMap(map);
-      } catch (e) {
-        if (!cancelled) setError(e?.message || String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -145,7 +149,7 @@ export default function AgendaPreview() {
       crumb="Planejamento"
       title="Agenda"
       rightAction={
-        <button className="p-btn p-btn-primary">
+        <button className="p-btn p-btn-primary" onClick={() => setModalOpen(true)}>
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Nova aula</span>
         </button>
@@ -346,7 +350,114 @@ export default function AgendaPreview() {
           </>
         )}
       </div>
+
+      {modalOpen && (
+        <NewSessionModal
+          turmas={turmas}
+          onClose={() => setModalOpen(false)}
+          onCreated={async () => {
+            setModalOpen(false);
+            await load();
+          }}
+        />
+      )}
     </PreviewShell>
+  );
+}
+
+function NewSessionModal({ turmas, onClose, onCreated }) {
+  const [turmaId, setTurmaId] = useState(turmas?.[0]?.id || "");
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [time, setTime] = useState("19:00");
+  const [durationHours, setDurationHours] = useState("1");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    if (!turmaId) { setErr("Selecione uma turma"); return; }
+    if (!date) { setErr("Data é obrigatória"); return; }
+    try {
+      setSaving(true);
+      const isoDate = `${date}T${time}:00`;
+      await financeGateway.createSession({
+        turma_id: turmaId,
+        date: isoDate,
+        duration_hours: Number(durationHours) || 1,
+        notes: notes.trim(),
+      });
+      await onCreated();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <PreviewModal title="Nova aula" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Turma *</span>
+          <select
+            autoFocus
+            value={turmaId}
+            onChange={(e) => setTurmaId(e.target.value)}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          >
+            <option value="">Selecione…</option>
+            {turmas.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Data *</span>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Horário</span>
+            <input
+              type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+        </div>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Duração (horas)</span>
+          <input
+            type="number"
+            step="0.5"
+            min="0.5"
+            value={durationHours}
+            onChange={(e) => setDurationHours(e.target.value)}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Notas</span>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={2}
+            placeholder="Opcional"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <ModalActions onCancel={onClose} submitting={saving} submitLabel="Cadastrar" submitIcon={saving ? Loader2 : Plus} />
+      </form>
+    </PreviewModal>
   );
 }
 

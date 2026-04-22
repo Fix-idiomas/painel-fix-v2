@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import PreviewShell from "../_components/PreviewShell";
+import PreviewModal, { FormError, ModalActions } from "../_components/PreviewModal";
 import { financeGateway } from "@/lib/financeGateway";
 import {
   DollarSign,
@@ -17,6 +18,8 @@ import {
   FolderTree,
   PlusCircle,
   Loader2,
+  Plus,
+  TrendingDown,
 } from "lucide-react";
 
 function money(v) {
@@ -65,35 +68,38 @@ export default function FinanceiroPreview() {
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  async function load() {
+    try {
+      setError(null);
+      const prev = previousYm(ym);
+      const [curr, prevK, pay, exp, rev, cats] = await Promise.all([
+        financeGateway.getCombinedRevenueKpis({ ym }),
+        financeGateway.getCombinedRevenueKpis({ ym: prev }),
+        financeGateway.listPayments({ ym }),
+        financeGateway.listExpenseEntries({ ym }),
+        financeGateway.listOtherRevenues({ ym }),
+        financeGateway.listExpenseCategories(),
+      ]);
+      setKpis(curr || { recebido: 0, a_receber: 0, atrasado: 0 });
+      setPrevKpis(prevK || { recebido: 0 });
+      setPayments(Array.isArray(pay?.rows) ? pay.rows : []);
+      setExpenses(Array.isArray(exp?.rows) ? exp.rows : []);
+      setExpenseKpis(exp?.kpis || { total: 0, paid: 0, pending: 0, overdue: 0 });
+      setRevenues(Array.isArray(rev) ? rev : Array.isArray(rev?.rows) ? rev.rows : []);
+      setCategories(Array.isArray(cats) ? cats : []);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const prev = previousYm(ym);
-        const [curr, prevK, pay, exp, rev, cats] = await Promise.all([
-          financeGateway.getCombinedRevenueKpis({ ym }),
-          financeGateway.getCombinedRevenueKpis({ ym: prev }),
-          financeGateway.listPayments({ ym }),
-          financeGateway.listExpenseEntries({ ym }),
-          financeGateway.listOtherRevenues({ ym }),
-          financeGateway.listExpenseCategories(),
-        ]);
-        if (cancelled) return;
-        setKpis(curr || { recebido: 0, a_receber: 0, atrasado: 0 });
-        setPrevKpis(prevK || { recebido: 0 });
-        setPayments(Array.isArray(pay?.rows) ? pay.rows : []);
-        setExpenses(Array.isArray(exp?.rows) ? exp.rows : []);
-        setExpenseKpis(exp?.kpis || { total: 0, paid: 0, pending: 0, overdue: 0 });
-        setRevenues(Array.isArray(rev) ? rev : Array.isArray(rev?.rows) ? rev.rows : []);
-        setCategories(Array.isArray(cats) ? cats : []);
-      } catch (e) {
-        if (!cancelled) setError(e?.message || String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [ym]);
@@ -196,9 +202,10 @@ export default function FinanceiroPreview() {
       crumb="Gestão"
       title="Financeiro"
       rightAction={
-        <button className="p-btn p-btn-primary hidden sm:inline-flex">
+        <button className="p-btn p-btn-primary" onClick={() => setModalOpen(true)}>
           <PlusCircle className="h-4 w-4" />
-          <span>Novo lançamento</span>
+          <span className="hidden sm:inline">Novo lançamento</span>
+          <span className="sm:hidden">Novo</span>
         </button>
       }
     >
@@ -319,6 +326,163 @@ export default function FinanceiroPreview() {
           </div>
         </section>
       </div>
+
+      {modalOpen && (
+        <NewLancamentoModal
+          ym={ym}
+          categories={categories}
+          onClose={() => setModalOpen(false)}
+          onCreated={async () => {
+            setModalOpen(false);
+            await load();
+          }}
+        />
+      )}
     </PreviewShell>
+  );
+}
+
+function NewLancamentoModal({ ym, categories, onClose, onCreated }) {
+  const [kind, setKind] = useState("expense");
+  const [title, setTitle] = useState("");
+  const [amount, setAmount] = useState("");
+  const [category, setCategory] = useState("");
+  const today = new Date().toISOString().slice(0, 10);
+  const [date, setDate] = useState(today);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const t = title.trim();
+    const a = Number(amount);
+    if (!t) { setErr("Título é obrigatório"); return; }
+    if (!Number.isFinite(a) || a <= 0) { setErr("Valor deve ser maior que zero"); return; }
+    if (!date) { setErr("Data é obrigatória"); return; }
+    try {
+      setSaving(true);
+      if (kind === "expense") {
+        await financeGateway.createOneOffExpense({
+          date,
+          amount: a,
+          title: t,
+          category: category || null,
+          cost_center: "PJ",
+        });
+      } else {
+        await financeGateway.createOtherRevenue({
+          ym,
+          title: t,
+          amount: a,
+          due_date: date,
+          category: category || null,
+          cost_center: "extra",
+        });
+      }
+      await onCreated();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <PreviewModal title="Novo lançamento" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+
+        <div className="inline-flex rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] p-1 text-sm self-start">
+          <button
+            type="button"
+            onClick={() => setKind("expense")}
+            className={[
+              "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 transition-colors",
+              kind === "expense"
+                ? "bg-[var(--p-danger)] text-white"
+                : "text-[var(--p-text-muted)] hover:text-[var(--p-text)]",
+            ].join(" ")}
+          >
+            <TrendingDown className="h-3.5 w-3.5" /> Despesa
+          </button>
+          <button
+            type="button"
+            onClick={() => setKind("revenue")}
+            className={[
+              "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 transition-colors",
+              kind === "revenue"
+                ? "bg-[var(--p-success)] text-white"
+                : "text-[var(--p-text-muted)] hover:text-[var(--p-text)]",
+            ].join(" ")}
+          >
+            <TrendingUp className="h-3.5 w-3.5" /> Receita
+          </button>
+        </div>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Título *</span>
+          <input
+            autoFocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder={kind === "expense" ? "Ex.: Conta de luz" : "Ex.: Taxa de matrícula"}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Valor (R$) *</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0,00"
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">
+              {kind === "expense" ? "Data *" : "Vencimento *"}
+            </span>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+        </div>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Categoria</span>
+          {kind === "expense" ? (
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            >
+              <option value="">Sem categoria</option>
+              {categories.map((c) => (
+                <option key={c.id || c.name} value={c.name}>{c.name}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              placeholder="Ex.: Matrícula"
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          )}
+        </label>
+
+        <ModalActions onCancel={onClose} submitting={saving} submitLabel="Cadastrar" submitIcon={saving ? Loader2 : Plus} />
+      </form>
+    </PreviewModal>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import PreviewShell from "../_components/PreviewShell";
 import { financeGateway } from "@/lib/financeGateway";
@@ -18,6 +18,7 @@ import {
   Clock,
   ArrowUpRight,
   Loader2,
+  Wallet,
 } from "lucide-react";
 
 function money(v) {
@@ -167,6 +168,38 @@ export default function DashboardPreview() {
   const [prevKpis, setPrevKpis] = useState({ recebido: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+  const [registering, setRegistering] = useState(null);
+
+  useEffect(() => {
+    function onDocClick(e) {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
+    }
+    if (menuOpen) document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [menuOpen]);
+
+  async function handleRegister(c) {
+    if (registering) return;
+    try {
+      setRegistering(c.id);
+      setError(null);
+      const today = new Date().toISOString().slice(0, 10);
+      const [tId] = String(c.id).split("-");
+      const dur = parseFloat(String(c.duration).replace(" min", "")) / 60;
+      await financeGateway.createSession({
+        turma_id: tId,
+        date: `${today}T${c.time}:00`,
+        duration_hours: Number.isFinite(dur) && dur > 0 ? dur : 1,
+      });
+      alert(`Aula "${c.title}" registrada.`);
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setRegistering(null);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -285,10 +318,40 @@ export default function DashboardPreview() {
       crumb="Painel"
       title="Início"
       rightAction={
-        <button className="p-btn p-btn-primary hidden sm:inline-flex">
-          <Plus className="h-4 w-4" />
-          <span>Novo</span>
-        </button>
+        <div ref={menuRef} className="relative">
+          <button
+            className="p-btn p-btn-primary"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+          >
+            <Plus className="h-4 w-4" />
+            <span>Novo</span>
+          </button>
+          {menuOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 top-full z-40 mt-1 w-56 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] p-1 shadow-lg"
+            >
+              {[
+                { icon: Users, label: "Novo aluno", href: "/preview/alunos" },
+                { icon: BookOpen, label: "Nova turma", href: "/preview/turmas" },
+                { icon: Wallet, label: "Novo lançamento", href: "/preview/financeiro" },
+                { icon: Calendar, label: "Nova aula", href: "/preview/agenda" },
+              ].map(({ icon: Icon, label, href }) => (
+                <Link
+                  key={label}
+                  href={href}
+                  className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-[var(--p-text)] hover:bg-[var(--p-surface-2)]"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <Icon className="h-4 w-4 text-[var(--p-text-muted)]" />
+                  {label}
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
       }
     >
       <div className="mx-auto w-full max-w-6xl px-4 py-6 md:px-8 md:py-10">
@@ -382,8 +445,16 @@ export default function DashboardPreview() {
                         Prof. {c.teacher}
                       </div>
                     </div>
-                    <button className="hidden sm:inline-flex p-btn p-btn-ghost text-xs h-8 px-3">
-                      Registrar
+                    <button
+                      className="hidden sm:inline-flex p-btn p-btn-ghost text-xs h-8 px-3"
+                      onClick={() => handleRegister(c)}
+                      disabled={registering === c.id}
+                    >
+                      {registering === c.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        "Registrar"
+                      )}
                     </button>
                   </li>
                 ))}

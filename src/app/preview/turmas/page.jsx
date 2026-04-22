@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import PreviewShell from "../_components/PreviewShell";
+import PreviewModal, { FormError, ModalActions, ConfirmDeleteModal } from "../_components/PreviewModal";
 import { financeGateway } from "@/lib/financeGateway";
 import { supabase } from "@/lib/supabaseClient";
 import {
@@ -10,7 +11,7 @@ import {
   Plus,
   Users,
   Clock,
-  MoreHorizontal,
+  Trash2,
   CheckCircle2,
   PauseCircle,
   BookOpen,
@@ -53,34 +54,40 @@ export default function TurmasPreview() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [teachers, setTeachers] = useState([]);
+  const [toDelete, setToDelete] = useState(null);
+
+  async function load() {
+    try {
+      setError(null);
+      const [tu, ts, membersRes] = await Promise.all([
+        financeGateway.listTurmas(),
+        financeGateway.listTeachers(),
+        supabase.from("turma_members").select("turma_id"),
+      ]);
+      if (membersRes?.error) throw new Error(membersRes.error.message);
+      setTurmas(Array.isArray(tu) ? tu : []);
+      setTeachers(Array.isArray(ts) ? ts : []);
+      const tMap = {};
+      for (const t of ts || []) tMap[t.id] = t.name;
+      setTeacherMap(tMap);
+      const counts = {};
+      for (const m of membersRes.data || []) {
+        counts[m.turma_id] = (counts[m.turma_id] || 0) + 1;
+      }
+      setMembersByTurma(counts);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const [tu, teachers, membersRes] = await Promise.all([
-          financeGateway.listTurmas(),
-          financeGateway.listTeachers(),
-          supabase.from("turma_members").select("turma_id"),
-        ]);
-        if (cancelled) return;
-        if (membersRes?.error) throw new Error(membersRes.error.message);
-        setTurmas(Array.isArray(tu) ? tu : []);
-        const tMap = {};
-        for (const t of teachers || []) tMap[t.id] = t.name;
-        setTeacherMap(tMap);
-        const counts = {};
-        for (const m of membersRes.data || []) {
-          counts[m.turma_id] = (counts[m.turma_id] || 0) + 1;
-        }
-        setMembersByTurma(counts);
-      } catch (e) {
-        if (!cancelled) setError(e?.message || String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -126,7 +133,7 @@ export default function TurmasPreview() {
       crumb="Ensino"
       title="Turmas"
       rightAction={
-        <button className="p-btn p-btn-primary">
+        <button className="p-btn p-btn-primary" onClick={() => setModalOpen(true)}>
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Nova turma</span>
           <span className="sm:hidden">Nova</span>
@@ -193,8 +200,12 @@ export default function TurmasPreview() {
                           Prof. {t._teacherName}
                         </div>
                       </div>
-                      <button className="-mr-1 rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]">
-                        <MoreHorizontal className="h-4 w-4" />
+                      <button
+                        onClick={() => setToDelete(t)}
+                        className="-mr-1 rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                        aria-label="Remover turma"
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
 
@@ -249,6 +260,145 @@ export default function TurmasPreview() {
           </div>
         )}
       </div>
+
+      {modalOpen && (
+        <NewTurmaModal
+          teachers={teachers}
+          onClose={() => setModalOpen(false)}
+          onCreated={async () => {
+            setModalOpen(false);
+            await load();
+          }}
+        />
+      )}
+
+      {toDelete && (
+        <ConfirmDeleteModal
+          title="Remover turma"
+          itemName={toDelete.name}
+          description="Os vínculos de alunos e sessões relacionadas podem ser afetados."
+          onCancel={() => setToDelete(null)}
+          onConfirm={async () => {
+            await financeGateway.deleteTurma(toDelete.id);
+            setToDelete(null);
+            await load();
+          }}
+        />
+      )}
     </PreviewShell>
+  );
+}
+
+function NewTurmaModal({ teachers, onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [teacherId, setTeacherId] = useState("");
+  const [capacity, setCapacity] = useState("10");
+  const [weekday, setWeekday] = useState("1");
+  const [time, setTime] = useState("19:00");
+  const [durationHours, setDurationHours] = useState("1");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const trimmed = name.trim();
+    if (!trimmed) { setErr("Nome é obrigatório"); return; }
+    try {
+      setSaving(true);
+      const meeting_rules = time
+        ? [{ weekday: Number(weekday), time, duration_hours: Number(durationHours) || 1 }]
+        : [];
+      await financeGateway.createTurma({
+        name: trimmed,
+        teacher_id: teacherId || null,
+        capacity: Math.max(1, Number(capacity) || 10),
+        meeting_rules,
+      });
+      await onCreated();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <PreviewModal title="Nova turma" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Nome *</span>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ex.: Turma Intermediário A"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Professor</span>
+            <select
+              value={teacherId}
+              onChange={(e) => setTeacherId(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            >
+              <option value="">Sem professor</option>
+              {teachers.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Capacidade</span>
+            <input
+              type="number"
+              min="1"
+              value={capacity}
+              onChange={(e) => setCapacity(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Dia</span>
+            <select
+              value={weekday}
+              onChange={(e) => setWeekday(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            >
+              {["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"].map((d, i) => (
+                <option key={i} value={i}>{d}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Horário</span>
+            <input
+              type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Duração (h)</span>
+            <input
+              type="number"
+              step="0.5"
+              min="0.5"
+              value={durationHours}
+              onChange={(e) => setDurationHours(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+        </div>
+        <p className="text-[11px] text-[var(--p-text-faint)]">Você poderá adicionar mais horários depois, ao editar a turma.</p>
+        <ModalActions onCancel={onClose} submitting={saving} submitLabel="Cadastrar" submitIcon={saving ? Loader2 : Plus} />
+      </form>
+    </PreviewModal>
   );
 }

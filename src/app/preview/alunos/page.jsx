@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PreviewShell from "../_components/PreviewShell";
+import PreviewModal, { FormError, ModalActions, ConfirmDeleteModal } from "../_components/PreviewModal";
 import { financeGateway } from "@/lib/financeGateway";
 import { supabase } from "@/lib/supabaseClient";
 import {
@@ -9,7 +10,7 @@ import {
   Plus,
   Filter,
   ChevronDown,
-  MoreHorizontal,
+  Trash2,
   CheckCircle2,
   PauseCircle,
   Users,
@@ -58,6 +59,17 @@ export default function AlunosPreview() {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("ativo");
   const [signedMap, setSignedMap] = useState({});
+  const [modalOpen, setModalOpen] = useState(false);
+  const [toDelete, setToDelete] = useState(null);
+
+  async function reload() {
+    try {
+      const rows = await financeGateway.listStudents();
+      setList(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -141,7 +153,7 @@ export default function AlunosPreview() {
       crumb="Cadastro"
       title="Alunos"
       rightAction={
-        <button className="p-btn p-btn-primary">
+        <button className="p-btn p-btn-primary" onClick={() => setModalOpen(true)}>
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Novo aluno</span>
           <span className="sm:hidden">Novo</span>
@@ -259,8 +271,12 @@ export default function AlunosPreview() {
                             </span>
                           </td>
                           <td className="px-5 py-3 text-right">
-                            <button className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]">
-                              <MoreHorizontal className="h-4 w-4" />
+                            <button
+                              onClick={() => setToDelete(s)}
+                              className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                              aria-label="Remover aluno"
+                            >
+                              <Trash2 className="h-4 w-4" />
                             </button>
                           </td>
                         </tr>
@@ -286,9 +302,18 @@ export default function AlunosPreview() {
                               {s.email || `Nasc.: ${formatBirth(s.birth_date)}`}
                             </div>
                           </div>
-                          <span className={`p-chip ${cls} shrink-0`}>
-                            <Icon className="h-3 w-3" /> {label}
-                          </span>
+                          <div className="flex shrink-0 items-start gap-1">
+                            <span className={`p-chip ${cls}`}>
+                              <Icon className="h-3 w-3" /> {label}
+                            </span>
+                            <button
+                              onClick={() => setToDelete(s)}
+                              className="rounded p-1 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                              aria-label="Remover aluno"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
                         </div>
                         <div className="mt-2 flex items-baseline justify-between text-xs">
                           <span className="text-[var(--p-text-muted)]">
@@ -322,7 +347,140 @@ export default function AlunosPreview() {
           </div>
         )}
       </div>
+
+      {modalOpen && (
+        <NewStudentModal
+          onClose={() => setModalOpen(false)}
+          onCreated={async () => {
+            setModalOpen(false);
+            await reload();
+          }}
+        />
+      )}
+
+      {toDelete && (
+        <ConfirmDeleteModal
+          title="Remover aluno"
+          itemName={toDelete.name}
+          description="Todas as mensalidades vinculadas podem ser afetadas. Esta ação não pode ser desfeita."
+          onCancel={() => setToDelete(null)}
+          onConfirm={async () => {
+            await financeGateway.deleteStudent(toDelete.id);
+            setToDelete(null);
+            await reload();
+          }}
+        />
+      )}
     </PreviewShell>
+  );
+}
+
+function NewStudentModal({ onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [monthlyValue, setMonthlyValue] = useState("");
+  const [dueDay, setDueDay] = useState("10");
+  const [birthDate, setBirthDate] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setErr("Nome é obrigatório");
+      return;
+    }
+    const dd = Number(dueDay);
+    if (!Number.isInteger(dd) || dd < 1 || dd > 28) {
+      setErr("Dia de vencimento deve ser entre 1 e 28");
+      return;
+    }
+    try {
+      setSaving(true);
+      await financeGateway.createStudent({
+        name: trimmed,
+        email: email.trim() || null,
+        monthly_value: Number(monthlyValue) || 0,
+        due_day: dd,
+        birth_date: birthDate || null,
+        status: "ativo",
+      });
+      await onCreated();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <PreviewModal title="Novo aluno" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Nome completo *</span>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ex.: Maria Silva"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">E-mail</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="aluno@exemplo.com"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Mensalidade (R$)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={monthlyValue}
+              onChange={(e) => setMonthlyValue(e.target.value)}
+              placeholder="0,00"
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Dia de vencimento</span>
+            <input
+              type="number"
+              min="1"
+              max="28"
+              value={dueDay}
+              onChange={(e) => setDueDay(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+        </div>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Data de nascimento</span>
+          <input
+            type="date"
+            value={birthDate}
+            onChange={(e) => setBirthDate(e.target.value)}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+
+        <ModalActions onCancel={onClose} submitting={saving} submitLabel="Cadastrar" submitIcon={saving ? Loader2 : Plus} />
+      </form>
+    </PreviewModal>
   );
 }
 

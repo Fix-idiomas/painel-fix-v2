@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PreviewShell from "../_components/PreviewShell";
+import PreviewModal, { FormError, ModalActions, ConfirmDeleteModal } from "../_components/PreviewModal";
 import { financeGateway } from "@/lib/financeGateway";
 import {
   Search,
@@ -9,7 +10,7 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
-  MoreHorizontal,
+  Trash2,
   Calendar,
   ChevronDown,
   Loader2,
@@ -59,22 +60,31 @@ export default function GastosPreview() {
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [categories, setCategories] = useState([]);
+  const [toDelete, setToDelete] = useState(null);
+
+  async function load() {
+    try {
+      setError(null);
+      const [res, cats] = await Promise.all([
+        financeGateway.listExpenseEntries({ ym }),
+        financeGateway.listExpenseCategories(),
+      ]);
+      setRows(Array.isArray(res?.rows) ? res.rows : []);
+      setKpis(res?.kpis || { total: 0, paid: 0, pending: 0, overdue: 0 });
+      setCategories(Array.isArray(cats) ? cats : []);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const res = await financeGateway.listExpenseEntries({ ym });
-        if (cancelled) return;
-        setRows(Array.isArray(res?.rows) ? res.rows : []);
-        setKpis(res?.kpis || { total: 0, paid: 0, pending: 0, overdue: 0 });
-      } catch (e) {
-        if (!cancelled) setError(e?.message || String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [ym]);
@@ -95,7 +105,7 @@ export default function GastosPreview() {
       crumb="Financeiro"
       title="Gastos"
       rightAction={
-        <button className="p-btn p-btn-primary">
+        <button className="p-btn p-btn-primary" onClick={() => setModalOpen(true)}>
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Novo gasto</span>
           <span className="sm:hidden">Novo</span>
@@ -191,8 +201,12 @@ export default function GastosPreview() {
                           <td className="px-5 py-3"><span className={`p-chip ${cls}`}><Icon className="h-3 w-3" /> {label}</span></td>
                           <td className="px-5 py-3 text-right font-semibold tabular-nums text-[var(--p-danger)]">−{money(r.amount)}</td>
                           <td className="px-5 py-3 text-right">
-                            <button className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]">
-                              <MoreHorizontal className="h-4 w-4" />
+                            <button
+                              onClick={() => setToDelete(r)}
+                              className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                              aria-label="Remover gasto"
+                            >
+                              <Trash2 className="h-4 w-4" />
                             </button>
                           </td>
                         </tr>
@@ -216,8 +230,17 @@ export default function GastosPreview() {
                             <div className="font-medium truncate">{r.title_snapshot || "—"}</div>
                             <span className={`p-chip ${cls} mt-1`}><Icon className="h-3 w-3" /> {label}</span>
                           </div>
-                          <div className="shrink-0 text-sm font-semibold tabular-nums text-[var(--p-danger)]">
-                            −{money(r.amount)}
+                          <div className="flex items-start gap-2 shrink-0">
+                            <div className="text-sm font-semibold tabular-nums text-[var(--p-danger)]">
+                              −{money(r.amount)}
+                            </div>
+                            <button
+                              onClick={() => setToDelete(r)}
+                              className="rounded p-1 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-danger)]"
+                              aria-label="Remover"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -229,7 +252,123 @@ export default function GastosPreview() {
           )}
         </div>
       </div>
+
+      {modalOpen && (
+        <NewExpenseModal
+          categories={categories}
+          ym={ym}
+          onClose={() => setModalOpen(false)}
+          onCreated={async () => {
+            setModalOpen(false);
+            await load();
+          }}
+        />
+      )}
+
+      {toDelete && (
+        <ConfirmDeleteModal
+          title="Remover gasto"
+          itemName={toDelete.title_snapshot || toDelete.title}
+          onCancel={() => setToDelete(null)}
+          onConfirm={async () => {
+            await financeGateway.deleteExpenseEntry(toDelete.id);
+            setToDelete(null);
+            await load();
+          }}
+        />
+      )}
     </PreviewShell>
+  );
+}
+
+function NewExpenseModal({ categories, ym, onClose, onCreated }) {
+  const [title, setTitle] = useState("");
+  const [amount, setAmount] = useState("");
+  const [category, setCategory] = useState("");
+  const [date, setDate] = useState(() => {
+    const [y, m] = ym.split("-");
+    return `${y}-${m}-${String(new Date().getDate()).padStart(2, "0")}`;
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const trimmed = title.trim();
+    if (!trimmed) { setErr("Descrição é obrigatória"); return; }
+    const amt = Number(amount);
+    if (!amt || amt <= 0) { setErr("Valor deve ser maior que zero"); return; }
+    try {
+      setSaving(true);
+      await financeGateway.createOneOffExpense({
+        title: trimmed,
+        amount: amt,
+        date,
+        category: category || null,
+        cost_center: "PJ",
+      });
+      await onCreated();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <PreviewModal title="Novo gasto" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Descrição *</span>
+          <input
+            autoFocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Ex.: Aluguel de novembro"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Valor (R$) *</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0,00"
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Vencimento</span>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+        </div>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Categoria</span>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          >
+            <option value="">Sem categoria</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.name}>{c.name}</option>
+            ))}
+          </select>
+        </label>
+        <ModalActions onCancel={onClose} submitting={saving} submitLabel="Cadastrar" submitIcon={saving ? Loader2 : Plus} />
+      </form>
+    </PreviewModal>
   );
 }
 

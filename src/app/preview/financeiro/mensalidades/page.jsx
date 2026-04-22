@@ -95,6 +95,76 @@ export default function MensalidadesPreview() {
 
   const total = rows.reduce((a, r) => a + Number(r.amount || 0), 0);
 
+  function handleExport() {
+    if (rows.length === 0) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const header = ["Aluno", "Vencimento", "Valor", "Pago em", "Status"];
+    const data = filtered.map((r) => {
+      let status = "Pendente";
+      if (r.status === "paid") status = "Pago";
+      else if (r.status === "canceled") status = "Cancelado";
+      else if (r.due_date && String(r.due_date).slice(0, 10) < today) status = `Atraso ${r.days_overdue || 0}d`;
+      return [
+        r.student_name || "",
+        r.due_date ? String(r.due_date).slice(0, 10) : "",
+        Number(r.amount || 0).toFixed(2),
+        r.paid_at ? String(r.paid_at).slice(0, 10) : "",
+        status,
+      ];
+    });
+    const csv = [header, ...data]
+      .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(";"))
+      .join("\n");
+    const bom = "\uFEFF";
+    const blob = new Blob([bom + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mensalidades-${ym}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleSendReminders() {
+    try {
+      setError(null);
+      const today = new Date().toISOString().slice(0, 10);
+      const overdue = rows.filter(
+        (r) => r.status === "pending" && r.due_date && String(r.due_date).slice(0, 10) < today
+      );
+      if (overdue.length === 0) {
+        alert("Nenhuma mensalidade em atraso.");
+        return;
+      }
+      const students = await financeGateway.listStudents();
+      const emailById = new Map();
+      for (const s of students || []) {
+        if (s.id && s.email) emailById.set(s.id, s.email);
+      }
+      const emails = overdue
+        .map((r) => emailById.get(r.student_id))
+        .filter(Boolean);
+      if (emails.length === 0) {
+        alert(
+          `${overdue.length} mensalidade(s) em atraso, mas nenhum aluno com e-mail cadastrado.`
+        );
+        return;
+      }
+      const subject = encodeURIComponent(`Lembrete: mensalidade em atraso — ${ymLabel(ym)}`);
+      const body = encodeURIComponent(
+        "Olá,\n\nIdentificamos que sua mensalidade está em atraso. " +
+          "Por favor, regularize o pagamento assim que possível.\n\n" +
+          "Em caso de dúvidas, entre em contato.\n\nObrigado."
+      );
+      const bcc = emails.join(",");
+      window.location.href = `mailto:?bcc=${bcc}&subject=${subject}&body=${body}`;
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
+
   return (
     <PreviewShell
       active="financeiro"
@@ -102,11 +172,19 @@ export default function MensalidadesPreview() {
       title="Mensalidades"
       rightAction={
         <div className="flex items-center gap-2">
-          <button className="p-btn p-btn-ghost hidden sm:inline-flex">
+          <button
+            className="p-btn p-btn-ghost hidden sm:inline-flex"
+            onClick={handleExport}
+            disabled={loading || rows.length === 0}
+          >
             <Download className="h-4 w-4" />
             <span>Exportar</span>
           </button>
-          <button className="p-btn p-btn-primary">
+          <button
+            className="p-btn p-btn-primary"
+            onClick={handleSendReminders}
+            disabled={loading}
+          >
             <Send className="h-4 w-4" />
             <span className="hidden sm:inline">Enviar lembretes</span>
           </button>

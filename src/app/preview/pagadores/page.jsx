@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PreviewShell from "../_components/PreviewShell";
+import PreviewModal, { FormError, ModalActions, ConfirmDeleteModal } from "../_components/PreviewModal";
 import { financeGateway } from "@/lib/financeGateway";
 import {
   Search,
   Plus,
   Mail,
-  MoreHorizontal,
+  Trash2,
   Users,
   Loader2,
 } from "lucide-react";
@@ -37,31 +38,35 @@ export default function PagadoresPreview() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [toDelete, setToDelete] = useState(null);
+
+  async function load() {
+    try {
+      setError(null);
+      const [py, st] = await Promise.all([
+        financeGateway.listPayers(),
+        financeGateway.listStudents(),
+      ]);
+      setPayers(Array.isArray(py) ? py : []);
+      const grouped = {};
+      for (const s of st || []) {
+        if (!s.payer_id) continue;
+        if (!grouped[s.payer_id]) grouped[s.payer_id] = [];
+        grouped[s.payer_id].push(s);
+      }
+      setStudentsByPayer(grouped);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const [py, st] = await Promise.all([
-          financeGateway.listPayers(),
-          financeGateway.listStudents(),
-        ]);
-        if (cancelled) return;
-        setPayers(Array.isArray(py) ? py : []);
-        const grouped = {};
-        for (const s of st || []) {
-          if (!s.payer_id) continue;
-          if (!grouped[s.payer_id]) grouped[s.payer_id] = [];
-          grouped[s.payer_id].push(s);
-        }
-        setStudentsByPayer(grouped);
-      } catch (e) {
-        if (!cancelled) setError(e?.message || String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -87,7 +92,7 @@ export default function PagadoresPreview() {
       crumb="Cadastro"
       title="Pagadores"
       rightAction={
-        <button className="p-btn p-btn-primary">
+        <button className="p-btn p-btn-primary" onClick={() => setModalOpen(true)}>
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Novo pagador</span>
           <span className="sm:hidden">Novo</span>
@@ -179,8 +184,12 @@ export default function PagadoresPreview() {
                             )}
                           </td>
                           <td className="px-5 py-3 text-right">
-                            <button className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]">
-                              <MoreHorizontal className="h-4 w-4" />
+                            <button
+                              onClick={() => setToDelete(p)}
+                              className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                              aria-label="Remover pagador"
+                            >
+                              <Trash2 className="h-4 w-4" />
                             </button>
                           </td>
                         </tr>
@@ -202,10 +211,21 @@ export default function PagadoresPreview() {
                         {initialsFrom(p.name)}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium truncate">{p.name || "—"}</div>
-                        {p.email && (
-                          <div className="text-xs text-[var(--p-text-muted)] truncate">{p.email}</div>
-                        )}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium truncate">{p.name || "—"}</div>
+                            {p.email && (
+                              <div className="text-xs text-[var(--p-text-muted)] truncate">{p.email}</div>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => setToDelete(p)}
+                            className="shrink-0 rounded p-1 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                            aria-label="Remover pagador"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
                         {students.length > 0 && (
                           <div className="mt-2 flex flex-wrap gap-1">
                             {students.slice(0, 3).map((s) => (
@@ -243,6 +263,86 @@ export default function PagadoresPreview() {
           </div>
         )}
       </div>
+
+      {modalOpen && (
+        <NewPayerModal
+          onClose={() => setModalOpen(false)}
+          onCreated={async () => {
+            setModalOpen(false);
+            await load();
+          }}
+        />
+      )}
+
+      {toDelete && (
+        <ConfirmDeleteModal
+          title="Remover pagador"
+          itemName={toDelete.name}
+          description={
+            (studentsByPayer[toDelete.id] || []).length > 0
+              ? `Este pagador tem ${(studentsByPayer[toDelete.id] || []).length} aluno(s) vinculado(s). Remova ou reatribua antes de continuar.`
+              : "Esta ação não pode ser desfeita."
+          }
+          onCancel={() => setToDelete(null)}
+          onConfirm={async () => {
+            await financeGateway.deletePayer(toDelete.id);
+            setToDelete(null);
+            await load();
+          }}
+        />
+      )}
     </PreviewShell>
+  );
+}
+
+function NewPayerModal({ onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const trimmed = name.trim();
+    if (!trimmed) { setErr("Nome é obrigatório"); return; }
+    try {
+      setSaving(true);
+      await financeGateway.createPayer({ name: trimmed, email: email.trim() || null });
+      await onCreated();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <PreviewModal title="Novo pagador" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Nome *</span>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ex.: João Silva"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">E-mail</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="pagador@exemplo.com"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <ModalActions onCancel={onClose} submitting={saving} submitLabel="Cadastrar" submitIcon={saving ? Loader2 : Plus} />
+      </form>
+    </PreviewModal>
   );
 }

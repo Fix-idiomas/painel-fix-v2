@@ -372,6 +372,7 @@ export const financeGateway = {
   listTeacherSessionsByMonth,
   updateTeacher,
   createTeacher,
+  deleteTeacher: (id: string) => supabaseGateway.deleteTeacher(id),
 
   // Cadastro
   listTeachers,

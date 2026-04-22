@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PreviewShell from "../../_components/PreviewShell";
+import PreviewModal, { FormError, ModalActions, ConfirmDeleteModal } from "../../_components/PreviewModal";
 import { financeGateway } from "@/lib/financeGateway";
 import {
   Plus,
   Trash2,
-  Edit3,
   TrendingUp,
   TrendingDown,
   Loader2,
@@ -28,30 +28,34 @@ export default function CategoriasPreview() {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [toDelete, setToDelete] = useState(null);
+
+  async function load() {
+    try {
+      setError(null);
+      const ym = currentYm();
+      const [cats, exp, rev, pay] = await Promise.all([
+        financeGateway.listExpenseCategories(),
+        financeGateway.listExpenseEntries({ ym }),
+        financeGateway.listOtherRevenues({ ym }),
+        financeGateway.listPayments({ ym }),
+      ]);
+      setExpenseCats(Array.isArray(cats) ? cats : []);
+      setExpenses(Array.isArray(exp?.rows) ? exp.rows : []);
+      setRevenues(Array.isArray(rev) ? rev : Array.isArray(rev?.rows) ? rev.rows : []);
+      setPayments(Array.isArray(pay?.rows) ? pay.rows : []);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const ym = currentYm();
-        const [cats, exp, rev, pay] = await Promise.all([
-          financeGateway.listExpenseCategories(),
-          financeGateway.listExpenseEntries({ ym }),
-          financeGateway.listOtherRevenues({ ym }),
-          financeGateway.listPayments({ ym }),
-        ]);
-        if (cancelled) return;
-        setExpenseCats(Array.isArray(cats) ? cats : []);
-        setExpenses(Array.isArray(exp?.rows) ? exp.rows : []);
-        setRevenues(Array.isArray(rev) ? rev : Array.isArray(rev?.rows) ? rev.rows : []);
-        setPayments(Array.isArray(pay?.rows) ? pay.rows : []);
-      } catch (e) {
-        if (!cancelled) setError(e?.message || String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -137,7 +141,7 @@ export default function CategoriasPreview() {
       crumb="Financeiro"
       title="Categorias"
       rightAction={
-        <button className="p-btn p-btn-primary">
+        <button className="p-btn p-btn-primary" onClick={() => setModalOpen(true)}>
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Nova categoria</span>
           <span className="sm:hidden">Nova</span>
@@ -235,14 +239,15 @@ export default function CategoriasPreview() {
                     <div className={["text-sm font-semibold tabular-nums", isRev ? "text-[var(--p-success)]" : "text-[var(--p-danger)]"].join(" ")}>
                       {c.count > 0 ? (isRev ? "+" : "−") + money(c.total) : "—"}
                     </div>
-                    <div className="flex items-center gap-1">
-                      <button className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]" aria-label="Editar">
-                        <Edit3 className="h-4 w-4" />
-                      </button>
-                      <button className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-danger)]" aria-label="Remover">
+                    {c.type === "expense" && !String(c.id).startsWith("exp-") && (
+                      <button
+                        onClick={() => setToDelete(c)}
+                        className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-danger)]"
+                        aria-label="Remover"
+                      >
                         <Trash2 className="h-4 w-4" />
                       </button>
-                    </div>
+                    )}
                   </li>
                 );
               })}
@@ -250,6 +255,72 @@ export default function CategoriasPreview() {
           )}
         </div>
       </div>
+
+      {modalOpen && (
+        <NewCategoryModal
+          onClose={() => setModalOpen(false)}
+          onCreated={async () => {
+            setModalOpen(false);
+            await load();
+          }}
+        />
+      )}
+
+      {toDelete && (
+        <ConfirmDeleteModal
+          title="Remover categoria"
+          itemName={toDelete.name}
+          description="Lançamentos já existentes mantêm o nome da categoria como texto, mas ela não aparecerá mais ao criar novos."
+          onCancel={() => setToDelete(null)}
+          onConfirm={async () => {
+            await financeGateway.deleteExpenseCategory(toDelete.id);
+            setToDelete(null);
+            await load();
+          }}
+        />
+      )}
     </PreviewShell>
+  );
+}
+
+function NewCategoryModal({ onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const trimmed = name.trim();
+    if (!trimmed) { setErr("Nome é obrigatório"); return; }
+    try {
+      setSaving(true);
+      await financeGateway.createExpenseCategory({ name: trimmed, active: true });
+      await onCreated();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <PreviewModal title="Nova categoria" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Nome *</span>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ex.: Marketing"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <p className="text-[11px] text-[var(--p-text-faint)]">Categorias são usadas para classificar gastos.</p>
+        <ModalActions onCancel={onClose} submitting={saving} submitLabel="Cadastrar" submitIcon={saving ? Loader2 : Plus} />
+      </form>
+    </PreviewModal>
   );
 }

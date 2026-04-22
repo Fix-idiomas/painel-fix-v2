@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PreviewShell from "../_components/PreviewShell";
+import PreviewModal, { FormError, ModalActions, ConfirmDeleteModal } from "../_components/PreviewModal";
 import { financeGateway } from "@/lib/financeGateway";
 import {
   Search,
@@ -11,7 +12,7 @@ import {
   BookOpen,
   DollarSign,
   CalendarCheck,
-  MoreHorizontal,
+  Trash2,
   CheckCircle2,
   PauseCircle,
   Users,
@@ -52,30 +53,34 @@ export default function ProfessoresPreview() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [toDelete, setToDelete] = useState(null);
+
+  async function load() {
+    try {
+      setError(null);
+      const [ts, tu] = await Promise.all([
+        financeGateway.listTeachers(),
+        financeGateway.listTurmas(),
+      ]);
+      setTeachers(Array.isArray(ts) ? ts : []);
+      const grouped = {};
+      for (const t of tu || []) {
+        if (!t.teacher_id) continue;
+        grouped[t.teacher_id] = (grouped[t.teacher_id] || 0) + 1;
+      }
+      setTurmasByTeacher(grouped);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const [ts, tu] = await Promise.all([
-          financeGateway.listTeachers(),
-          financeGateway.listTurmas(),
-        ]);
-        if (cancelled) return;
-        setTeachers(Array.isArray(ts) ? ts : []);
-        const grouped = {};
-        for (const t of tu || []) {
-          if (!t.teacher_id) continue;
-          grouped[t.teacher_id] = (grouped[t.teacher_id] || 0) + 1;
-        }
-        setTurmasByTeacher(grouped);
-      } catch (e) {
-        if (!cancelled) setError(e?.message || String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -105,7 +110,7 @@ export default function ProfessoresPreview() {
       crumb="Cadastro"
       title="Professores"
       rightAction={
-        <button className="p-btn p-btn-primary">
+        <button className="p-btn p-btn-primary" onClick={() => setModalOpen(true)}>
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Novo professor</span>
           <span className="sm:hidden">Novo</span>
@@ -185,8 +190,12 @@ export default function ProfessoresPreview() {
                             )}
                           </div>
                         </div>
-                        <button className="-mr-1 rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]">
-                          <MoreHorizontal className="h-4 w-4" />
+                        <button
+                          onClick={() => setToDelete(t)}
+                          className="-mr-1 rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-danger)]"
+                          aria-label="Remover"
+                        >
+                          <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
 
@@ -210,7 +219,137 @@ export default function ProfessoresPreview() {
           </div>
         )}
       </div>
+
+      {modalOpen && (
+        <NewTeacherModal
+          onClose={() => setModalOpen(false)}
+          onCreated={async () => {
+            setModalOpen(false);
+            await load();
+          }}
+        />
+      )}
+
+      {toDelete && (
+        <ConfirmDeleteModal
+          title="Remover professor"
+          itemName={toDelete.name}
+          description={
+            (turmasByTeacher[toDelete.id] || 0) > 0
+              ? `Este professor tem ${turmasByTeacher[toDelete.id]} turma(s) associada(s). As turmas ficarão sem professor atribuído.`
+              : "Esta ação não pode ser desfeita."
+          }
+          onCancel={() => setToDelete(null)}
+          onConfirm={async () => {
+            await financeGateway.deleteTeacher(toDelete.id);
+            setToDelete(null);
+            await load();
+          }}
+        />
+      )}
     </PreviewShell>
+  );
+}
+
+function NewTeacherModal({ onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [hourlyRate, setHourlyRate] = useState("");
+  const [payDay, setPayDay] = useState("5");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const trimmed = name.trim();
+    if (!trimmed) { setErr("Nome é obrigatório"); return; }
+    const pd = Number(payDay);
+    if (!Number.isInteger(pd) || pd < 1 || pd > 28) {
+      setErr("Dia de pagamento deve ser entre 1 e 28");
+      return;
+    }
+    try {
+      setSaving(true);
+      await financeGateway.createTeacher({
+        name: trimmed,
+        email: email.trim() || null,
+        phone: phone.trim() || null,
+        hourly_rate: Number(hourlyRate) || 0,
+        pay_day: pd,
+        status: "ativo",
+        rate_mode: "flat",
+      });
+      await onCreated();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <PreviewModal title="Novo professor" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Nome completo *</span>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ex.: Ana Costa"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">E-mail</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="professor@exemplo.com"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Telefone</span>
+          <input
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="(00) 00000-0000"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Valor/hora (R$)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={hourlyRate}
+              onChange={(e) => setHourlyRate(e.target.value)}
+              placeholder="0,00"
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Dia de pagamento</span>
+            <input
+              type="number"
+              min="1"
+              max="28"
+              value={payDay}
+              onChange={(e) => setPayDay(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+        </div>
+        <ModalActions onCancel={onClose} submitting={saving} submitLabel="Cadastrar" submitIcon={saving ? Loader2 : Plus} />
+      </form>
+    </PreviewModal>
   );
 }
 

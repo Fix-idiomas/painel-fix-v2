@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PreviewShell from "../../_components/PreviewShell";
+import PreviewModal, { FormError, ModalActions, ConfirmDeleteModal } from "../../_components/PreviewModal";
 import { financeGateway } from "@/lib/financeGateway";
 import {
   Search,
   Plus,
-  MoreHorizontal,
+  Trash2,
   Calendar,
   ChevronDown,
   Loader2,
@@ -39,22 +40,26 @@ export default function OutrasReceitasPreview() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [toDelete, setToDelete] = useState(null);
+
+  async function load() {
+    try {
+      setError(null);
+      const res = await financeGateway.listOtherRevenues({ ym });
+      const data = Array.isArray(res) ? res : Array.isArray(res?.rows) ? res.rows : [];
+      setRows(data);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const res = await financeGateway.listOtherRevenues({ ym });
-        if (cancelled) return;
-        const data = Array.isArray(res) ? res : Array.isArray(res?.rows) ? res.rows : [];
-        setRows(data);
-      } catch (e) {
-        if (!cancelled) setError(e?.message || String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [ym]);
@@ -76,7 +81,7 @@ export default function OutrasReceitasPreview() {
       crumb="Financeiro"
       title="Outras receitas"
       rightAction={
-        <button className="p-btn p-btn-primary">
+        <button className="p-btn p-btn-primary" onClick={() => setModalOpen(true)}>
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Nova receita</span>
           <span className="sm:hidden">Nova</span>
@@ -144,8 +149,12 @@ export default function OutrasReceitasPreview() {
                         <td className="px-5 py-3 text-xs text-[var(--p-text-muted)]">{r.status || "—"}</td>
                         <td className="px-5 py-3 text-right font-semibold tabular-nums text-[var(--p-success)]">+{money(r.amount)}</td>
                         <td className="px-5 py-3 text-right">
-                          <button className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]">
-                            <MoreHorizontal className="h-4 w-4" />
+                          <button
+                            onClick={() => setToDelete(r)}
+                            className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                            aria-label="Remover receita"
+                          >
+                            <Trash2 className="h-4 w-4" />
                           </button>
                         </td>
                       </tr>
@@ -166,8 +175,17 @@ export default function OutrasReceitasPreview() {
                           <div className="font-medium truncate">{r.title || "—"}</div>
                           {r.category && <span className="p-chip p-chip-neutral mt-1">{r.category}</span>}
                         </div>
-                        <div className="shrink-0 text-sm font-semibold tabular-nums text-[var(--p-success)]">
-                          +{money(r.amount)}
+                        <div className="flex items-start gap-2 shrink-0">
+                          <div className="text-sm font-semibold tabular-nums text-[var(--p-success)]">
+                            +{money(r.amount)}
+                          </div>
+                          <button
+                            onClick={() => setToDelete(r)}
+                            className="rounded p-1 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-danger)]"
+                            aria-label="Remover"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -185,7 +203,119 @@ export default function OutrasReceitasPreview() {
           </div>
         )}
       </div>
+
+      {modalOpen && (
+        <NewRevenueModal
+          ym={ym}
+          onClose={() => setModalOpen(false)}
+          onCreated={async () => {
+            setModalOpen(false);
+            await load();
+          }}
+        />
+      )}
+
+      {toDelete && (
+        <ConfirmDeleteModal
+          title="Remover receita"
+          itemName={toDelete.title}
+          onCancel={() => setToDelete(null)}
+          onConfirm={async () => {
+            await financeGateway.deleteOtherRevenue(toDelete.id);
+            setToDelete(null);
+            await load();
+          }}
+        />
+      )}
     </PreviewShell>
+  );
+}
+
+function NewRevenueModal({ ym, onClose, onCreated }) {
+  const [title, setTitle] = useState("");
+  const [amount, setAmount] = useState("");
+  const [category, setCategory] = useState("");
+  const [dueDate, setDueDate] = useState(() => {
+    const [y, m] = ym.split("-");
+    return `${y}-${m}-05`;
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const trimmed = title.trim();
+    if (!trimmed) { setErr("Descrição é obrigatória"); return; }
+    const amt = Number(amount);
+    if (!amt || amt <= 0) { setErr("Valor deve ser maior que zero"); return; }
+    try {
+      setSaving(true);
+      await financeGateway.createOtherRevenue({
+        ym,
+        title: trimmed,
+        amount: amt,
+        due_date: dueDate,
+        category: category.trim() || null,
+        cost_center: "extra",
+      });
+      await onCreated();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <PreviewModal title="Nova receita" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Descrição *</span>
+          <input
+            autoFocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Ex.: Aula particular"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Valor (R$) *</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0,00"
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Vencimento</span>
+            <input
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+        </div>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Categoria</span>
+          <input
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            placeholder="Ex.: Taxa de matrícula"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <ModalActions onCancel={onClose} submitting={saving} submitLabel="Cadastrar" submitIcon={saving ? Loader2 : Plus} />
+      </form>
+    </PreviewModal>
   );
 }
 

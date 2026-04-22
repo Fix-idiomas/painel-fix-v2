@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import PreviewShell from "../_components/PreviewShell";
+import PreviewModal, { FormError, ModalActions } from "../_components/PreviewModal";
 import { supabase } from "@/lib/supabaseClient";
+import { supabaseGateway } from "@/lib/supabaseGateway";
 import {
   Building2,
   Palette,
@@ -15,6 +17,9 @@ import {
   Save,
   ChevronRight,
   Loader2,
+  Check,
+  Copy,
+  Send,
 } from "lucide-react";
 
 const ROLE_LABEL = {
@@ -59,6 +64,14 @@ export default function ConfigMock() {
   const [tenant, setTenant] = useState(null);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState(null);
+  const [brandName, setBrandName] = useState("");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveOk, setSaveOk] = useState(false);
+  const [saveErr, setSaveErr] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const logoInputRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -125,6 +138,16 @@ export default function ConfigMock() {
           };
         });
         setUsers(rows);
+
+        try {
+          const s = await supabaseGateway.getTenantSettings?.();
+          if (!cancelled && s) {
+            setBrandName(s.brand_name || tn?.name || "");
+            setLogoUrl(s.logo_url || "");
+          } else if (!cancelled) {
+            setBrandName(tn?.name || "");
+          }
+        } catch { /* settings optional */ }
       } catch (e) {
         if (!cancelled) setUsersError(e?.message || String(e));
       } finally {
@@ -133,6 +156,60 @@ export default function ConfigMock() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  async function handleSave() {
+    if (saving) return;
+    try {
+      setSaving(true);
+      setSaveErr(null);
+      setSaveOk(false);
+      const payload = {};
+      const trimmed = (brandName || "").trim();
+      if (trimmed) payload.brand_name = trimmed;
+      if (logoUrl !== undefined) payload.logo_url = logoUrl || null;
+      await supabaseGateway.upsertTenantSettings(payload);
+      setSaveOk(true);
+      setTimeout(() => setSaveOk(false), 2500);
+    } catch (e) {
+      setSaveErr(e?.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleLogoChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setUploading(true);
+      setSaveErr(null);
+      let tenantId = tenant?.id;
+      if (!tenantId) {
+        const { data: t, error: te } = await supabase.rpc("current_tenant_id");
+        if (te) throw te;
+        tenantId = t;
+      }
+      if (!tenantId) throw new Error("Tenant ausente.");
+      const ext = file.name.split(".").pop()?.toLowerCase() || "png";
+      const path = `${tenantId}/logo-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("branding")
+        .upload(path, file, { upsert: true, cacheControl: "3600" });
+      if (upErr) throw upErr;
+      const { data } = supabase.storage.from("branding").getPublicUrl(path);
+      const publicUrl = data?.publicUrl;
+      if (!publicUrl) throw new Error("Falha ao obter URL pública.");
+      setLogoUrl(publicUrl);
+      await supabaseGateway.upsertTenantSettings({ logo_url: publicUrl });
+      setSaveOk(true);
+      setTimeout(() => setSaveOk(false), 2500);
+    } catch (e2) {
+      setSaveErr(e2?.message || String(e2));
+    } finally {
+      setUploading(false);
+      if (logoInputRef.current) logoInputRef.current.value = "";
+    }
+  }
 
   const sortedUsers = useMemo(() => {
     return [...users].sort((a, b) => {
@@ -148,9 +225,21 @@ export default function ConfigMock() {
       crumb="Sistema"
       title="Configurações"
       rightAction={
-        <button className="p-btn p-btn-primary hidden sm:inline-flex">
-          <Save className="h-4 w-4" />
-          <span>Salvar</span>
+        <button
+          className="p-btn p-btn-primary"
+          onClick={handleSave}
+          disabled={saving}
+        >
+          {saving ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : saveOk ? (
+            <Check className="h-4 w-4" />
+          ) : (
+            <Save className="h-4 w-4" />
+          )}
+          <span className="hidden sm:inline">
+            {saving ? "Salvando…" : saveOk ? "Salvo" : "Salvar"}
+          </span>
         </button>
       }
     >
@@ -161,6 +250,17 @@ export default function ConfigMock() {
             Ajustes da organização e preferências do sistema.
           </p>
         </div>
+
+        {saveErr && (
+          <div className="mb-4 rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-4 py-3 text-sm text-[var(--p-danger)]">
+            {saveErr}
+          </div>
+        )}
+        {saveOk && (
+          <div className="mb-4 rounded-lg border border-[var(--p-success)]/30 bg-[var(--p-success-50)] px-4 py-3 text-sm text-[var(--p-success)]">
+            Alterações salvas.
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_1fr] lg:gap-6">
           {/* Section list */}
@@ -193,7 +293,11 @@ export default function ConfigMock() {
             {active === "geral" && (
               <>
                 <Panel title="Organização" desc="Informações públicas da escola.">
-                  <Field label="Nome fantasia" value="Fix Idiomas" />
+                  <Field
+                    label="Nome fantasia"
+                    value={brandName}
+                    onChange={setBrandName}
+                  />
                   <Field label="Razão social" value="Fix Escola de Idiomas LTDA" />
                   <Field label="CNPJ" value="00.000.000/0001-00" />
                   <Field label="Telefone" value="(11) 99999-9999" />
@@ -211,11 +315,41 @@ export default function ConfigMock() {
             {active === "aparencia" && (
               <Panel title="Identidade visual" desc="Cores e logo exibidos nos e-mails e no painel.">
                 <div className="flex items-center gap-4">
-                  <div className="grid h-16 w-16 place-items-center rounded-xl bg-[var(--p-primary)] text-white text-xl font-semibold shadow-sm">F</div>
+                  {logoUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={logoUrl}
+                      alt="logo"
+                      className="h-16 w-16 rounded-xl object-cover shadow-sm"
+                    />
+                  ) : (
+                    <div className="grid h-16 w-16 place-items-center rounded-xl bg-[var(--p-primary)] text-white text-xl font-semibold shadow-sm">
+                      {(brandName || "F").slice(0, 1).toUpperCase()}
+                    </div>
+                  )}
                   <div>
                     <div className="text-sm font-medium">Logo atual</div>
                     <div className="text-xs text-[var(--p-text-muted)]">PNG · 512×512</div>
-                    <button className="p-btn p-btn-ghost mt-2 h-8 px-3 text-xs">Trocar logo</button>
+                    <input
+                      ref={logoInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleLogoChange}
+                      className="hidden"
+                    />
+                    <button
+                      className="p-btn p-btn-ghost mt-2 h-8 px-3 text-xs"
+                      onClick={() => logoInputRef.current?.click()}
+                      disabled={uploading}
+                    >
+                      {uploading ? (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin" /> Enviando…
+                        </>
+                      ) : (
+                        "Trocar logo"
+                      )}
+                    </button>
                   </div>
                 </div>
                 <div>
@@ -241,7 +375,14 @@ export default function ConfigMock() {
               <Panel
                 title="Equipe"
                 desc={tenant?.name ? `Membros de ${tenant.name}.` : "Quem tem acesso ao painel."}
-                action={<button className="p-btn p-btn-primary h-9 px-3 text-xs">Convidar</button>}
+                action={
+                  <button
+                    className="p-btn p-btn-primary h-9 px-3 text-xs"
+                    onClick={() => setInviteOpen(true)}
+                  >
+                    Convidar
+                  </button>
+                }
               >
                 {usersError && (
                   <div className="rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-3 py-2 text-xs text-[var(--p-danger)]">
@@ -289,7 +430,118 @@ export default function ConfigMock() {
           </div>
         </div>
       </div>
+
+      {inviteOpen && (
+        <InviteModal
+          tenant={tenant}
+          onClose={() => setInviteOpen(false)}
+        />
+      )}
     </PreviewShell>
+  );
+}
+
+function InviteModal({ tenant, onClose }) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("teacher");
+  const [err, setErr] = useState(null);
+  const [inviteUrl, setInviteUrl] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  function handleGenerate(e) {
+    e.preventDefault();
+    setErr(null);
+    const trimmed = email.trim();
+    if (!trimmed) { setErr("E-mail é obrigatório"); return; }
+    if (!tenant?.id) { setErr("Tenant não identificado."); return; }
+    const perms = { role };
+    const base = typeof window !== "undefined" ? window.location.origin : "";
+    const url = `${base}/accept-invite?tenant=${encodeURIComponent(tenant.id)}&perms=${encodeURIComponent(JSON.stringify(perms))}`;
+    setInviteUrl(url);
+  }
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      setErr(e?.message || "Falha ao copiar");
+    }
+  }
+
+  function handleMail() {
+    const subject = encodeURIComponent(`Convite para ${tenant?.name || "o painel"}`);
+    const body = encodeURIComponent(
+      `Olá,\n\nVocê foi convidado(a) para acessar o painel${tenant?.name ? ` de ${tenant.name}` : ""}.\n\nAcesse o link abaixo para aceitar o convite:\n\n${inviteUrl}\n\nAté logo!`
+    );
+    window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
+  }
+
+  return (
+    <PreviewModal title="Convidar membro" onClose={onClose}>
+      <form onSubmit={handleGenerate} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">E-mail *</span>
+          <input
+            autoFocus
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="pessoa@exemplo.com"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Papel</span>
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          >
+            <option value="admin">Administrador</option>
+            <option value="teacher">Professor</option>
+            <option value="staff">Operacional</option>
+          </select>
+        </label>
+
+        {!inviteUrl ? (
+          <ModalActions onCancel={onClose} submitting={false} submitLabel="Gerar link" submitIcon={Send} />
+        ) : (
+          <div className="flex flex-col gap-3">
+            <div className="rounded-lg border border-[var(--p-border)] bg-[var(--p-surface-2)] px-3 py-2 text-xs break-all text-[var(--p-text-muted)]">
+              {inviteUrl}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="p-btn p-btn-ghost h-9 px-3 text-xs"
+              >
+                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? "Copiado" : "Copiar link"}
+              </button>
+              <button
+                type="button"
+                onClick={handleMail}
+                className="p-btn p-btn-primary h-9 px-3 text-xs"
+              >
+                <Mail className="h-3.5 w-3.5" />
+                Enviar por e-mail
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="ml-auto p-btn p-btn-ghost h-9 px-3 text-xs"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        )}
+      </form>
+    </PreviewModal>
   );
 }
 
@@ -308,12 +560,14 @@ function Panel({ title, desc, action, children }) {
   );
 }
 
-function Field({ label, value }) {
+function Field({ label, value, onChange }) {
+  const controlled = typeof onChange === "function";
   return (
     <div className="grid gap-1 sm:grid-cols-[180px_1fr] sm:items-center sm:gap-4">
       <label className="text-xs font-medium text-[var(--p-text-muted)]">{label}</label>
       <input
-        defaultValue={value}
+        {...(controlled ? { value: value ?? "" } : { defaultValue: value })}
+        onChange={controlled ? (e) => onChange(e.target.value) : undefined}
         className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
       />
     </div>

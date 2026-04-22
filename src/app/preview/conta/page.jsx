@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PreviewShell from "../_components/PreviewShell";
 import { supabase } from "@/lib/supabaseClient";
 import {
@@ -12,6 +12,7 @@ import {
   Save,
   Camera,
   Loader2,
+  Check,
 } from "lucide-react";
 
 const TABS = [
@@ -54,6 +55,12 @@ export default function ContaPreview() {
   const [user, setUser] = useState(null);
   const [claim, setClaim] = useState(null);
   const [tenant, setTenant] = useState(null);
+  const [profile, setProfile] = useState({ name: "", phone: "" });
+  const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [avatarPreview, setAvatarPreview] = useState(null);
+  const fileRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,6 +98,14 @@ export default function ContaPreview() {
         if (cancelled) return;
         const c = claims?.[0] || null;
         setClaim(c);
+        setProfile({
+          name:
+            c?.user_name_snapshot ||
+            u?.user_metadata?.full_name ||
+            u?.user_metadata?.name ||
+            "",
+          phone: u?.user_metadata?.phone || "",
+        });
 
         if (!ownedTenants?.[0] && c?.tenant_id) {
           const { data: tn } = await supabase
@@ -109,11 +124,73 @@ export default function ContaPreview() {
     return () => { cancelled = true; };
   }, []);
 
-  const name = displayNameFrom(user, claim);
+  const name = profile.name || displayNameFrom(user, claim);
   const email = user?.email || "";
-  const phone = user?.user_metadata?.phone || "";
   const isOwner = !!(user && tenant && tenant.owner_user_id === user.id);
   const role = roleLabel(claim?.role, isOwner);
+
+  async function handleSave() {
+    if (!user || saving) return;
+    try {
+      setSaving(true);
+      setError(null);
+      setSaved(false);
+
+      if (tab === "seguranca") {
+        if (!pw.next || pw.next.length < 8) {
+          throw new Error("Nova senha deve ter ao menos 8 caracteres.");
+        }
+        if (pw.next !== pw.confirm) {
+          throw new Error("As senhas não coincidem.");
+        }
+        const { error: upErr } = await supabase.auth.updateUser({ password: pw.next });
+        if (upErr) throw upErr;
+        setPw({ current: "", next: "", confirm: "" });
+      } else {
+        const { error: upErr } = await supabase.auth.updateUser({
+          data: {
+            full_name: profile.name || null,
+            phone: profile.phone || null,
+          },
+        });
+        if (upErr) throw upErr;
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleAvatarChange(e) {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+    try {
+      setError(null);
+      setAvatarPreview(URL.createObjectURL(file));
+      const path = `${user.id}/avatar-${Date.now()}-${file.name}`;
+      const { error: upErr } = await supabase.storage
+        .from("avatars")
+        .upload(path, file, { upsert: true, cacheControl: "3600" });
+      if (upErr) throw upErr;
+      const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+      const publicUrl = data?.publicUrl;
+      if (publicUrl) {
+        const { error: metaErr } = await supabase.auth.updateUser({
+          data: { avatar_url: publicUrl },
+        });
+        if (metaErr) throw metaErr;
+      }
+    } catch (e2) {
+      setError(e2?.message || String(e2));
+    } finally {
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  const avatarUrl = avatarPreview || user?.user_metadata?.avatar_url || null;
 
   return (
     <PreviewShell
@@ -121,10 +198,24 @@ export default function ContaPreview() {
       crumb="Usuário"
       title="Minha conta"
       rightAction={
-        <button className="p-btn p-btn-primary hidden sm:inline-flex">
-          <Save className="h-4 w-4" />
-          <span>Salvar</span>
-        </button>
+        tab === "notificacoes" || tab === "preferencias" ? null : (
+          <button
+            className="p-btn p-btn-primary"
+            onClick={handleSave}
+            disabled={saving || !user}
+          >
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : saved ? (
+              <Check className="h-4 w-4" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            <span className="hidden sm:inline">
+              {saving ? "Salvando…" : saved ? "Salvo" : "Salvar"}
+            </span>
+          </button>
+        )
       }
     >
       <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-8 md:py-10">
@@ -146,10 +237,30 @@ export default function ContaPreview() {
           ) : (
             <div className="flex items-start gap-4">
               <div className="relative">
-                <div className="grid h-16 w-16 place-items-center rounded-full bg-[var(--p-primary)] text-white text-xl font-semibold shadow-sm">
-                  {initialsFrom(name, email)}
-                </div>
-                <button className="absolute -bottom-1 -right-1 grid h-7 w-7 place-items-center rounded-full border-2 border-[var(--p-surface)] bg-[var(--p-surface-2)] text-[var(--p-text-muted)] hover:bg-[var(--p-surface)] hover:text-[var(--p-text)]" aria-label="Trocar foto">
+                {avatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={avatarUrl}
+                    alt={name || "avatar"}
+                    className="h-16 w-16 rounded-full object-cover shadow-sm"
+                  />
+                ) : (
+                  <div className="grid h-16 w-16 place-items-center rounded-full bg-[var(--p-primary)] text-white text-xl font-semibold shadow-sm">
+                    {initialsFrom(name, email)}
+                  </div>
+                )}
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleAvatarChange}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  className="absolute -bottom-1 -right-1 grid h-7 w-7 place-items-center rounded-full border-2 border-[var(--p-surface)] bg-[var(--p-surface-2)] text-[var(--p-text-muted)] hover:bg-[var(--p-surface)] hover:text-[var(--p-text)]"
+                  aria-label="Trocar foto"
+                >
                   <Camera className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -191,10 +302,22 @@ export default function ContaPreview() {
 
         {tab === "perfil" && (
           <div className="p-card p-5 md:p-6 flex flex-col gap-4">
-            <Field label="Nome completo" value={name} />
-            <Field label="E-mail" value={email} type="email" />
-            <Field label="Telefone" value={phone} placeholder="(00) 00000-0000" />
-            <Field label="Cargo" value={role} />
+            <Field
+              label="Nome completo"
+              value={profile.name}
+              onChange={(v) => setProfile((p) => ({ ...p, name: v }))}
+            />
+            <Field label="E-mail" value={email} type="email" readOnly />
+            <Field
+              label="Telefone"
+              value={profile.phone}
+              onChange={(v) => setProfile((p) => ({ ...p, phone: v }))}
+              placeholder="(00) 00000-0000"
+            />
+            <Field label="Cargo" value={role} readOnly />
+            {saved && (
+              <div className="text-xs text-[var(--p-success)]">Alterações salvas.</div>
+            )}
           </div>
         )}
 
@@ -206,10 +329,30 @@ export default function ContaPreview() {
                 Use ao menos 8 caracteres, com letras e números.
               </p>
               <div className="mt-4 flex flex-col gap-3">
-                <Field label="Senha atual" value="" type="password" placeholder="••••••••" />
-                <Field label="Nova senha" value="" type="password" placeholder="mínimo 8 caracteres" />
-                <Field label="Confirmar nova senha" value="" type="password" />
+                <Field
+                  label="Senha atual"
+                  value={pw.current}
+                  onChange={(v) => setPw((p) => ({ ...p, current: v }))}
+                  type="password"
+                  placeholder="••••••••"
+                />
+                <Field
+                  label="Nova senha"
+                  value={pw.next}
+                  onChange={(v) => setPw((p) => ({ ...p, next: v }))}
+                  type="password"
+                  placeholder="mínimo 8 caracteres"
+                />
+                <Field
+                  label="Confirmar nova senha"
+                  value={pw.confirm}
+                  onChange={(v) => setPw((p) => ({ ...p, confirm: v }))}
+                  type="password"
+                />
               </div>
+              {saved && (
+                <div className="mt-3 text-xs text-[var(--p-success)]">Senha atualizada.</div>
+              )}
             </div>
             <div className="p-card p-5 md:p-6">
               <h2 className="text-sm font-semibold">Sessão atual</h2>
@@ -254,15 +397,23 @@ export default function ContaPreview() {
   );
 }
 
-function Field({ label, value, type = "text", placeholder }) {
+function Field({ label, value, type = "text", placeholder, onChange, readOnly }) {
+  const controlled = typeof onChange === "function";
   return (
     <div className="grid gap-1 sm:grid-cols-[180px_1fr] sm:items-center sm:gap-4">
       <label className="text-xs font-medium text-[var(--p-text-muted)]">{label}</label>
       <input
         type={type}
-        defaultValue={value}
+        {...(controlled ? { value: value ?? "" } : { defaultValue: value })}
+        onChange={controlled ? (e) => onChange(e.target.value) : undefined}
+        readOnly={readOnly}
         placeholder={placeholder}
-        className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+        className={[
+          "w-full rounded-lg border border-[var(--p-border)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40",
+          readOnly
+            ? "bg-[var(--p-surface-2)] text-[var(--p-text-muted)] cursor-not-allowed"
+            : "bg-[var(--p-surface)]",
+        ].join(" ")}
       />
     </div>
   );
