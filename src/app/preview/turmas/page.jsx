@@ -54,6 +54,7 @@ export default function TurmasPreview() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
+  const [teacherFilter, setTeacherFilter] = useState("all");
   const [modalOpen, setModalOpen] = useState(false);
   const [teachers, setTeachers] = useState([]);
   const [toDelete, setToDelete] = useState(null);
@@ -119,13 +120,18 @@ export default function TurmasPreview() {
 
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase();
-    if (!term) return decorated;
     return decorated.filter((t) => {
+      if (teacherFilter === "none") {
+        if (t.teacher_id) return false;
+      } else if (teacherFilter !== "all") {
+        if (t.teacher_id !== teacherFilter) return false;
+      }
+      if (!term) return true;
       const n = String(t.name || "").toLowerCase();
       const tn = String(t._teacherName || "").toLowerCase();
       return n.includes(term) || tn.includes(term);
     });
-  }, [decorated, q]);
+  }, [decorated, q, teacherFilter]);
 
   return (
     <PreviewShell
@@ -150,8 +156,8 @@ export default function TurmasPreview() {
           </p>
         </div>
 
-        <div className="mb-5">
-          <div className="relative max-w-md">
+        <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative w-full sm:max-w-md">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--p-text-faint)]" />
             <input
               value={q}
@@ -160,6 +166,18 @@ export default function TurmasPreview() {
               className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] py-2.5 pl-9 pr-3 text-sm placeholder:text-[var(--p-text-faint)] focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
             />
           </div>
+          <select
+            value={teacherFilter}
+            onChange={(e) => setTeacherFilter(e.target.value)}
+            aria-label="Filtrar por professor"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40 sm:w-56"
+          >
+            <option value="all">Todos os professores</option>
+            <option value="none">Sem professor</option>
+            {teachers.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
         </div>
 
         {error && (
