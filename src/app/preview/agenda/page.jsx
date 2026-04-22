@@ -46,6 +46,12 @@ function mondayOfThisWeek() {
   d.setHours(0, 0, 0, 0);
   return d;
 }
+function todayDayIdx() {
+  // Grid is Mon..Sat → index 0..5. Sunday falls back to Monday.
+  const dow = new Date().getDay(); // 0=Sun..6=Sat
+  if (dow === 0) return 0;
+  return dow - 1;
+}
 function addDays(date, n) {
   const d = new Date(date);
   d.setDate(d.getDate() + n);
@@ -100,8 +106,8 @@ function buildEvents(turmas, teacherMap) {
 }
 
 export default function AgendaPreview() {
-  const [view, setView] = useState("week");
-  const [day, setDay] = useState(0);
+  const [view, setView] = useState("day");
+  const [day, setDay] = useState(todayDayIdx);
   const [weekStart, setWeekStart] = useState(mondayOfThisWeek());
   const [turmas, setTurmas] = useState([]);
   const [teacherMap, setTeacherMap] = useState({});
