@@ -1,0 +1,101 @@
+/* Preview-only design tokens. Does NOT affect the real app. */
+.preview-root {
+  /* Brand (kept) */
+  --p-primary: #8B1C2C;
+  --p-primary-600: #7a1927;
+  --p-primary-700: #681522;
+  --p-primary-50: #fdf2f4;
+  --p-primary-100: #fbe4e8;
+
+  /* Accent */
+  --p-accent: #E94F37;
+
+  /* Surfaces & neutrals */
+  --p-bg: #F8F7F5;
+  --p-surface: #FFFFFF;
+  --p-surface-2: #FBFAF8;
+  --p-border: #EAE8E3;
+  --p-border-strong: #D6D3CC;
+
+  /* Text */
+  --p-text: #18120F;
+  --p-text-muted: #6B6259;
+  --p-text-faint: #9A9189;
+
+  /* States */
+  --p-success: #16A34A;
+  --p-success-50: #F0FDF4;
+  --p-warning: #D97706;
+  --p-warning-50: #FFFBEB;
+  --p-danger: #DC2626;
+  --p-danger-50: #FEF2F2;
+
+  /* Elevation */
+  --p-shadow-sm: 0 1px 2px rgba(24, 18, 15, 0.04), 0 1px 1px rgba(24, 18, 15, 0.03);
+  --p-shadow: 0 2px 6px rgba(24, 18, 15, 0.05), 0 1px 2px rgba(24, 18, 15, 0.04);
+  --p-shadow-md: 0 6px 16px rgba(24, 18, 15, 0.06), 0 2px 4px rgba(24, 18, 15, 0.04);
+  --p-shadow-lg: 0 12px 32px rgba(24, 18, 15, 0.08), 0 4px 8px rgba(24, 18, 15, 0.04);
+
+  /* Radius */
+  --p-radius-sm: 8px;
+  --p-radius: 12px;
+  --p-radius-lg: 16px;
+  --p-radius-xl: 20px;
+
+  color: var(--p-text);
+}
+
+/* Utility helpers scoped to preview */
+.preview-root .p-card {
+  background: var(--p-surface);
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-lg);
+  box-shadow: var(--p-shadow-sm);
+}
+.preview-root .p-card-hover:hover {
+  box-shadow: var(--p-shadow-md);
+  transition: box-shadow 150ms ease;
+}
+.preview-root .p-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 2.5rem;
+  padding: 0 1rem;
+  border-radius: var(--p-radius-sm);
+  font-weight: 500;
+  font-size: 0.875rem;
+  transition: all 150ms ease;
+  cursor: pointer;
+}
+.preview-root .p-btn-primary {
+  background: var(--p-primary);
+  color: #fff;
+  box-shadow: var(--p-shadow-sm);
+}
+.preview-root .p-btn-primary:hover { background: var(--p-primary-600); box-shadow: var(--p-shadow); }
+.preview-root .p-btn-ghost { background: transparent; color: var(--p-text); border: 1px solid var(--p-border); }
+.preview-root .p-btn-ghost:hover { background: var(--p-surface-2); border-color: var(--p-border-strong); }
+
+.preview-root .p-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 1.5rem;
+  padding: 0 0.625rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+.preview-root .p-chip-success { background: var(--p-success-50); color: var(--p-success); border-color: #bbf7d0; }
+.preview-root .p-chip-warning { background: var(--p-warning-50); color: var(--p-warning); border-color: #fde68a; }
+.preview-root .p-chip-danger  { background: var(--p-danger-50);  color: var(--p-danger);  border-color: #fecaca; }
+.preview-root .p-chip-neutral { background: var(--p-surface-2); color: var(--p-text-muted); border-color: var(--p-border); }
+
+.preview-root .p-kpi-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
