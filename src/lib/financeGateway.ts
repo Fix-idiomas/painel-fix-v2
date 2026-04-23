@@ -297,7 +297,7 @@ async function generateMonth({ ym }: { ym: string }) {
   return supabaseGateway.generateMonth({ ym });
 }
 async function deleteExpenseEntry(id: string, _opts?: Dict) {
-  return (supabaseGateway as unknown as { deleteExpenseEntry: (_: string) => Promise<unknown> }).deleteExpenseEntry(id);
+  return supabaseGateway.deleteExpenseEntry(id);
 }
 async function createTurma(payload: Dict) {
   return supabaseGateway.createTurma(payload);

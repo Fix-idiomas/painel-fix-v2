@@ -271,6 +271,16 @@ export const expenseGateway = {
     return true;
   },
 
+  async deleteExpenseEntry(id: string) {
+    if (!id) throw new Error("deleteExpenseEntry: 'id' é obrigatório");
+    const { error } = await supabase
+      .from("expense_entries")
+      .delete()
+      .eq("id", id);
+    if (error) throw new Error(`deleteExpenseEntry: ${error.message}`);
+    return true;
+  },
+
   async createExpenseEntry({
     due_date,
     amount,
