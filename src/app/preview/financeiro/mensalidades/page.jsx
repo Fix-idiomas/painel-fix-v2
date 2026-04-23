@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import PreviewShell from "../../_components/PreviewShell";
 import { financeGateway } from "@/lib/financeGateway";
 import {
@@ -14,6 +14,9 @@ import {
   Send,
   MoreHorizontal,
   Loader2,
+  Check,
+  RotateCcw,
+  XCircle,
 } from "lucide-react";
 
 function currentYm() {
@@ -57,25 +60,64 @@ export default function MensalidadesPreview() {
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
+  const [busyId, setBusyId] = useState(null);
+
+  async function load() {
+    try {
+      setError(null);
+      const res = await financeGateway.listPayments({ ym });
+      setRows(Array.isArray(res?.rows) ? res.rows : []);
+      setKpis(res?.kpis || { receita_a_receber: 0, receita_recebida: 0, receita_atrasada: 0 });
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const res = await financeGateway.listPayments({ ym });
-        if (cancelled) return;
-        setRows(Array.isArray(res?.rows) ? res.rows : []);
-        setKpis(res?.kpis || { receita_a_receber: 0, receita_recebida: 0, receita_atrasada: 0 });
-      } catch (e) {
-        if (!cancelled) setError(e?.message || String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [ym]);
+
+  async function handleMarkPaid(id) {
+    try {
+      setBusyId(id);
+      await financeGateway.markPaid(id);
+      await load();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function handleReopen(id) {
+    try {
+      setBusyId(id);
+      await financeGateway.reopenPayment(id);
+      await load();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function handleCancel(id) {
+    const note = window.prompt("Motivo do cancelamento (opcional):") ?? undefined;
+    if (note === undefined) return;
+    try {
+      setBusyId(id);
+      await financeGateway.cancelPayment(id, note || null);
+      await load();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   const filtered = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
@@ -280,9 +322,13 @@ export default function MensalidadesPreview() {
                           <td className="px-5 py-3 tabular-nums text-[var(--p-text-muted)]">{fdate(r.paid_at)}</td>
                           <td className="px-5 py-3"><span className={`p-chip ${cls}`}><Icon className="h-3 w-3" /> {label}</span></td>
                           <td className="px-5 py-3 text-right">
-                            <button className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </button>
+                            <RowActions
+                              row={r}
+                              busy={busyId === r.id}
+                              onMarkPaid={() => handleMarkPaid(r.id)}
+                              onReopen={() => handleReopen(r.id)}
+                              onCancel={() => handleCancel(r.id)}
+                            />
                           </td>
                         </tr>
                       );
@@ -302,9 +348,18 @@ export default function MensalidadesPreview() {
                             <div className="font-medium truncate">{r.student_name || "—"}</div>
                             <div className="text-xs text-[var(--p-text-muted)]">Venc.: {fdate(r.due_date)}</div>
                           </div>
-                          <div className="shrink-0 text-right">
-                            <div className="text-sm font-semibold tabular-nums">{money(r.amount)}</div>
-                            <span className={`p-chip ${cls} mt-1`}><Icon className="h-3 w-3" /> {label}</span>
+                          <div className="flex items-start gap-2 shrink-0">
+                            <div className="text-right">
+                              <div className="text-sm font-semibold tabular-nums">{money(r.amount)}</div>
+                              <span className={`p-chip ${cls} mt-1`}><Icon className="h-3 w-3" /> {label}</span>
+                            </div>
+                            <RowActions
+                              row={r}
+                              busy={busyId === r.id}
+                              onMarkPaid={() => handleMarkPaid(r.id)}
+                              onReopen={() => handleReopen(r.id)}
+                              onCancel={() => handleCancel(r.id)}
+                            />
                           </div>
                         </div>
                         {r.paid_at && (
@@ -339,6 +394,74 @@ function SumCard({ label, value, tone }) {
     <div className="p-card p-4">
       <div className="text-xs text-[var(--p-text-muted)]">{label}</div>
       <div className={`p-kpi-value mt-1 text-lg md:text-xl ${toneCls}`}>{value}</div>
+    </div>
+  );
+}
+
+function RowActions({ row, busy, onMarkPaid, onReopen, onCancel }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handler(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const canMarkPaid = row.status === "pending";
+  const canReopen = row.status === "paid" || row.status === "canceled";
+  const canCancel = row.status !== "canceled";
+
+  function run(fn) {
+    setOpen(false);
+    fn();
+  }
+
+  return (
+    <div ref={ref} className="relative inline-block">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => setOpen((v) => !v)}
+        className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] disabled:opacity-50"
+        aria-label="Ações"
+      >
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
+      </button>
+      {open && (
+        <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] shadow-lg">
+          {canMarkPaid && (
+            <button
+              type="button"
+              onClick={() => run(onMarkPaid)}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--p-surface-2)]"
+            >
+              <Check className="h-4 w-4 text-[var(--p-success)]" /> Marcar como pago
+            </button>
+          )}
+          {canReopen && (
+            <button
+              type="button"
+              onClick={() => run(onReopen)}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--p-surface-2)]"
+            >
+              <RotateCcw className="h-4 w-4 text-[var(--p-text-muted)]" /> Reabrir
+            </button>
+          )}
+          {canCancel && (
+            <button
+              type="button"
+              onClick={() => run(onCancel)}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--p-danger)] hover:bg-[var(--p-danger-50)]"
+            >
+              <XCircle className="h-4 w-4" /> Cancelar
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
