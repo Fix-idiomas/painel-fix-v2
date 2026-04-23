@@ -61,8 +61,8 @@ function fmtRelative(iso) {
 
 export default function FinanceiroPreview() {
   const [ym] = useState(currentYm());
-  const [kpis, setKpis] = useState({ recebido: 0, a_receber: 0, atrasado: 0 });
-  const [prevKpis, setPrevKpis] = useState({ recebido: 0 });
+  const [kpis, setKpis] = useState({ received: 0, upcoming: 0, overdue: 0 });
+  const [prevKpis, setPrevKpis] = useState({ received: 0 });
   const [expenseKpis, setExpenseKpis] = useState({ total: 0, paid: 0, pending: 0, overdue: 0 });
   const [payments, setPayments] = useState([]);
   const [expenses, setExpenses] = useState([]);
@@ -85,8 +85,8 @@ export default function FinanceiroPreview() {
         financeGateway.listOtherRevenues({ ym }),
         financeGateway.listExpenseCategories(),
       ]);
-      setKpis(curr || { recebido: 0, a_receber: 0, atrasado: 0 });
-      setPrevKpis(prevK || { recebido: 0 });
+      setKpis(curr || { received: 0, upcoming: 0, overdue: 0 });
+      setPrevKpis(prevK || { received: 0 });
       setPayments(Array.isArray(pay?.rows) ? pay.rows : []);
       setExpenses(Array.isArray(exp?.rows) ? exp.rows : []);
       setExpenseKpis(exp?.kpis || { total: 0, paid: 0, pending: 0, overdue: 0 });
@@ -107,12 +107,12 @@ export default function FinanceiroPreview() {
     return () => { cancelled = true; };
   }, [ym]);
 
-  const recebido = Number(kpis?.recebido || 0);
-  const aReceber = Number(kpis?.a_receber || 0);
-  const atrasado = Number(kpis?.atrasado || 0);
-  const gross = recebido + aReceber + atrasado;
+  const recebido = Number(kpis?.received || 0);
+  const aReceber = Number(kpis?.upcoming || 0);
+  const atrasado = Number(kpis?.overdue || 0);
+  const gross = Number(kpis?.total || recebido + aReceber + atrasado);
   const net = recebido - Number(expenseKpis?.paid || 0);
-  const prevRecebido = Number(prevKpis?.recebido || 0);
+  const prevRecebido = Number(prevKpis?.received || 0);
   const delta = percentDelta(recebido, prevRecebido);
 
   const paidPayments = payments.filter((p) => p.status === "paid");
