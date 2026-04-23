@@ -86,6 +86,7 @@ describe("barrel re-export (supabaseGateway)", () => {
     expect(typeof supabaseGateway.deleteExpenseTemplate).toBe("function");
     expect(typeof supabaseGateway.listExpenseEntries).toBe("function");
     expect(typeof supabaseGateway.createExpenseEntry).toBe("function");
+    expect(typeof supabaseGateway.deleteExpenseEntry).toBe("function");
     expect(typeof supabaseGateway.createOneOffExpense).toBe("function");
     expect(typeof supabaseGateway.markExpensePaid).toBe("function");
     expect(typeof supabaseGateway.cancelExpense).toBe("function");

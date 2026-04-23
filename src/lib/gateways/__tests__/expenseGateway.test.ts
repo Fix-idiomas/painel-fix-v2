@@ -125,6 +125,23 @@ describe("expenseGateway.deleteExpenseTemplate", () => {
   });
 });
 
+describe("expenseGateway.deleteExpenseEntry", () => {
+  it("throws when id is missing", async () => {
+    await expect(expenseGateway.deleteExpenseEntry("")).rejects.toThrow("obrigatório");
+  });
+
+  it("deletes when id is provided", async () => {
+    mock._result = { data: null, error: null };
+    await expect(expenseGateway.deleteExpenseEntry("abc")).resolves.toBe(true);
+    expect(mock.from).toHaveBeenCalledWith("expense_entries");
+  });
+
+  it("surfaces supabase errors", async () => {
+    mock._result = { data: null, error: { message: "fk constraint" } };
+    await expect(expenseGateway.deleteExpenseEntry("abc")).rejects.toThrow("fk constraint");
+  });
+});
+
 describe("expenseGateway.listExpenseEntries", () => {
   it("calculates days_overdue", async () => {
     mock._result = {
