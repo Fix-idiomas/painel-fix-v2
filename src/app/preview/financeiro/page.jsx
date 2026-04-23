@@ -20,6 +20,8 @@ import {
   Loader2,
   Plus,
   TrendingDown,
+  Sparkles,
+  Calendar,
 } from "lucide-react";
 
 function money(v) {
@@ -69,6 +71,7 @@ export default function FinanceiroPreview() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   async function load() {
     try {
@@ -202,11 +205,17 @@ export default function FinanceiroPreview() {
       crumb="Gestão"
       title="Financeiro"
       rightAction={
-        <button className="p-btn p-btn-primary" onClick={() => setModalOpen(true)}>
-          <PlusCircle className="h-4 w-4" />
-          <span className="hidden sm:inline">Novo lançamento</span>
-          <span className="sm:hidden">Novo</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button className="p-btn p-btn-ghost" onClick={() => setPreviewOpen(true)}>
+            <Sparkles className="h-4 w-4" />
+            <span className="hidden sm:inline">Prévia</span>
+          </button>
+          <button className="p-btn p-btn-primary" onClick={() => setModalOpen(true)}>
+            <PlusCircle className="h-4 w-4" />
+            <span className="hidden sm:inline">Novo lançamento</span>
+            <span className="sm:hidden">Novo</span>
+          </button>
+        </div>
       }
     >
       <div className="mx-auto w-full max-w-6xl px-4 py-6 md:px-8 md:py-10">
@@ -338,7 +347,190 @@ export default function FinanceiroPreview() {
           }}
         />
       )}
+
+      {previewOpen && (
+        <PreviewMonthModal
+          ym={ym}
+          onClose={() => setPreviewOpen(false)}
+          onGenerated={async () => {
+            setPreviewOpen(false);
+            await load();
+          }}
+        />
+      )}
     </PreviewShell>
+  );
+}
+
+function fmtBRDate(iso) {
+  if (!iso) return "—";
+  return String(iso).slice(0, 10).split("-").reverse().join("/");
+}
+
+function PreviewMonthModal({ ym, onClose, onGenerated }) {
+  const [loading, setLoading] = useState(true);
+  const [mensalidades, setMensalidades] = useState([]);
+  const [gastos, setGastos] = useState([]);
+  const [err, setErr] = useState(null);
+  const [generating, setGenerating] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [mens, exp, students] = await Promise.all([
+          financeGateway.previewGenerateMonth({ ym }).catch(() => []),
+          financeGateway.previewGenerateExpenses({ ym }).catch(() => []),
+          financeGateway.listStudents().catch(() => []),
+        ]);
+        if (cancelled) return;
+        const nameById = {};
+        for (const s of students || []) nameById[s.id] = s.full_name || s.name || "";
+        const mensEnriched = (Array.isArray(mens) ? mens : []).map((p) => ({
+          ...p,
+          _student: nameById[p.student_id] || p.student_name || "Aluno",
+        }));
+        setMensalidades(mensEnriched);
+        setGastos(Array.isArray(exp) ? exp : []);
+      } catch (e) {
+        if (!cancelled) setErr(e?.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [ym]);
+
+  async function handleGenerate() {
+    setErr(null);
+    try {
+      setGenerating(true);
+      const tasks = [];
+      if (mensalidades.length > 0) tasks.push(financeGateway.generateMonth({ ym }));
+      if (gastos.length > 0) tasks.push(financeGateway.generateExpenses({ ym }));
+      tasks.push(financeGateway.ensureOtherRevenuesForMonth(ym).catch(() => null));
+      await Promise.all(tasks);
+      await onGenerated();
+    } catch (e) {
+      setErr(e?.message || String(e));
+      setGenerating(false);
+    }
+  }
+
+  const totalMens = mensalidades.reduce((a, r) => a + Number(r.amount || 0), 0);
+  const totalGastos = gastos.reduce((a, r) => a + Number(r.amount || 0), 0);
+  const nothingToDo = !loading && mensalidades.length === 0 && gastos.length === 0;
+
+  return (
+    <PreviewModal title={`Prévia · ${ymLabel(ym)}`} onClose={generating ? () => {} : onClose} maxWidth="lg">
+      <div className="flex flex-col gap-4 px-5 py-5">
+        <div className="flex items-start gap-3 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface-2)] px-3 py-2.5 text-xs text-[var(--p-text-muted)]">
+          <Calendar className="h-4 w-4 shrink-0 text-[var(--p-text-muted)]" />
+          <span>
+            Gera mensalidades dos alunos ativos, despesas recorrentes e outras receitas
+            recorrentes do mês. Itens já lançados não serão duplicados.
+          </span>
+        </div>
+
+        <FormError message={err} />
+
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 py-8 text-sm text-[var(--p-text-muted)]">
+            <Loader2 className="h-4 w-4 animate-spin" /> Carregando prévia…
+          </div>
+        ) : nothingToDo ? (
+          <div className="rounded-lg border border-dashed border-[var(--p-border)] px-4 py-8 text-center text-sm text-[var(--p-text-muted)]">
+            Nada a gerar para este mês.
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <PreviewSection
+              title="Mensalidades"
+              icon={CreditCard}
+              tone="success"
+              rows={mensalidades}
+              total={totalMens}
+              renderRow={(p) => ({
+                label: p._student,
+                sub: `venc. ${fmtBRDate(p.due_date)}`,
+                amount: p.amount,
+              })}
+            />
+            <PreviewSection
+              title="Gastos recorrentes"
+              icon={Wallet}
+              tone="danger"
+              rows={gastos}
+              total={totalGastos}
+              renderRow={(g) => ({
+                label: g.title_snapshot || g.title || "—",
+                sub: `venc. ${fmtBRDate(g.due_date)}`,
+                amount: g.amount,
+              })}
+            />
+            <div className="rounded-lg border border-dashed border-[var(--p-border)] px-3 py-2.5 text-xs text-[var(--p-text-muted)]">
+              <Receipt className="mr-2 inline h-3.5 w-3.5" />
+              Outras receitas recorrentes serão materializadas automaticamente ao gerar.
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={generating}
+            className="p-btn p-btn-ghost"
+          >
+            Fechar
+          </button>
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={loading || generating || nothingToDo}
+            className="p-btn p-btn-primary"
+          >
+            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            Gerar
+          </button>
+        </div>
+      </div>
+    </PreviewModal>
+  );
+}
+
+function PreviewSection({ title, icon: Icon, tone, rows, total, renderRow }) {
+  if (!rows || rows.length === 0) return null;
+  const toneCls =
+    tone === "success" ? "text-[var(--p-success)]" :
+    tone === "danger"  ? "text-[var(--p-danger)]"  : "text-[var(--p-text)]";
+  const sign = tone === "danger" ? "−" : "+";
+  return (
+    <div className="rounded-lg border border-[var(--p-border)]">
+      <div className="flex items-center justify-between border-b border-[var(--p-border)] bg-[var(--p-surface-2)] px-3 py-2">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <Icon className={`h-4 w-4 ${toneCls}`} /> {title}
+          <span className="text-xs font-normal text-[var(--p-text-muted)]">· {rows.length}</span>
+        </div>
+        <div className={`text-sm font-semibold tabular-nums ${toneCls}`}>{sign}{money(total)}</div>
+      </div>
+      <ul className="max-h-[200px] overflow-auto divide-y divide-[var(--p-border)]">
+        {rows.map((r, i) => {
+          const { label, sub, amount } = renderRow(r);
+          return (
+            <li key={i} className="flex items-center gap-3 px-3 py-2">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">{label}</div>
+                <div className="text-[11px] text-[var(--p-text-faint)]">{sub}</div>
+              </div>
+              <div className={`text-sm font-semibold tabular-nums ${toneCls}`}>
+                {sign}{money(amount)}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
