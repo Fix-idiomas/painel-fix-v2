@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import PreviewShell from "../_components/PreviewShell";
 import PreviewModal, { FormError, ModalActions, ConfirmDeleteModal } from "../_components/PreviewModal";
 import { financeGateway } from "@/lib/financeGateway";
@@ -16,6 +15,10 @@ import {
   PauseCircle,
   BookOpen,
   Loader2,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  Check,
 } from "lucide-react";
 
 const AVATAR_PALETTE = [
@@ -58,6 +61,7 @@ export default function TurmasPreview() {
   const [modalOpen, setModalOpen] = useState(false);
   const [teachers, setTeachers] = useState([]);
   const [toDelete, setToDelete] = useState(null);
+  const [detailsTurma, setDetailsTurma] = useState(null);
 
   async function load() {
     try {
@@ -267,9 +271,13 @@ export default function TurmasPreview() {
                       <span className={`p-chip ${cls}`}>
                         <Icon className="h-3 w-3" /> {label}
                       </span>
-                      <Link href="#" className="text-xs font-medium text-[var(--p-primary)] hover:text-[var(--p-primary-600)]">
+                      <button
+                        type="button"
+                        onClick={() => setDetailsTurma(t)}
+                        className="text-xs font-medium text-[var(--p-primary)] hover:text-[var(--p-primary-600)]"
+                      >
                         Ver detalhes →
-                      </Link>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -287,6 +295,14 @@ export default function TurmasPreview() {
             setModalOpen(false);
             await load();
           }}
+        />
+      )}
+
+      {detailsTurma && (
+        <TurmaDetailsModal
+          turma={detailsTurma}
+          teacherName={detailsTurma._teacherName}
+          onClose={() => setDetailsTurma(null)}
         />
       )}
 
@@ -418,5 +434,318 @@ function NewTurmaModal({ teachers, onClose, onCreated }) {
         <ModalActions onCancel={onClose} submitting={saving} submitLabel="Cadastrar" submitIcon={saving ? Loader2 : Plus} />
       </form>
     </PreviewModal>
+  );
+}
+
+function ymOf(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function monthRange(ym) {
+  const [Y, M] = ym.split("-").map(Number);
+  const start = `${ym}-01`;
+  const last = new Date(Y, M, 0).getDate();
+  const end = `${ym}-${String(last).padStart(2, "0")}`;
+  return { start, end };
+}
+function fmtSessionDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }) +
+    " · " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function TurmaDetailsModal({ turma, teacherName, onClose }) {
+  const [members, setMembers] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [ym, setYm] = useState(ymOf());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState(null);
+  const [attendanceBySession, setAttendanceBySession] = useState({});
+  const [savingAtt, setSavingAtt] = useState(null);
+  const [showNew, setShowNew] = useState(false);
+
+  async function load() {
+    try {
+      setError(null);
+      setLoading(true);
+      const { start, end } = monthRange(ym);
+      const [mem, sess] = await Promise.all([
+        financeGateway.listTurmaMembers(turma.id),
+        financeGateway.listSessionsWithAttendance({ turmaId: turma.id, start, end }),
+      ]);
+      setMembers(Array.isArray(mem) ? mem : []);
+      setSessions(Array.isArray(sess) ? sess : []);
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turma.id, ym]);
+
+  async function loadAttendance(sessionId) {
+    try {
+      const att = await financeGateway.listAttendance(sessionId);
+      const map = {};
+      for (const a of att || []) map[a.student_id] = { present: !!a.present, note: a.note || "" };
+      setAttendanceBySession((prev) => ({ ...prev, [sessionId]: map }));
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
+
+  function toggleExpand(sessionId) {
+    if (expanded === sessionId) {
+      setExpanded(null);
+      return;
+    }
+    setExpanded(sessionId);
+    if (!attendanceBySession[sessionId]) loadAttendance(sessionId);
+  }
+
+  async function handleTogglePresence(sessionId, studentId, present) {
+    setSavingAtt(`${sessionId}:${studentId}`);
+    try {
+      const prev = attendanceBySession[sessionId]?.[studentId] || {};
+      await financeGateway.upsertAttendance(sessionId, studentId, { present, note: prev.note || null });
+      setAttendanceBySession((s) => ({
+        ...s,
+        [sessionId]: { ...(s[sessionId] || {}), [studentId]: { ...prev, present } },
+      }));
+      setSessions((rows) => rows.map((r) => r.id === sessionId ? { ...r, has_attendance: true } : r));
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setSavingAtt(null);
+    }
+  }
+
+  return (
+    <PreviewModal title={turma.name || "Turma"} onClose={onClose} maxWidth="3xl">
+      <div className="flex flex-col gap-5 px-5 py-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Info label="Professor" value={teacherName || "—"} />
+          <Info label="Capacidade" value={String(turma.capacity || "—")} />
+          <Info label="Alunos" value={String(members.length)} />
+          <Info label="Aulas no mês" value={String(sessions.length)} />
+        </div>
+
+        <FormError message={error} />
+
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold">Registro de aulas</h3>
+            <div className="flex items-center gap-2">
+              <input
+                type="month"
+                value={ym}
+                onChange={(e) => setYm(e.target.value)}
+                className="rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+              />
+              <button
+                type="button"
+                onClick={() => setShowNew((v) => !v)}
+                className="p-btn p-btn-ghost text-xs"
+              >
+                <Plus className="h-3.5 w-3.5" /> Nova aula
+              </button>
+            </div>
+          </div>
+
+          {showNew && (
+            <NewSessionForm
+              turmaId={turma.id}
+              defaultDuration={turma.meeting_rules?.[0]?.duration_hours || 1}
+              onCancel={() => setShowNew(false)}
+              onCreated={async () => {
+                setShowNew(false);
+                await load();
+              }}
+            />
+          )}
+
+          {loading ? (
+            <div className="flex items-center gap-2 px-2 py-6 text-sm text-[var(--p-text-muted)]">
+              <Loader2 className="h-4 w-4 animate-spin" /> Carregando aulas…
+            </div>
+          ) : sessions.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-[var(--p-border)] px-4 py-6 text-center text-xs text-[var(--p-text-muted)]">
+              Nenhuma aula cadastrada nesse mês.
+            </div>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {sessions.map((s) => {
+                const isOpen = expanded === s.id;
+                const att = attendanceBySession[s.id] || {};
+                const presentCount = Object.values(att).filter((a) => a.present).length;
+                return (
+                  <li key={s.id} className="rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)]">
+                    <button
+                      type="button"
+                      onClick={() => toggleExpand(s.id)}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-[var(--p-surface-2)]"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Calendar className="h-4 w-4 text-[var(--p-text-muted)]" />
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate">{fmtSessionDate(s.date)}</div>
+                          <div className="text-xs text-[var(--p-text-muted)]">
+                            {Number(s.duration_hours || 0)}h
+                            {s.has_attendance ? " · presença registrada" : " · sem presença"}
+                          </div>
+                        </div>
+                      </div>
+                      {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    </button>
+
+                    {isOpen && (
+                      <div className="border-t border-[var(--p-border)] px-4 py-3">
+                        {members.length === 0 ? (
+                          <div className="text-xs text-[var(--p-text-muted)]">
+                            A turma ainda não tem alunos vinculados.
+                          </div>
+                        ) : (
+                          <>
+                            <div className="mb-2 text-xs text-[var(--p-text-muted)]">
+                              Presentes: <span className="font-medium tabular-nums">{presentCount}/{members.length}</span>
+                            </div>
+                            <ul className="flex flex-col divide-y divide-[var(--p-border)]">
+                              {members.map((m) => {
+                                const row = att[m.id] || { present: false, note: "" };
+                                const busy = savingAtt === `${s.id}:${m.id}`;
+                                return (
+                                  <li key={m.id} className="flex items-center justify-between gap-3 py-2">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <div
+                                        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
+                                        style={{ background: colorFor(m.name) }}
+                                      >
+                                        {String(m.name || "?").slice(0, 1).toUpperCase()}
+                                      </div>
+                                      <span className="truncate text-sm">{m.name}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={() => handleTogglePresence(s.id, m.id, true)}
+                                        className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                                          row.present
+                                            ? "bg-[var(--p-success-50)] text-[var(--p-success)]"
+                                            : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                                        }`}
+                                      >
+                                        <Check className="h-3 w-3" /> Presente
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={() => handleTogglePresence(s.id, m.id, false)}
+                                        className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                                          !row.present && att[m.id]
+                                            ? "bg-[var(--p-danger-50)] text-[var(--p-danger)]"
+                                            : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                                        }`}
+                                      >
+                                        Falta
+                                      </button>
+                                    </div>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      </div>
+    </PreviewModal>
+  );
+}
+
+function Info({ label, value }) {
+  return (
+    <div className="rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2">
+      <div className="text-[11px] uppercase tracking-wide text-[var(--p-text-faint)]">{label}</div>
+      <div className="mt-0.5 text-sm font-medium truncate">{value}</div>
+    </div>
+  );
+}
+
+function NewSessionForm({ turmaId, defaultDuration, onCancel, onCreated }) {
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 16));
+  const [durationHours, setDurationHours] = useState(String(defaultDuration || 1));
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    if (!date) { setErr("Data é obrigatória"); return; }
+    try {
+      setSaving(true);
+      await financeGateway.createSession({
+        turma_id: turmaId,
+        date,
+        duration_hours: Number(durationHours) || 1,
+        notes,
+      });
+      await onCreated();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col gap-3 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface-2)] px-3 py-3">
+      <FormError message={err} />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Data e hora *</span>
+          <input
+            type="datetime-local"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Duração (h)</span>
+          <input
+            type="number"
+            step="0.5"
+            min="0.5"
+            value={durationHours}
+            onChange={(e) => setDurationHours(e.target.value)}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <label className="flex flex-col gap-1 sm:col-span-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Observações</span>
+          <input
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Opcional"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+      </div>
+      <ModalActions onCancel={onCancel} submitting={saving} submitLabel="Cadastrar aula" submitIcon={saving ? Loader2 : Plus} />
+    </form>
   );
 }
