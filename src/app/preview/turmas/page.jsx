@@ -561,6 +561,7 @@ function TurmaDetailsModal({ turma, teacherName, onClose }) {
           {showNew && (
             <NewSessionForm
               turmaId={turma.id}
+              members={members}
               defaultDuration={turma.meeting_rules?.[0]?.duration_hours || 1}
               onCancel={() => setShowNew(false)}
               onCreated={async () => {
@@ -684,12 +685,25 @@ function Info({ label, value }) {
   );
 }
 
-function NewSessionForm({ turmaId, defaultDuration, onCancel, onCreated }) {
+function NewSessionForm({ turmaId, members, defaultDuration, onCancel, onCreated }) {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 16));
   const [durationHours, setDurationHours] = useState(String(defaultDuration || 1));
   const [notes, setNotes] = useState("");
+  const [presence, setPresence] = useState(() => {
+    const init = {};
+    for (const m of members || []) init[m.id] = true;
+    return init;
+  });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
+
+  const presentCount = Object.values(presence).filter(Boolean).length;
+
+  function setAll(value) {
+    const next = {};
+    for (const m of members || []) next[m.id] = value;
+    setPresence(next);
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -697,12 +711,23 @@ function NewSessionForm({ turmaId, defaultDuration, onCancel, onCreated }) {
     if (!date) { setErr("Data é obrigatória"); return; }
     try {
       setSaving(true);
-      await financeGateway.createSession({
+      const session = await financeGateway.createSession({
         turma_id: turmaId,
         date,
         duration_hours: Number(durationHours) || 1,
         notes,
       });
+      const sessionId = session?.id;
+      if (sessionId && (members || []).length > 0) {
+        await Promise.all(
+          members.map((m) =>
+            financeGateway.upsertAttendance(sessionId, m.id, {
+              present: !!presence[m.id],
+              note: null,
+            })
+          )
+        );
+      }
       await onCreated();
     } catch (e2) {
       setErr(e2?.message || String(e2));
@@ -745,6 +770,65 @@ function NewSessionForm({ turmaId, defaultDuration, onCancel, onCreated }) {
           />
         </label>
       </div>
+
+      <div className="flex flex-col gap-2 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-xs font-medium text-[var(--p-text-muted)]">
+            Presença ({presentCount}/{(members || []).length})
+          </div>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => setAll(true)} className="rounded-md px-2 py-1 text-xs text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]">
+              Marcar todos
+            </button>
+            <button type="button" onClick={() => setAll(false)} className="rounded-md px-2 py-1 text-xs text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]">
+              Desmarcar todos
+            </button>
+          </div>
+        </div>
+        {(members || []).length === 0 ? (
+          <div className="text-xs text-[var(--p-text-muted)]">A turma ainda não tem alunos vinculados.</div>
+        ) : (
+          <ul className="flex flex-col divide-y divide-[var(--p-border)]">
+            {members.map((m) => {
+              const present = !!presence[m.id];
+              return (
+                <li key={m.id} className="flex items-center justify-between gap-3 py-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
+                      style={{ background: colorFor(m.name) }}
+                    >
+                      {String(m.name || "?").slice(0, 1).toUpperCase()}
+                    </div>
+                    <span className="truncate text-sm">{m.name}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setPresence((p) => ({ ...p, [m.id]: true }))}
+                      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                        present ? "bg-[var(--p-success-50)] text-[var(--p-success)]" : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                      }`}
+                    >
+                      <Check className="h-3 w-3" /> Presente
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPresence((p) => ({ ...p, [m.id]: false }))}
+                      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                        !present ? "bg-[var(--p-danger-50)] text-[var(--p-danger)]" : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                      }`}
+                    >
+                      Falta
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
       <ModalActions onCancel={onCancel} submitting={saving} submitLabel="Cadastrar aula" submitIcon={saving ? Loader2 : Plus} />
     </form>
   );
