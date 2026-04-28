@@ -324,4 +324,42 @@ export const paymentGateway = {
 
     return true;
   },
+
+  async bulkMarkPaid(ids: string[]): Promise<{ succeeded: string[]; failed: Array<{ id: string; error: string }> }> {
+    if (!Array.isArray(ids) || ids.length === 0) {
+      throw new Error("bulkMarkPaid: lista de ids é obrigatória");
+    }
+    const succeeded: string[] = [];
+    const failed: Array<{ id: string; error: string }> = [];
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          await paymentGateway.markPaid(id);
+          succeeded.push(id);
+        } catch (e) {
+          failed.push({ id, error: e instanceof Error ? e.message : String(e) });
+        }
+      })
+    );
+    return { succeeded, failed };
+  },
+
+  async bulkReopenPayments(ids: string[]): Promise<{ succeeded: string[]; failed: Array<{ id: string; error: string }> }> {
+    if (!Array.isArray(ids) || ids.length === 0) {
+      throw new Error("bulkReopenPayments: lista de ids é obrigatória");
+    }
+    const succeeded: string[] = [];
+    const failed: Array<{ id: string; error: string }> = [];
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          await paymentGateway.reopenPayment(id);
+          succeeded.push(id);
+        } catch (e) {
+          failed.push({ id, error: e instanceof Error ? e.message : String(e) });
+        }
+      })
+    );
+    return { succeeded, failed };
+  },
 };

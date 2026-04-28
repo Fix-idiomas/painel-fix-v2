@@ -56,6 +56,8 @@ describe("barrel re-export (supabaseGateway)", () => {
   it("exports session/attendance methods", () => {
     expect(typeof supabaseGateway.listSessions).toBe("function");
     expect(typeof supabaseGateway.listSessionsWithAttendance).toBe("function");
+    expect(typeof supabaseGateway.listSessionsInRange).toBe("function");
+    expect(typeof supabaseGateway.getSession).toBe("function");
     expect(typeof supabaseGateway.createSession).toBe("function");
     expect(typeof supabaseGateway.updateSession).toBe("function");
     expect(typeof supabaseGateway.deleteSession).toBe("function");
@@ -76,6 +78,8 @@ describe("barrel re-export (supabaseGateway)", () => {
     expect(typeof supabaseGateway.markPaid).toBe("function");
     expect(typeof supabaseGateway.cancelPayment).toBe("function");
     expect(typeof supabaseGateway.reopenPayment).toBe("function");
+    expect(typeof supabaseGateway.bulkMarkPaid).toBe("function");
+    expect(typeof supabaseGateway.bulkReopenPayments).toBe("function");
   });
 
   // Expenses

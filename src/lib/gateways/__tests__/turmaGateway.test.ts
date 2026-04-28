@@ -26,6 +26,63 @@ describe("turmaGateway.listTurmas", () => {
   });
 });
 
+describe("turmaGateway.getSession", () => {
+  it("throws when id is missing", async () => {
+    await expect(turmaGateway.getSession("")).rejects.toThrow("obrigatório");
+  });
+
+  it("returns null when not found", async () => {
+    mock._result = { data: null, error: null };
+    const result = await turmaGateway.getSession("missing");
+    expect(result).toBeNull();
+  });
+
+  it("normalizes date and duration", async () => {
+    mock._result = {
+      data: { id: "s1", turma_id: "t1", date: "2026-04-27T19:00:00Z", duration_hours: "1.5", notes: "" },
+      error: null,
+    };
+    const result = await turmaGateway.getSession("s1");
+    expect(result?.date).toBe(new Date("2026-04-27T19:00:00Z").toISOString());
+    expect(result?.duration_hours).toBe(1.5);
+  });
+
+  it("surfaces supabase errors", async () => {
+    mock._result = { data: null, error: { message: "boom" } };
+    await expect(turmaGateway.getSession("s1")).rejects.toThrow("boom");
+  });
+});
+
+describe("turmaGateway.listSessionsInRange", () => {
+  it("throws when start or end is missing", async () => {
+    await expect(turmaGateway.listSessionsInRange({ start: "", end: "x" })).rejects.toThrow("obrigatórios");
+    await expect(turmaGateway.listSessionsInRange({ start: "x", end: "" })).rejects.toThrow("obrigatórios");
+  });
+
+  it("returns rows with ISO dates and numeric duration", async () => {
+    mock._result = {
+      data: [
+        { id: "s1", turma_id: "t1", date: "2026-04-27T19:00:00Z", duration_hours: "1.5" },
+      ],
+      error: null,
+    };
+    const rows = await turmaGateway.listSessionsInRange({
+      start: "2026-04-27T00:00:00Z",
+      end: "2026-05-04T00:00:00Z",
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].date).toBe(new Date("2026-04-27T19:00:00Z").toISOString());
+    expect(rows[0].duration_hours).toBe(1.5);
+  });
+
+  it("surfaces supabase errors", async () => {
+    mock._result = { data: null, error: { message: "boom" } };
+    await expect(
+      turmaGateway.listSessionsInRange({ start: "a", end: "b" })
+    ).rejects.toThrow("boom");
+  });
+});
+
 describe("turmaGateway.createTurma", () => {
   it("throws when name is missing", async () => {
     await expect(turmaGateway.createTurma({})).rejects.toThrow("obrigatório");

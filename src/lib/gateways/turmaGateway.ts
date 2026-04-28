@@ -174,6 +174,41 @@ export const turmaGateway = {
     }));
   },
 
+  async getSession(id: string) {
+    if (!id) throw new Error("getSession: 'id' é obrigatório");
+    const { data, error } = await supabase
+      .from("sessions")
+      .select("id, turma_id, date, duration_hours, notes")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) throw new Error(`getSession: ${error.message}`);
+    if (!data) return null;
+    return {
+      ...data,
+      date: data.date ? new Date(data.date).toISOString() : null,
+      duration_hours: Number(data.duration_hours || 0),
+    };
+  },
+
+  async listSessionsInRange({ start, end }: { start: string; end: string }) {
+    const s = String(start || "");
+    const e = String(end || "");
+    if (!s || !e) throw new Error("listSessionsInRange: 'start' e 'end' são obrigatórios");
+    const { data, error } = await supabase
+      .from("sessions")
+      .select("id, turma_id, date, duration_hours, notes")
+      .gte("date", s)
+      .lt("date", e)
+      .order("date", { ascending: true });
+    if (error) throw new Error(`listSessionsInRange: ${error.message}`);
+    const toIso = (d: unknown) => (d ? new Date(d as string).toISOString() : null);
+    return (data || []).map((row) => ({
+      ...row,
+      date: toIso(row.date),
+      duration_hours: Number(row.duration_hours || 0),
+    }));
+  },
+
   async listSessionsWithAttendance({ turmaId, start, end }: { turmaId: string; start?: string; end?: string }) {
     if (!turmaId) throw new Error("listSessionsWithAttendance: 'turmaId' é obrigatório");
 

@@ -61,6 +61,8 @@ export default function MensalidadesPreview() {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
   const [busyId, setBusyId] = useState(null);
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   async function load() {
     try {
@@ -105,6 +107,63 @@ export default function MensalidadesPreview() {
       setBusyId(null);
     }
   }
+  function toggleSelected(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function toggleSelectAll(visibleIds) {
+    setSelected((prev) => {
+      const allSelected = visibleIds.length > 0 && visibleIds.every((id) => prev.has(id));
+      if (allSelected) {
+        const next = new Set(prev);
+        for (const id of visibleIds) next.delete(id);
+        return next;
+      }
+      const next = new Set(prev);
+      for (const id of visibleIds) next.add(id);
+      return next;
+    });
+  }
+  function clearSelection() {
+    setSelected(new Set());
+  }
+
+  async function handleBulkMarkPaid() {
+    if (selected.size === 0) return;
+    try {
+      setBulkBusy(true);
+      const result = await financeGateway.bulkMarkPaid(Array.from(selected));
+      if (result.failed.length > 0) {
+        setError(`${result.succeeded.length} marcadas como pagas, ${result.failed.length} falharam: ${result.failed[0].error}`);
+      }
+      clearSelection();
+      await load();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+  async function handleBulkReopen() {
+    if (selected.size === 0) return;
+    try {
+      setBulkBusy(true);
+      const result = await financeGateway.bulkReopenPayments(Array.from(selected));
+      if (result.failed.length > 0) {
+        setError(`${result.succeeded.length} reabertas, ${result.failed.length} falharam: ${result.failed[0].error}`);
+      }
+      clearSelection();
+      await load();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   async function handleCancel(id) {
     const note = window.prompt("Motivo do cancelamento (opcional):") ?? undefined;
     if (note === undefined) return;
@@ -282,6 +341,42 @@ export default function MensalidadesPreview() {
           </div>
         </div>
 
+        {selected.size > 0 && (
+          <div className="mb-4 flex flex-col gap-2 rounded-lg border border-[var(--p-primary)]/30 bg-[var(--p-primary)]/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm font-medium">
+              {selected.size} {selected.size === 1 ? "mensalidade selecionada" : "mensalidades selecionadas"}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={bulkBusy}
+                onClick={handleBulkMarkPaid}
+                className="inline-flex items-center gap-1 rounded-md bg-[var(--p-success)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--p-success)]/90 disabled:opacity-60"
+              >
+                {bulkBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                Marcar como pago
+              </button>
+              <button
+                type="button"
+                disabled={bulkBusy}
+                onClick={handleBulkReopen}
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--p-surface-2)] disabled:opacity-60"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Marcar como pendente
+              </button>
+              <button
+                type="button"
+                disabled={bulkBusy}
+                onClick={clearSelection}
+                className="rounded-md px-2 py-1.5 text-xs text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] disabled:opacity-60"
+              >
+                Limpar
+              </button>
+            </div>
+          </div>
+        )}
+
         {error && (
           <div className="mb-4 rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-4 py-3 text-sm text-[var(--p-danger)]">
             Erro: {error}
@@ -303,6 +398,15 @@ export default function MensalidadesPreview() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-[var(--p-border)] bg-[var(--p-surface-2)] text-left text-xs font-medium uppercase tracking-wider text-[var(--p-text-muted)]">
+                      <th className="w-10 px-3 py-3">
+                        <input
+                          type="checkbox"
+                          aria-label="Selecionar todas"
+                          checked={filtered.length > 0 && filtered.every((r) => selected.has(r.id))}
+                          onChange={() => toggleSelectAll(filtered.map((r) => r.id))}
+                          className="h-4 w-4 cursor-pointer"
+                        />
+                      </th>
                       <th className="px-5 py-3">Aluno</th>
                       <th className="px-5 py-3">Vencimento</th>
                       <th className="px-5 py-3 text-right">Valor</th>
@@ -314,8 +418,18 @@ export default function MensalidadesPreview() {
                   <tbody className="divide-y divide-[var(--p-border)]">
                     {filtered.map((r) => {
                       const { cls, icon: Icon, label } = statusChip(r);
+                      const isChecked = selected.has(r.id);
                       return (
-                        <tr key={r.id} className="hover:bg-[var(--p-surface-2)]">
+                        <tr key={r.id} className={`hover:bg-[var(--p-surface-2)] ${isChecked ? "bg-[var(--p-primary)]/5" : ""}`}>
+                          <td className="w-10 px-3 py-3">
+                            <input
+                              type="checkbox"
+                              aria-label={`Selecionar ${r.student_name || r.id}`}
+                              checked={isChecked}
+                              onChange={() => toggleSelected(r.id)}
+                              className="h-4 w-4 cursor-pointer"
+                            />
+                          </td>
                           <td className="px-5 py-3 font-medium">{r.student_name || "—"}</td>
                           <td className="px-5 py-3 tabular-nums text-[var(--p-text-muted)]">{fdate(r.due_date)}</td>
                           <td className="px-5 py-3 text-right font-semibold tabular-nums">{money(r.amount)}</td>
@@ -340,8 +454,16 @@ export default function MensalidadesPreview() {
               <ul className="divide-y divide-[var(--p-border)] md:hidden">
                 {filtered.map((r) => {
                   const { cls, icon: Icon, label } = statusChip(r);
+                  const isChecked = selected.has(r.id);
                   return (
-                    <li key={r.id} className="flex items-start gap-3 px-4 py-3">
+                    <li key={r.id} className={`flex items-start gap-3 px-4 py-3 ${isChecked ? "bg-[var(--p-primary)]/5" : ""}`}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Selecionar ${r.student_name || r.id}`}
+                        checked={isChecked}
+                        onChange={() => toggleSelected(r.id)}
+                        className="mt-1 h-4 w-4 shrink-0 cursor-pointer"
+                      />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">

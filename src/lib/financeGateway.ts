@@ -18,6 +18,12 @@ async function cancelPayment(id: string, note?: string | null) {
 async function reopenPayment(id: string) {
   return supabaseGateway.reopenPayment(id);
 }
+async function bulkMarkPaid(ids: string[]) {
+  return supabaseGateway.bulkMarkPaid(ids);
+}
+async function bulkReopenPayments(ids: string[]) {
+  return supabaseGateway.bulkReopenPayments(ids);
+}
 
 // ---------- KPIs / Sumário ----------
 async function getMonthlySummary({ ym, cost_center = null }: { ym: string; cost_center?: string | null }) {
@@ -273,6 +279,12 @@ async function listSessionsWithAttendance({ turmaId, start, end }: { turmaId: st
 async function listSessions(turmaId: string) {
   return supabaseGateway.listSessions(turmaId);
 }
+async function listSessionsInRange({ start, end }: { start: string; end: string }) {
+  return supabaseGateway.listSessionsInRange({ start, end });
+}
+async function getSession(id: string) {
+  return supabaseGateway.getSession(id);
+}
 async function updateSession(id: string, changes: Dict = {}) {
   return supabaseGateway.updateSession(id, changes);
 }
@@ -323,6 +335,8 @@ export const financeGateway = {
   markPaid,
   cancelPayment,
   reopenPayment,
+  bulkMarkPaid,
+  bulkReopenPayments,
   previewGenerateMonth,
   generateMonth,
 
@@ -393,6 +407,8 @@ export const financeGateway = {
   createSession,
   listSessionsWithAttendance,
   listSessions,
+  listSessionsInRange,
+  getSession,
   listAttendance,
   upsertAttendance,
   deleteAttendance,

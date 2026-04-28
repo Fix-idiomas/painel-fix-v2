@@ -83,3 +83,43 @@ describe("paymentGateway.reopenPayment", () => {
     await expect(paymentGateway.reopenPayment(null)).rejects.toThrow("obrigatório");
   });
 });
+
+describe("paymentGateway.bulkMarkPaid", () => {
+  it("throws when ids is empty", async () => {
+    await expect(paymentGateway.bulkMarkPaid([])).rejects.toThrow("obrigatória");
+    await expect(paymentGateway.bulkMarkPaid(null as never)).rejects.toThrow("obrigatória");
+  });
+
+  it("returns succeeded ids when all calls pass", async () => {
+    mock._result = { data: null, error: null };
+    const result = await paymentGateway.bulkMarkPaid(["a", "b", "c"]);
+    expect(result.succeeded.sort()).toEqual(["a", "b", "c"]);
+    expect(result.failed).toHaveLength(0);
+  });
+
+  it("collects failures without throwing", async () => {
+    let call = 0;
+    mock.from.mockImplementation(() => {
+      const chain: Record<string, unknown> = {};
+      const methods = ["select", "insert", "update", "upsert", "delete", "eq", "neq", "in", "gte", "lte", "lt", "gt", "not", "ilike", "is", "order", "limit", "range", "single", "maybeSingle"];
+      for (const m of methods) chain[m] = vi.fn(() => chain);
+      chain.then = (resolve: (r: { data: unknown; error: unknown }) => unknown) => {
+        call += 1;
+        // 2nd call fails
+        if (call === 2) return resolve({ data: null, error: { message: "fk error" } });
+        return resolve({ data: null, error: null });
+      };
+      return chain;
+    });
+    const result = await paymentGateway.bulkMarkPaid(["a", "b"]);
+    expect(result.succeeded).toContain("a");
+    expect(result.failed[0]).toMatchObject({ id: "b" });
+    expect(result.failed[0].error).toContain("fk error");
+  });
+});
+
+describe("paymentGateway.bulkReopenPayments", () => {
+  it("throws when ids is empty", async () => {
+    await expect(paymentGateway.bulkReopenPayments([])).rejects.toThrow("obrigatória");
+  });
+});

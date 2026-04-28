@@ -5,6 +5,13 @@ import PreviewShell from "../_components/PreviewShell";
 import PreviewModal, { FormError, ModalActions } from "../_components/PreviewModal";
 import { financeGateway } from "@/lib/financeGateway";
 import {
+  buildEventsFromRules,
+  buildEventsFromSessions,
+  colorFor,
+  hourToMinutes,
+  localDateTimeForGridSlot,
+} from "@/lib/agendaEvents";
+import {
   ChevronLeft,
   ChevronRight,
   Plus,
@@ -12,31 +19,20 @@ import {
   Users,
   MapPin,
   Loader2,
+  Check,
+  Trash2,
 } from "lucide-react";
 
 const DAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 const DAYS_LONG = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 const HOURS = ["08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"];
 
-const COLOR_PALETTE = [
-  "#8B1C2C", "#E94F37", "#0F766E", "#D97706", "#1E40AF",
-  "#7C3AED", "#BE123C", "#0891B2", "#15803D", "#9333EA", "#DC2626", "#059669",
-];
-
-function colorFor(seed) {
-  const s = String(seed || "");
-  let hash = 0;
-  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
-  return COLOR_PALETTE[hash % COLOR_PALETTE.length];
-}
-
-function hourToMinutes(hhmm) {
-  const [h, m] = String(hhmm || "").split(":").map(Number);
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
-  return h * 60 + m;
-}
 function startOfGridMinutes() { return 8 * 60; }
 function endOfGridMinutes()   { return 21 * 60; }
+function hoursBetween(start, end) {
+  const diff = hourToMinutes(end) - hourToMinutes(start);
+  return Math.max(0.25, Math.round((diff / 60) * 4) / 4);
+}
 
 function mondayOfThisWeek() {
   const d = new Date();
@@ -67,83 +63,95 @@ function fmtRange(start, endInclusive) {
   return `${start.getDate()} de ${MONTHS[sm]} – ${endInclusive.getDate()} de ${MONTHS[em]}`;
 }
 
-// Turma.meeting_rules.weekday uses 0=Sun..6=Sat. Preview grid is Mon..Sat → index 0..5.
-function weekdayToColIdx(weekday) {
-  const w = Number(weekday);
-  if (!Number.isFinite(w)) return -1;
-  if (w === 0) return -1; // skip Sunday
-  return w - 1;
-}
-
-function buildEvents(turmas, teacherMap) {
-  const events = [];
-  for (const t of turmas || []) {
-    const rules = Array.isArray(t.meeting_rules) ? t.meeting_rules : [];
-    for (const r of rules) {
-      const col = weekdayToColIdx(r.weekday);
-      if (col < 0) continue;
-      const time = String(r.time || t.meeting_time || "08:00").slice(0, 5);
-      const dur = Math.max(0.25, Number(r.duration_hours || 1));
-      const endMin = hourToMinutes(time) + Math.round(dur * 60);
-      const endH = Math.floor(endMin / 60);
-      const endM = endMin % 60;
-      const endStr = `${String(endH).padStart(2, "0")}:${String(endM).padStart(2, "0")}`;
-      events.push({
-        id: `${t.id}-${r.weekday}-${time}`,
-        day: col,
-        start: time,
-        end: endStr,
-        title: t.name || "—",
-        teacher: t.teacher_id ? teacherMap[t.teacher_id] || "—" : "Sem professor",
-        room: t.room || "—",
-        students: 0,
-        color: colorFor(t.name || t.id),
-        capacity: Number(t.capacity || 0),
-      });
-    }
-  }
-  return events;
-}
-
 export default function AgendaPreview() {
   const [view, setView] = useState("day");
   const [day, setDay] = useState(todayDayIdx);
   const [weekStart, setWeekStart] = useState(mondayOfThisWeek());
   const [turmas, setTurmas] = useState([]);
   const [teacherMap, setTeacherMap] = useState({});
+  const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [newPrefill, setNewPrefill] = useState(null);
+  const [selectedSessionId, setSelectedSessionId] = useState(null);
 
-  async function load() {
-    try {
-      setError(null);
-      const [tu, teachers] = await Promise.all([
-        financeGateway.listTurmas(),
-        financeGateway.listTeachers(),
-      ]);
-      setTurmas(Array.isArray(tu) ? tu : []);
-      const map = {};
-      for (const t of teachers || []) map[t.id] = t.name;
-      setTeacherMap(map);
-    } catch (e) {
-      setError(e?.message || String(e));
-    }
-  }
+  const loadStatic = async () => {
+    const [tu, teachers] = await Promise.all([
+      financeGateway.listTurmas(),
+      financeGateway.listTeachers(),
+    ]);
+    setTurmas(Array.isArray(tu) ? tu : []);
+    const map = {};
+    for (const t of teachers || []) map[t.id] = t.name;
+    setTeacherMap(map);
+  };
+
+  const loadSessionsForWeek = async (start) => {
+    const startISO = new Date(start).toISOString();
+    const endDate = addDays(start, 6);
+    endDate.setHours(0, 0, 0, 0);
+    const endISO = endDate.toISOString();
+    const data = await financeGateway.listSessionsInRange({ start: startISO, end: endISO });
+    setSessions(Array.isArray(data) ? data : []);
+  };
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      await load();
-      if (!cancelled) setLoading(false);
+      try {
+        setError(null);
+        await loadStatic();
+        await loadSessionsForWeek(weekStart);
+      } catch (e) {
+        if (!cancelled) setError(e?.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [weekStart]);
 
-  const events = useMemo(() => buildEvents(turmas, teacherMap), [turmas, teacherMap]);
+  async function load() {
+    try {
+      setError(null);
+      await loadStatic();
+      await loadSessionsForWeek(weekStart);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
+
+  const turmaMap = useMemo(() => {
+    const m = {};
+    for (const t of turmas) m[t.id] = t;
+    return m;
+  }, [turmas]);
+
+  const events = useMemo(() => {
+    const sessionEvents = buildEventsFromSessions(sessions, turmaMap, teacherMap, weekStart);
+    if (sessionEvents.length > 0) return sessionEvents;
+    return buildEventsFromRules(turmas, teacherMap);
+  }, [sessions, turmas, turmaMap, teacherMap, weekStart]);
   const classesForDay = (idx) => events.filter((c) => c.day === idx).sort((a, b) => a.start.localeCompare(b.start));
   const totalMin = endOfGridMinutes() - startOfGridMinutes();
+
+  function handleEventClick(ev) {
+    if (ev.kind === "session") {
+      const id = String(ev.id || "").replace(/^session-/, "");
+      setSelectedSessionId(id);
+      return;
+    }
+    // rule event → open NewSessionModal prefilled
+    const turmaId = String(ev.id || "").replace(/^rule-/, "").split("-")[0];
+    setNewPrefill({
+      turma_id: turmaId,
+      datetime: localDateTimeForGridSlot(weekStart, ev.day, ev.start),
+      duration_hours: hoursBetween(ev.start, ev.end),
+    });
+    setModalOpen(true);
+  }
 
   const weekEnd = addDays(weekStart, 5);
   const teachersCount = new Set(events.map((e) => e.teacher)).size;
@@ -300,16 +308,18 @@ export default function AgendaPreview() {
                           const top = ((hourToMinutes(c.start) - startOfGridMinutes()) / totalMin) * 100;
                           const height = ((hourToMinutes(c.end) - hourToMinutes(c.start)) / totalMin) * 100;
                           return (
-                            <div
+                            <button
+                              type="button"
                               key={c.id}
-                              className="absolute left-1 right-1 overflow-hidden rounded-md px-2 py-1.5 text-white shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                              onClick={() => handleEventClick(c)}
+                              className="absolute left-1 right-1 overflow-hidden rounded-md px-2 py-1.5 text-left text-white shadow-sm hover:shadow-md hover:brightness-110 transition cursor-pointer"
                               style={{ top: `${top}%`, height: `${height}%`, background: c.color, minHeight: "32px" }}
                             >
                               <div className="text-xs font-semibold leading-tight truncate">{c.title}</div>
                               <div className="text-[10px] opacity-90 leading-tight truncate">
                                 {c.start} · {c.room}
                               </div>
-                            </div>
+                            </button>
                           );
                         })}
                       </div>
@@ -318,7 +328,7 @@ export default function AgendaPreview() {
                 </div>
 
                 <div className="md:hidden">
-                  <DayList list={classesForDay(day)} />
+                  <DayList list={classesForDay(day)} onClick={handleEventClick} />
                   <div className="mt-3 text-center">
                     <button
                       onClick={() => setView("day")}
@@ -350,7 +360,7 @@ export default function AgendaPreview() {
                     );
                   })}
                 </div>
-                <DayList list={classesForDay(day)} />
+                <DayList list={classesForDay(day)} onClick={handleEventClick} />
               </>
             )}
           </>
@@ -360,22 +370,37 @@ export default function AgendaPreview() {
       {modalOpen && (
         <NewSessionModal
           turmas={turmas}
-          onClose={() => setModalOpen(false)}
+          prefill={newPrefill}
+          onClose={() => { setModalOpen(false); setNewPrefill(null); }}
           onCreated={async () => {
             setModalOpen(false);
+            setNewPrefill(null);
             await load();
           }}
+        />
+      )}
+
+      {selectedSessionId && (
+        <SessionDetailsModal
+          sessionId={selectedSessionId}
+          turmaMap={turmaMap}
+          teacherMap={teacherMap}
+          onClose={() => setSelectedSessionId(null)}
+          onChanged={async () => { await load(); }}
+          onDeleted={async () => { setSelectedSessionId(null); await load(); }}
         />
       )}
     </PreviewShell>
   );
 }
 
-function NewSessionModal({ turmas, onClose, onCreated }) {
-  const [turmaId, setTurmaId] = useState(turmas?.[0]?.id || "");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [time, setTime] = useState("19:00");
-  const [durationHours, setDurationHours] = useState("1");
+function NewSessionModal({ turmas, prefill, onClose, onCreated }) {
+  const initialDate = prefill?.datetime?.slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const initialTime = prefill?.datetime?.slice(11, 16) || "19:00";
+  const [turmaId, setTurmaId] = useState(prefill?.turma_id || turmas?.[0]?.id || "");
+  const [date, setDate] = useState(initialDate);
+  const [time, setTime] = useState(initialTime);
+  const [durationHours, setDurationHours] = useState(String(prefill?.duration_hours || 1));
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
@@ -467,7 +492,7 @@ function NewSessionModal({ turmas, onClose, onCreated }) {
   );
 }
 
-function DayList({ list }) {
+function DayList({ list, onClick }) {
   if (!list || list.length === 0) {
     return (
       <div className="p-card flex flex-col items-center justify-center gap-2 p-8 text-center">
@@ -481,7 +506,12 @@ function DayList({ list }) {
   return (
     <div className="p-card divide-y divide-[var(--p-border)]">
       {list.map((c) => (
-        <div key={c.id} className="flex items-stretch gap-3 px-4 py-3">
+        <button
+          type="button"
+          key={c.id}
+          onClick={() => onClick?.(c)}
+          className="flex w-full items-stretch gap-3 px-4 py-3 text-left hover:bg-[var(--p-surface-2)] transition-colors"
+        >
           <div className="w-1 shrink-0 rounded-full" style={{ background: c.color }} />
           <div className="flex w-16 flex-col">
             <div className="text-sm font-semibold tabular-nums">{c.start}</div>
@@ -503,8 +533,214 @@ function DayList({ list }) {
               <span>Prof. {c.teacher}</span>
             </div>
           </div>
-        </div>
+        </button>
       ))}
+    </div>
+  );
+}
+
+function fmtSessionDateLong(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" }) +
+    " · " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function SessionDetailsModal({ sessionId, turmaMap, teacherMap, onClose, onChanged, onDeleted }) {
+  const [session, setSession] = useState(null);
+  const [members, setMembers] = useState([]);
+  const [attendance, setAttendance] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [savingAtt, setSavingAtt] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const found = await financeGateway.getSession(sessionId);
+        if (!found) throw new Error("Aula não encontrada");
+        if (cancelled) return;
+        setSession(found);
+        const [mem, att] = await Promise.all([
+          financeGateway.listTurmaMembers(found.turma_id),
+          financeGateway.listAttendance(found.id),
+        ]);
+        if (cancelled) return;
+        setMembers(Array.isArray(mem) ? mem : []);
+        const map = {};
+        for (const a of att || []) map[a.student_id] = { present: !!a.present, note: a.note || "" };
+        setAttendance(map);
+      } catch (e) {
+        if (!cancelled) setError(e?.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sessionId]);
+
+  const turma = session ? turmaMap[session.turma_id] || {} : {};
+  const teacher = turma.teacher_id ? teacherMap[turma.teacher_id] || "—" : "Sem professor";
+  const presentCount = Object.values(attendance).filter((a) => a.present).length;
+
+  async function togglePresence(studentId, present) {
+    if (!session) return;
+    setSavingAtt(studentId);
+    try {
+      const prev = attendance[studentId] || {};
+      await financeGateway.upsertAttendance(session.id, studentId, { present, note: prev.note || null });
+      setAttendance((s) => ({ ...s, [studentId]: { ...prev, present } }));
+      await onChanged?.();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setSavingAtt(null);
+    }
+  }
+
+  async function handleDelete() {
+    if (!session) return;
+    setDeleting(true);
+    try {
+      await financeGateway.deleteSession(session.id);
+      await onDeleted?.();
+    } catch (e) {
+      setError(e?.message || String(e));
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <PreviewModal title={turma.name || "Aula"} onClose={onClose} maxWidth="2xl">
+      <div className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={error} />
+        {loading || !session ? (
+          <div className="flex items-center gap-2 py-6 text-sm text-[var(--p-text-muted)]">
+            <Loader2 className="h-4 w-4 animate-spin" /> Carregando aula…
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Info label="Quando" value={fmtSessionDateLong(session.date)} />
+              <Info label="Duração" value={`${Number(session.duration_hours || 0)}h`} />
+              <Info label="Professor" value={teacher} />
+              <Info label="Alunos" value={String(members.length)} />
+            </div>
+
+            {session.notes && (
+              <div className="rounded-lg border border-[var(--p-border)] bg-[var(--p-surface-2)] px-3 py-2 text-xs text-[var(--p-text-muted)]">
+                {session.notes}
+              </div>
+            )}
+
+            <section className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Presença</h3>
+                <div className="text-xs text-[var(--p-text-muted)] tabular-nums">
+                  {presentCount}/{members.length}
+                </div>
+              </div>
+              {members.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-[var(--p-border)] px-4 py-4 text-center text-xs text-[var(--p-text-muted)]">
+                  A turma ainda não tem alunos vinculados.
+                </div>
+              ) : (
+                <ul className="flex flex-col divide-y divide-[var(--p-border)]">
+                  {members.map((m) => {
+                    const row = attendance[m.id] || { present: false, note: "" };
+                    const busy = savingAtt === m.id;
+                    return (
+                      <li key={m.id} className="flex items-center justify-between gap-3 py-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div
+                            className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
+                            style={{ background: colorFor(m.name) }}
+                          >
+                            {String(m.name || "?").slice(0, 1).toUpperCase()}
+                          </div>
+                          <span className="truncate text-sm">{m.name}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => togglePresence(m.id, true)}
+                            className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                              row.present
+                                ? "bg-[var(--p-success-50)] text-[var(--p-success)]"
+                                : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                            }`}
+                          >
+                            <Check className="h-3 w-3" /> Presente
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => togglePresence(m.id, false)}
+                            className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                              !row.present && attendance[m.id]
+                                ? "bg-[var(--p-danger-50)] text-[var(--p-danger)]"
+                                : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                            }`}
+                          >
+                            Falta
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+
+            <div className="flex items-center justify-between border-t border-[var(--p-border)] pt-4">
+              {confirmDelete ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[var(--p-danger)]">Confirmar exclusão?</span>
+                  <button
+                    type="button"
+                    disabled={deleting}
+                    onClick={handleDelete}
+                    className="inline-flex items-center gap-1 rounded-md bg-[var(--p-danger)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--p-danger)]/90 disabled:opacity-60"
+                  >
+                    {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                    Excluir
+                  </button>
+                  <button type="button" onClick={() => setConfirmDelete(false)} className="text-xs text-[var(--p-text-muted)]">
+                    Cancelar
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(true)}
+                  className="inline-flex items-center gap-1 text-xs text-[var(--p-danger)] hover:underline"
+                >
+                  <Trash2 className="h-3 w-3" /> Excluir aula
+                </button>
+              )}
+              <button type="button" onClick={onClose} className="p-btn p-btn-ghost text-xs">
+                Fechar
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </PreviewModal>
+  );
+}
+
+function Info({ label, value }) {
+  return (
+    <div className="rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2">
+      <div className="text-[11px] uppercase tracking-wide text-[var(--p-text-faint)]">{label}</div>
+      <div className="mt-0.5 text-sm font-medium truncate">{value}</div>
     </div>
   );
 }
