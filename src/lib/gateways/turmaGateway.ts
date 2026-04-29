@@ -54,6 +54,7 @@ export const turmaGateway = {
 
     const capacity = Math.max(1, Number(payload.capacity || 20));
     const teacher_id = payload.teacher_id || null;
+    if (!teacher_id) throw new Error("createTurma: 'teacher_id' é obrigatório");
 
     const meeting_rules = Array.isArray(payload.meeting_rules)
       ? payload.meeting_rules.map((r) => ({
@@ -87,7 +88,8 @@ export const turmaGateway = {
       patch.name = name;
     }
     if (changes.teacher_id !== undefined) {
-      patch.teacher_id = changes.teacher_id || null;
+      if (!changes.teacher_id) throw new Error("updateTurma: 'teacher_id' não pode ser vazio");
+      patch.teacher_id = changes.teacher_id;
     }
     if (changes.capacity !== undefined) {
       patch.capacity = Math.max(1, Number(changes.capacity || 20));

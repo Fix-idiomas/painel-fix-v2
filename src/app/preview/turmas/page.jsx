@@ -338,6 +338,7 @@ function NewTurmaModal({ teachers, onClose, onCreated }) {
     setErr(null);
     const trimmed = name.trim();
     if (!trimmed) { setErr("Nome é obrigatório"); return; }
+    if (!teacherId) { setErr("Professor é obrigatório"); return; }
     try {
       setSaving(true);
       const meeting_rules = time
@@ -373,13 +374,14 @@ function NewTurmaModal({ teachers, onClose, onCreated }) {
         </label>
         <div className="grid grid-cols-2 gap-3">
           <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-[var(--p-text-muted)]">Professor</span>
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">Professor *</span>
             <select
               value={teacherId}
               onChange={(e) => setTeacherId(e.target.value)}
+              required
               className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
             >
-              <option value="">Sem professor</option>
+              <option value="">Selecione um professor</option>
               {teachers.map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
               ))}

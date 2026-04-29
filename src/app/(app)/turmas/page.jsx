@@ -217,6 +217,7 @@ export default function TurmasPage() {
         capacity: Number(formTurma.capacity || 20),
       };
       if (!payload.name) throw new Error("Nome é obrigatório.");
+      if (!payload.teacher_id) throw new Error("Professor é obrigatório.");
 
       if (editingId) {
         await financeGateway.updateTurma(editingId, payload);
@@ -514,8 +515,9 @@ export default function TurmasPage() {
                 value={formTurma.teacher_id}
                 onChange={(e) => setFormTurma((f) => ({ ...f, teacher_id: e.target.value }))}
                 className="border rounded px-3 py-2 w-full"
+                required
               >
-                <option value="">— sem professor —</option>
+                <option value="">— selecione um professor —</option>
                 {teachers.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}

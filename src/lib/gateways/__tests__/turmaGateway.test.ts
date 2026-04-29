@@ -88,9 +88,13 @@ describe("turmaGateway.createTurma", () => {
     await expect(turmaGateway.createTurma({})).rejects.toThrow("obrigatório");
   });
 
+  it("throws when teacher_id is missing", async () => {
+    await expect(turmaGateway.createTurma({ name: "Turma B" })).rejects.toThrow("teacher_id");
+  });
+
   it("creates turma with defaults", async () => {
     mock._result = { data: { id: "1", name: "Turma B" }, error: null };
-    const result = await turmaGateway.createTurma({ name: "Turma B" });
+    const result = await turmaGateway.createTurma({ name: "Turma B", teacher_id: "t-1" });
     expect(result.name).toBe("Turma B");
   });
 });
