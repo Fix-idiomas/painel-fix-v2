@@ -536,13 +536,23 @@ function PreviewSection({ title, icon: Icon, tone, rows, total, renderRow }) {
 
 function NewLancamentoModal({ ym, categories, onClose, onCreated }) {
   const [kind, setKind] = useState("expense");
+  const [expenseMode, setExpenseMode] = useState("oneoff"); // 'oneoff' | 'recurring'
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("");
   const today = new Date().toISOString().slice(0, 10);
   const [date, setDate] = useState(today);
+  const [dueDay, setDueDay] = useState("5");
+  const [frequency, setFrequency] = useState("monthly"); // 'monthly' | 'annual'
+  const [dueMonth, setDueMonth] = useState("");
+  const [recurrenceMode, setRecurrenceMode] = useState("indefinite"); // 'indefinite' | 'installments' | 'until_month'
+  const [startMonth, setStartMonth] = useState(ym);
+  const [installments, setInstallments] = useState("");
+  const [endMonth, setEndMonth] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
+
+  const isRecurring = kind === "expense" && expenseMode === "recurring";
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -551,17 +561,46 @@ function NewLancamentoModal({ ym, categories, onClose, onCreated }) {
     const a = Number(amount);
     if (!t) { setErr("Título é obrigatório"); return; }
     if (!Number.isFinite(a) || a <= 0) { setErr("Valor deve ser maior que zero"); return; }
-    if (!date) { setErr("Data é obrigatória"); return; }
+    if (!isRecurring && !date) { setErr("Data é obrigatória"); return; }
     try {
       setSaving(true);
       if (kind === "expense") {
-        await financeGateway.createOneOffExpense({
-          date,
-          amount: a,
-          title: t,
-          category: category || null,
-          cost_center: "PJ",
-        });
+        if (expenseMode === "recurring") {
+          const day = Math.max(1, Math.min(28, Number(dueDay) || 5));
+          if (frequency === "annual" && (!dueMonth || Number(dueMonth) < 1 || Number(dueMonth) > 12)) {
+            throw new Error("Para frequência anual, informe o mês de vencimento (1-12)");
+          }
+          if (recurrenceMode === "installments") {
+            const inst = Number(installments);
+            if (!Number.isFinite(inst) || inst < 1) throw new Error("Informe o número de parcelas");
+          }
+          if (recurrenceMode === "until_month") {
+            if (!endMonth) throw new Error("Informe o mês final");
+            if (startMonth && endMonth < startMonth) throw new Error("Mês final não pode ser anterior ao inicial");
+          }
+          await financeGateway.createExpenseTemplate({
+            title: t,
+            category: category || null,
+            amount: a,
+            frequency,
+            due_day: day,
+            due_month: frequency === "annual" ? Number(dueMonth) : null,
+            cost_center: "PJ",
+            active: true,
+            recurrence_mode: recurrenceMode,
+            start_month: startMonth ? `${startMonth}-01` : null,
+            installments: recurrenceMode === "installments" ? Number(installments) : null,
+            end_month: recurrenceMode === "until_month" && endMonth ? `${endMonth}-01` : null,
+          });
+        } else {
+          await financeGateway.createOneOffExpense({
+            date,
+            amount: a,
+            title: t,
+            category: category || null,
+            cost_center: "PJ",
+          });
+        }
       } else {
         await financeGateway.createOtherRevenue({
           ym,
@@ -612,6 +651,35 @@ function NewLancamentoModal({ ym, categories, onClose, onCreated }) {
           </button>
         </div>
 
+        {kind === "expense" && (
+          <div className="inline-flex rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] p-1 text-xs self-start">
+            <button
+              type="button"
+              onClick={() => setExpenseMode("oneoff")}
+              className={[
+                "rounded-md px-3 py-1 transition-colors",
+                expenseMode === "oneoff"
+                  ? "bg-[var(--p-surface-2)] text-[var(--p-text)]"
+                  : "text-[var(--p-text-muted)] hover:text-[var(--p-text)]",
+              ].join(" ")}
+            >
+              Avulso
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpenseMode("recurring")}
+              className={[
+                "rounded-md px-3 py-1 transition-colors",
+                expenseMode === "recurring"
+                  ? "bg-[var(--p-surface-2)] text-[var(--p-text)]"
+                  : "text-[var(--p-text-muted)] hover:text-[var(--p-text)]",
+              ].join(" ")}
+            >
+              Recorrente
+            </button>
+          </div>
+        )}
+
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-[var(--p-text-muted)]">Título *</span>
           <input
@@ -637,18 +705,110 @@ function NewLancamentoModal({ ym, categories, onClose, onCreated }) {
               className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
             />
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-[var(--p-text-muted)]">
-              {kind === "expense" ? "Data *" : "Vencimento *"}
-            </span>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
-            />
-          </label>
+          {isRecurring ? (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-[var(--p-text-muted)]">Dia do vencimento *</span>
+              <input
+                type="number"
+                min="1"
+                max="28"
+                value={dueDay}
+                onChange={(e) => setDueDay(e.target.value)}
+                className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+              />
+            </label>
+          ) : (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-[var(--p-text-muted)]">
+                {kind === "expense" ? "Data *" : "Vencimento *"}
+              </span>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+              />
+            </label>
+          )}
         </div>
+
+        {isRecurring && (
+          <div className="flex flex-col gap-3 rounded-lg border border-dashed border-[var(--p-border)] p-3">
+            <div className="grid grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-[var(--p-text-muted)]">Frequência</span>
+                <select
+                  value={frequency}
+                  onChange={(e) => setFrequency(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+                >
+                  <option value="monthly">Mensal</option>
+                  <option value="annual">Anual</option>
+                </select>
+              </label>
+              {frequency === "annual" && (
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-[var(--p-text-muted)]">Mês de vencimento *</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="12"
+                    value={dueMonth}
+                    onChange={(e) => setDueMonth(e.target.value)}
+                    placeholder="1-12"
+                    className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+                  />
+                </label>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-[var(--p-text-muted)]">Início (mês)</span>
+                <input
+                  type="month"
+                  value={startMonth}
+                  onChange={(e) => setStartMonth(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-[var(--p-text-muted)]">Recorrência</span>
+                <select
+                  value={recurrenceMode}
+                  onChange={(e) => setRecurrenceMode(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+                >
+                  <option value="indefinite">Indefinida</option>
+                  <option value="installments">Por parcelas</option>
+                  <option value="until_month">Até um mês final</option>
+                </select>
+              </label>
+            </div>
+            {recurrenceMode === "installments" && (
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-[var(--p-text-muted)]">Nº de parcelas *</span>
+                <input
+                  type="number"
+                  min="1"
+                  value={installments}
+                  onChange={(e) => setInstallments(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+                />
+              </label>
+            )}
+            {recurrenceMode === "until_month" && (
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-[var(--p-text-muted)]">Mês final *</span>
+                <input
+                  type="month"
+                  value={endMonth}
+                  onChange={(e) => setEndMonth(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+                />
+              </label>
+            )}
+          </div>
+        )}
 
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-[var(--p-text-muted)]">Categoria</span>
