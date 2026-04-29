@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/dunning-reminders",
       "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/monthly-previa",
+      "schedule": "13 6 1 * *"
     }
   ]
 }
