@@ -1,272 +1,438 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useSession } from "@/contexts/SessionContext";
-import Modal from "@/components/Modal";
 import { financeGateway } from "@/lib/financeGateway";
 import { computeRevenueKPIs } from "@/lib/finance";
 import { supabase } from "@/lib/supabaseClient";
+import {
+  BookOpen,
+  Calendar,
+  CreditCard,
+  DollarSign,
+  Plus,
+  TrendingUp,
+  TrendingDown,
+  Users,
+  AlertCircle,
+  CheckCircle2,
+  Clock,
+  ArrowUpRight,
+  Loader2,
+  Wallet,
+  Eye,
+  EyeOff,
+  Mail,
+  Cake,
+} from "lucide-react";
+import AppModal, { FormError, ModalActions } from "@/components/AppModal";
+
+// ─── Helpers ──────────────────────────────────────────────────────
+const TZ = "America/Sao_Paulo";
 
 const fmtBRL = (n) =>
-  (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  (Number(n) || 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
 
-const TZ = "America/Sao_Paulo";
 const fmtBRDateDots = (s) => {
   if (!s) return "—";
   const [Y, M, D] = String(s).slice(0, 10).split("-");
+  if (!Y || !M || !D) return "—";
   return `${D}.${M}.${Y}`;
 };
-const ymAddMonths = (ym, delta) => {
-  const [Y, M] = ym.split("-").map(Number);
-  const d = new Date(Date.UTC(Y, (M - 1) + delta, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-};
 
-export default function Page() {
+function ymAddMonths(ym, delta) {
+  const [Y, M] = ym.split("-").map(Number);
+  const d = new Date(Date.UTC(Y, M - 1 + delta, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function previousYm(ym) {
+  return ymAddMonths(ym, -1);
+}
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function percentDelta(curr, prev) {
+  if (!Number.isFinite(prev) || prev === 0) return null;
+  return ((curr - prev) / prev) * 100;
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Bom dia";
+  if (h < 18) return "Boa tarde";
+  return "Boa noite";
+}
+
+function longDate() {
+  const d = new Date();
+  const dayNames = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+  const monthNames = [
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+  ];
+  return `${dayNames[d.getDay()]}, ${d.getDate()} de ${monthNames[d.getMonth()]}`;
+}
+
+function statusOfRevenue(r, today) {
+  if (r.status === "paid") return "paid";
+  if (r.status === "canceled") return "canceled";
+  if (
+    r.status === "pending" &&
+    r.due_date &&
+    String(r.due_date).slice(0, 10) < today
+  )
+    return "overdue";
+  return "pending";
+}
+
+function buildClassesForToday(turmas, teacherMap) {
+  const today = new Date();
+  const dow = today.getDay();
+  const out = [];
+  for (const t of turmas || []) {
+    const rules = Array.isArray(t.meeting_rules) ? t.meeting_rules : [];
+    for (const r of rules) {
+      if (Number(r.weekday) !== dow) continue;
+      const time = String(r.time || t.meeting_time || "08:00").slice(0, 5);
+      const dur = Math.max(0.25, Number(r.duration_hours || 1));
+      const mins = Math.round(dur * 60);
+      out.push({
+        id: `${t.id}-${r.weekday}-${time}`,
+        time,
+        title: t.name || "—",
+        room: t.room || "—",
+        teacher: t.teacher_id ? teacherMap[t.teacher_id] || "—" : "Sem professor",
+        duration: `${mins} min`,
+      });
+    }
+  }
+  return out.sort((a, b) => a.time.localeCompare(b.time));
+}
+
+function buildRecentActivity(payments, expenses, revenues) {
+  const today = todayISO();
+  const items = [];
+  for (const p of payments || []) {
+    if (p.status === "paid" && p.paid_at) {
+      items.push({
+        when: p.paid_at,
+        tag: "payment",
+        who: p.student_name_snapshot || p.student_name || "—",
+        what: `pagou ${fmtBRL(p.amount)}`,
+        sort: String(p.paid_at),
+      });
+    } else if (
+      p.status === "pending" &&
+      p.due_date &&
+      String(p.due_date).slice(0, 10) < today
+    ) {
+      const days = Number(p.days_overdue || 0);
+      items.push({
+        when: p.due_date,
+        tag: "overdue",
+        who: p.student_name_snapshot || p.student_name || "—",
+        what: days > 0 ? `mensalidade em atraso há ${days}d` : "mensalidade em atraso",
+        sort: String(p.due_date),
+      });
+    }
+  }
+  for (const e of expenses || []) {
+    if (e.status === "paid" && e.paid_at) {
+      items.push({
+        when: e.paid_at,
+        tag: "expense",
+        who: e.title_snapshot || e.title || "Despesa",
+        what: `pago ${fmtBRL(e.amount)}`,
+        sort: String(e.paid_at),
+      });
+    }
+  }
+  for (const r of revenues || []) {
+    if (r.status === "paid" && r.paid_at) {
+      items.push({
+        when: r.paid_at,
+        tag: "revenue",
+        who: r.title || "Receita",
+        what: `recebido ${fmtBRL(r.amount)}`,
+        sort: String(r.paid_at),
+      });
+    }
+  }
+  return items.sort((a, b) => b.sort.localeCompare(a.sort)).slice(0, 6);
+}
+
+function tagChip(tag) {
+  switch (tag) {
+    case "payment":
+      return { cls: "p-chip-success", icon: CheckCircle2, label: "Pagamento" };
+    case "revenue":
+      return { cls: "p-chip-success", icon: CheckCircle2, label: "Receita" };
+    case "expense":
+      return { cls: "p-chip-neutral", icon: CreditCard, label: "Despesa" };
+    case "overdue":
+      return { cls: "p-chip-danger", icon: AlertCircle, label: "Atraso" };
+    default:
+      return { cls: "p-chip-neutral", icon: Clock, label: tag };
+  }
+}
+
+function fmtRelative(iso) {
+  if (!iso) return "—";
+  const when = new Date(String(iso).slice(0, 10));
+  if (Number.isNaN(when.getTime())) return "—";
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const w = new Date(when);
+  w.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - w) / 86400000);
+  if (diff === 0) return "hoje";
+  if (diff === 1) return "ontem";
+  if (diff > 1 && diff < 7) return `há ${diff} dias`;
+  return when.toLocaleDateString("pt-BR");
+}
+
+// ─── Página ──────────────────────────────────────────────────────
+export default function PainelPage() {
+  const { ready, isAdmin, perms } = useSession();
+  const canReadFinance = isAdmin || !!perms?.finance?.read;
+  const canReadRegistry = isAdmin || !!perms?.registry?.read;
+
   const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
-  const [panelGroup, setPanelGroup] = useState("receitas");
   const [showValues, setShowValues] = useState(true);
   const [openMail, setOpenMail] = useState(false);
-  const [mailForm, setMailForm] = useState({ to: "", subject: "", message: "" });
-  const [sending, setSending] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [registering, setRegistering] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
 
-  const [revKpis, setRevKpis] = useState({});
-  const [kpisFin, setKpisFin] = useState({});
-  const [kpisExp, setKpisExp] = useState({});
-  const [counts, setCounts] = useState({ studentsActive: 0 });
-  const [upcoming, setUpcoming] = useState([]);   // vencem nos próximos 7 dias
-  const [birthdays, setBirthdays] = useState([]); // aniversariantes do mês
-  const [payables5, setPayables5] = useState([]); // contas a pagar próximos 5 dias
-  const [payablesInclPast, setPayablesInclPast] = useState(false); // fallback: inclui últimos 5 dias se não houver próximos
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // KPIs combinados (mensalidades + outras receitas)
-  const [combined, setCombined] = useState(null);
+  // Datasets
+  const [students, setStudents] = useState([]);
+  const [turmas, setTurmas] = useState([]);
+  const [teacherMap, setTeacherMap] = useState({});
+  const [payments, setPayments] = useState([]);
+  const [expenses, setExpenses] = useState([]);
+  const [revenues, setRevenues] = useState([]);
+
+  // KPIs
+  const [currKpis, setCurrKpis] = useState({ recebido: 0, a_receber: 0, atrasado: 0 });
+  const [prevKpis, setPrevKpis] = useState({ recebido: 0 });
+  const [expKpis, setExpKpis] = useState({ total: 0, paid: 0, overdue: 0, teachers: 0 });
+
+  // Listas auxiliares
+  const [upcoming7d, setUpcoming7d] = useState([]);
+  const [payables5d, setPayables5d] = useState([]);
+  const [payablesInclPast, setPayablesInclPast] = useState(false);
+  const [birthdays, setBirthdays] = useState([]);
+
+  function maskMoney(n) {
+    return showValues ? fmtBRL(n) : "•••";
+  }
+  function maskCount(n) {
+    return showValues ? String(n) : "••";
+  }
+
+  // Click-outside no dropdown "Novo"
   useEffect(() => {
-    async function loadCombined() {
-      try {
-        const data = await financeGateway.getCombinedRevenueKpis({ ym });
-        setCombined(data);
-      } catch (err) {
-        console.warn("Erro ao carregar combined KPIs:", err.message);
-        setCombined({ total: 0, received: 0, upcoming: 0, overdue: 0 });
-      }
+    function onDocClick(e) {
+      if (menuRef.current && !menuRef.current.contains(e.target))
+        setMenuOpen(false);
     }
-    loadCombined();
-  }, [ym]);
-
-  // 🔑 DB-first: sessão/permissões reais
-  const { ready, isAdmin, perms, session } = useSession(); // session mantido caso use depois
-  const canReadFinance  = isAdmin || !!perms?.finance?.read;
-  const canWriteFinance = isAdmin || !!perms?.finance?.write;
-  const canReadRegistry = isAdmin || !!perms?.registry?.read; // p/ students (aniversários)
-
-  function maskMoney(n) { return showValues ? fmtBRL(n) : "•••"; }
-  function maskCount(n)  { return showValues ? String(n) : "••"; }
+    if (menuOpen) document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [menuOpen]);
 
   async function load() {
     let alive = true;
-    setLoading(true);
     try {
-      // pagamentos + despesas (somente se pode ler Financeiro)
-      const [payments, expenses] = await Promise.all([
-        canReadFinance ? financeGateway.listPayments({ ym }) : Promise.resolve({ rows: [], kpis: {} }),
-        canReadFinance ? financeGateway.listExpenseEntries({ ym }) : Promise.resolve({ kpis: {} }),
+      setLoading(true);
+      setError(null);
+
+      const prevYm = previousYm(ym);
+      const [
+        stuList,
+        tuList,
+        teacherList,
+        paymentsRes,
+        expensesRes,
+        revenuesRes,
+        currKpisRes,
+        prevKpisRes,
+      ] = await Promise.all([
+        canReadRegistry ? financeGateway.listStudents() : Promise.resolve([]),
+        canReadRegistry ? financeGateway.listTurmas() : Promise.resolve([]),
+        canReadRegistry ? financeGateway.listTeachers() : Promise.resolve([]),
+        canReadFinance
+          ? financeGateway.listPayments({ ym })
+          : Promise.resolve({ rows: [], kpis: {} }),
+        canReadFinance
+          ? financeGateway.listExpenseEntries({ ym })
+          : Promise.resolve({ rows: [], kpis: {} }),
+        canReadFinance
+          ? financeGateway.listOtherRevenues({ ym })
+          : Promise.resolve([]),
+        canReadFinance
+          ? financeGateway.getCombinedRevenueKpis({ ym })
+          : Promise.resolve({ recebido: 0, a_receber: 0, atrasado: 0 }),
+        canReadFinance
+          ? financeGateway.getCombinedRevenueKpis({ ym: prevYm })
+          : Promise.resolve({ recebido: 0 }),
       ]);
       if (!alive) return;
 
-      // KPIs de receitas (mensalidades)
-      const rows = payments?.rows || [];
-      const kpisNew = computeRevenueKPIs(rows, { ym, policy: "due_date" });
-      setRevKpis(kpisNew);
+      setStudents(Array.isArray(stuList) ? stuList : []);
+      setTurmas(Array.isArray(tuList) ? tuList : []);
+      const tMap = {};
+      for (const t of teacherList || []) tMap[t.id] = t.name;
+      setTeacherMap(tMap);
 
-      const finKpis = {
-        billed: Number(payments?.kpis?.total_billed || 0),
-        paid: Number(payments?.kpis?.total_paid || 0),
-        pending: Number(payments?.kpis?.total_pending || 0),
-        overdueMoney: Number(
-          rows
-            .filter((r) => r.status === "pending" && (r.days_overdue || 0) > 0)
-            .reduce((a, b) => a + Number(b.amount || 0), 0)
-        ),
-      };
+      const paymentsRows = paymentsRes?.rows || [];
+      setPayments(paymentsRows);
+      setExpenses(expensesRes?.rows || []);
+      setRevenues(
+        Array.isArray(revenuesRes)
+          ? revenuesRes
+          : Array.isArray(revenuesRes?.rows)
+          ? revenuesRes.rows
+          : []
+      );
+      setCurrKpis(currKpisRes || { recebido: 0, a_receber: 0, atrasado: 0 });
+      setPrevKpis(prevKpisRes || { recebido: 0 });
 
-      // KPIs de despesas
-      const expKpis = {
-        total:   Number(expenses?.kpis?.total   || 0),
-        paid:    Number(expenses?.kpis?.paid    || 0),
-        pending: Number(expenses?.kpis?.pending || 0),
-        overdue: Number(expenses?.kpis?.overdue || 0),
-        teachers:Number(expenses?.kpis?.teachers|| 0),
-      };
-
-      // === Custos professores (somatório do mês atual) ===
+      // KPIs de despesas + custo professores
+      const eK = expensesRes?.kpis || {};
       let teachersTotal = 0;
       if (canReadFinance) {
-        let teacherIds = [];
         try {
-          if (canReadRegistry) {
-            const list = await financeGateway.listTeachers();
-            const arr = Array.isArray(list) ? list : Array.isArray(list?.rows) ? list.rows : [];
-            teacherIds = arr.map(t => t.id);
-          } else {
-            // pega professores que realmente têm sessões no mês, sem depender do cadastro
-            const monthStart = `${ym}-01`;
-            const [Y, M] = ym.split("-").map(Number);
-            const nextMonthStart = `${M === 12 ? Y + 1 : Y}-${String(M === 12 ? 1 : M + 1).padStart(2, "0")}-01`;
-
-            const { data, error } = await supabase
-              .from("sessions")
-              .select("teacher_id_snapshot")
-              .gte("date", monthStart)
-              .lt("date", nextMonthStart);
-
-            if (!error) {
-              teacherIds = [...new Set((data || []).map(s => s.teacher_id_snapshot).filter(Boolean))];
-            }
-          }
-
+          const teacherIds = canReadRegistry
+            ? (teacherList || []).map((t) => t.id)
+            : [];
           if (teacherIds.length) {
             const payouts = await Promise.all(
-              teacherIds.map(tid => financeGateway.sumTeacherPayoutByMonth(tid, ym))
+              teacherIds.map((tid) =>
+                financeGateway.sumTeacherPayoutByMonth(tid, ym)
+              )
             );
-            teachersTotal = payouts.reduce((acc, it) => acc + Number(it?.amount || 0), 0);
+            teachersTotal = payouts.reduce(
+              (acc, it) => acc + Number(it?.amount || 0),
+              0
+            );
           }
         } catch {
-          // mantém teachersTotal = 0 se algo falhar
+          /* keep 0 */
         }
       }
-      expKpis.teachers = teachersTotal;
+      setExpKpis({
+        total: Number(eK.total || 0),
+        paid: Number(eK.paid || 0),
+        overdue: Number(eK.overdue || 0),
+        teachers: teachersTotal,
+      });
 
-      // ===== Próximos 7 dias (vencimentos) =====
-      const nowSP  = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
-      const todayISO = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(nowSP);
-      const plus7 = new Date(nowSP); plus7.setDate(plus7.getDate() + 7);
-      const endISO = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(plus7);
+      // Próximos 7 dias (vencimentos de mensalidades)
+      const nowSP = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+      const todaySP = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(
+        nowSP
+      );
+      const plus7 = new Date(nowSP);
+      plus7.setDate(plus7.getDate() + 7);
+      const end7 = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(
+        plus7
+      );
 
       let rows7 = [];
-      try {
-        if (canReadFinance) {
-          const { data, error } = await supabase
+      if (canReadFinance) {
+        try {
+          const { data } = await supabase
             .from("payments")
-            .select("id, student_id, payer_id, student_name_snapshot, payer_name_snapshot, amount, due_date, status")
+            .select(
+              "id, student_id, payer_id, student_name_snapshot, payer_name_snapshot, amount, due_date, status"
+            )
             .eq("status", "pending")
-            .gte("due_date", todayISO)
-            .lte("due_date", endISO)
+            .gte("due_date", todaySP)
+            .lte("due_date", end7)
             .order("due_date", { ascending: true })
             .limit(200);
-          if (error) throw error;
           rows7 = data || [];
+        } catch {
+          /* ignore */
         }
-      } catch {
-        // fallback: usa gateway por mês
-        const ymNow  = todayISO.slice(0, 7);
-        const ymNext = ymAddMonths(ymNow, 1);
-        const [dueNow, dueNext] = await Promise.all([
-          canReadFinance ? financeGateway.listPayments({ ym: ymNow,  status: "pending" }) : Promise.resolve([]),
-          canReadFinance ? financeGateway.listPayments({ ym: ymNext, status: "pending" }) : Promise.resolve([]),
-        ]);
-        const rowsNow  = Array.isArray(dueNow?.rows)  ? dueNow.rows  : Array.isArray(dueNow)  ? dueNow  : [];
-        const rowsNext = Array.isArray(dueNext?.rows) ? dueNext.rows : Array.isArray(dueNext) ? dueNext : [];
-        rows7 = [...rowsNow, ...rowsNext].filter(r => r?.due_date >= todayISO && r?.due_date <= endISO);
       }
-
-      // completar nomes (se permitido acessar cadastros)
-      const needStudent = [...new Set(rows7.filter(r => !r.student_name_snapshot && r.student_id).map(r => r.student_id))];
-      const needPayer   = [...new Set(rows7.filter(r => !r.payer_name_snapshot   && r.payer_id).map(r => r.payer_id))];
-
-      const studentNameById = Object.create(null);
-      const payerNameById   = Object.create(null);
-
-      if (canReadRegistry && needStudent.length) {
-        let q1 = await supabase.from("students").select("id, full_name").in("id", needStudent);
-        let sList = q1.error
-          ? (await supabase.from("students").select("id, name").in("id", needStudent)).data
-          : q1.data;
-        for (const s of sList || []) studentNameById[s.id] = s.full_name ?? s.name ?? "";
-      }
-      if (canReadRegistry && needPayer.length) {
-        let p1 = await supabase.from("payers").select("id, name").in("id", needPayer);
-        let pList = p1.error
-          ? (await supabase.from("payers").select("id, full_name").in("id", needPayer)).data
-          : p1.data;
-        for (const p of pList || []) payerNameById[p.id] = p.name ?? p.full_name ?? "";
-      }
-
       const up = rows7
         .map((r) => ({
           id: r.id,
           due_date: r.due_date,
           amount: Number(r.amount || 0),
-          student_name: r.student_name_snapshot ?? studentNameById[r.student_id] ?? "—",
-          payer_name:   r.payer_name_snapshot   ?? payerNameById[r.payer_id]     ?? "—",
-          isToday: r.due_date === todayISO,
+          student_name: r.student_name_snapshot || "—",
+          payer_name: r.payer_name_snapshot || "—",
+          isToday: r.due_date === todaySP,
         }))
         .sort((a, b) => a.due_date.localeCompare(b.due_date));
-
       if (!alive) return;
-      setUpcoming(up);
+      setUpcoming7d(up);
 
-      // ===== Contas a pagar (próximos 5 dias) =====
-      const plus5 = new Date(nowSP); plus5.setDate(plus5.getDate() + 5);
-      const end5ISO = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(plus5);
-
-      // usa o gateway (meses atual + próximo) e filtra pelo range de 5 dias
+      // Contas a pagar (próximos 5 dias)
+      const plus5 = new Date(nowSP);
+      plus5.setDate(plus5.getDate() + 5);
+      const end5 = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(
+        plus5
+      );
       let rows5 = [];
+      let inclPast = false;
       if (canReadFinance) {
-        const ymNow  = todayISO.slice(0, 7);
+        const ymNow = todaySP.slice(0, 7);
         const ymNext = ymAddMonths(ymNow, 1);
         const [eNow, eNext] = await Promise.all([
-          financeGateway.listExpenseEntries({ ym: ymNow,  status: "pending" }),
+          financeGateway.listExpenseEntries({ ym: ymNow, status: "pending" }),
           financeGateway.listExpenseEntries({ ym: ymNext, status: "pending" }),
         ]);
-        const rowsNow  = Array.isArray(eNow?.rows)  ? eNow.rows  : [];
-        const rowsNext = Array.isArray(eNext?.rows) ? eNext.rows : [];
-        const all = [...rowsNow, ...rowsNext];
-        rows5 = all.filter(r => r?.due_date >= todayISO && r?.due_date <= end5ISO);
-
-        // Fallback: se não houver próximos, inclui atrasados dos últimos 5 dias
+        const all = [
+          ...(Array.isArray(eNow?.rows) ? eNow.rows : []),
+          ...(Array.isArray(eNext?.rows) ? eNext.rows : []),
+        ];
+        rows5 = all.filter((r) => r?.due_date >= todaySP && r?.due_date <= end5);
         if (!rows5.length) {
-          const minus5 = new Date(nowSP); minus5.setDate(minus5.getDate() - 5);
-          const start5ISO = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(minus5);
-          rows5 = all.filter(r => r?.due_date >= start5ISO && r?.due_date <= end5ISO);
-          setPayablesInclPast(rows5.length > 0);
-        } else {
-          setPayablesInclPast(false);
+          const minus5 = new Date(nowSP);
+          minus5.setDate(minus5.getDate() - 5);
+          const start5 = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(
+            minus5
+          );
+          rows5 = all.filter(
+            (r) => r?.due_date >= start5 && r?.due_date <= end5
+          );
+          inclPast = rows5.length > 0;
         }
       }
-
-      const pay5 = (rows5 || [])
-        .map(r => ({
-          id: r.id,
-          due_date: r.due_date,
-          title: r.title_snapshot || r.title || r.description || "—",
-          amount: Number(r.amount || 0),
-          isToday: r.due_date === todayISO,
-          isPast: r.due_date < todayISO,
-        }))
-        .sort((a, b) => a.due_date.localeCompare(b.due_date));
-
       if (!alive) return;
-      setPayables5(pay5);
+      setPayables5d(
+        rows5
+          .map((r) => ({
+            id: r.id,
+            due_date: r.due_date,
+            title: r.title_snapshot || r.title || "—",
+            amount: Number(r.amount || 0),
+            isToday: r.due_date === todaySP,
+            isPast: r.due_date < todaySP,
+          }))
+          .sort((a, b) => a.due_date.localeCompare(b.due_date))
+      );
+      setPayablesInclPast(inclPast);
 
-      // ===== Students (ativos) + Aniversariantes do mês =====
-      let students = [];
-      if (canReadRegistry) {
-        const res = await financeGateway.listStudents(); // adapter usa supabaseGateway (anon/RLS)
-        students = Array.isArray(res) ? res : Array.isArray(res?.rows) ? res.rows : [];
-      }
-      const nowSPBirthday = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
-      const mm = nowSPBirthday.getMonth() + 1;
-
-      // TODOS os alunos ativos (para o KPI)
-      const activeStudentsAll = (students || []).filter(s => (s?.status || "").toLowerCase() === "ativo").length;
-
-      const list = (students || [])
-        .filter(s => (s?.status || "").toLowerCase() === "ativo")
-        .map(s => {
+      // Aniversariantes do mês
+      const mm = nowSP.getMonth() + 1;
+      const bdays = (stuList || [])
+        .filter((s) => (s?.status || "").toLowerCase() === "ativo")
+        .map((s) => {
           const name = s.full_name ?? s.name ?? "";
-          const dob  = s.birth_date ?? s.date_of_birth ?? null;
+          const dob = s.birth_date ?? s.date_of_birth ?? null;
           if (!name || !dob) return null;
           const m = Number(String(dob).slice(5, 7));
           if (m !== mm) return null;
@@ -275,89 +441,703 @@ export default function Page() {
         })
         .filter(Boolean)
         .sort((a, b) => a.dd - b.dd);
-
       if (!alive) return;
-      setBirthdays(list);
-      setKpisFin(finKpis);
-      setKpisExp({ ...expKpis, teachers: teachersTotal });
-      setCounts({ studentsActive: activeStudentsAll });
+      setBirthdays(bdays);
     } catch (e) {
-      // opcional: console.warn("Dashboard load error:", e);
+      if (alive) setError(e?.message || String(e));
     } finally {
       if (alive) setLoading(false);
     }
   }
 
-  // carrega dados quando permitido
   useEffect(() => {
     if (!ready) return;
-    if (!canReadFinance && !canReadRegistry) return; // nada para mostrar
+    if (!canReadFinance && !canReadRegistry) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, ym, canReadFinance, canReadRegistry]);
 
-  // foco/visibilidade → reload
+  // Reload em foco/visibilidade
   useEffect(() => {
-    let alive = true;
-    const onFocus = () => { if (!alive) return; if (canReadFinance || canReadRegistry) load(); };
+    const onFocus = () => {
+      if (canReadFinance || canReadRegistry) load();
+    };
     const onVisible = () => {
-      if (!alive) return;
-      if (document.visibilityState === "visible" && (canReadFinance || canReadRegistry)) load();
+      if (
+        document.visibilityState === "visible" &&
+        (canReadFinance || canReadRegistry)
+      )
+        load();
     };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
-      alive = false;
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [ym, canReadFinance, canReadRegistry]); // reanexa quando condições mudarem
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ym, canReadFinance, canReadRegistry]);
 
+  // Derivados
+  const today = todayISO();
+  const todayClasses = useMemo(
+    () => buildClassesForToday(turmas, teacherMap),
+    [turmas, teacherMap]
+  );
+  const recent = useMemo(
+    () => buildRecentActivity(payments, expenses, revenues),
+    [payments, expenses, revenues]
+  );
+  const overdueCount = payments.filter(
+    (p) => statusOfRevenue(p, today) === "overdue"
+  ).length;
+  const paidOnTime = payments.filter((p) => p.status === "paid").length;
+  const paidPct = payments.length
+    ? Math.round((paidOnTime / payments.length) * 100)
+    : 0;
+  const activeStudents = students.filter((s) => s.status === "ativo").length;
+
+  const recebido = Number(currKpis?.recebido || 0);
+  const prevRecebido = Number(prevKpis?.recebido || 0);
+  const delta = percentDelta(recebido, prevRecebido);
+  const grossRevenue =
+    recebido +
+    Number(currKpis?.a_receber || 0) +
+    Number(currKpis?.atrasado || 0);
+
+  // Sparkline mensal (12 buckets)
+  const sparkBars = useMemo(() => {
+    if (payments.length === 0) return Array(12).fill(10);
+    const perDay = new Array(31).fill(0);
+    for (const p of payments) {
+      const when = String(p.paid_at || p.due_date || "").slice(8, 10);
+      const idx = Number(when) - 1;
+      if (idx >= 0 && idx < 31) perDay[idx] += Number(p.amount || 0);
+    }
+    const bars = [];
+    for (let i = 0; i < 12; i++) {
+      const start = Math.floor((i * 31) / 12);
+      const end = Math.floor(((i + 1) * 31) / 12);
+      bars.push(perDay.slice(start, end).reduce((a, b) => a + b, 0));
+    }
+    const max = Math.max(1, ...bars);
+    return bars.map((b) => Math.max(8, Math.round((b / max) * 100)));
+  }, [payments]);
+
+  async function handleRegisterClass(c) {
+    if (registering) return;
+    try {
+      setRegistering(c.id);
+      setError(null);
+      const todayStr = todayISO();
+      const [tId] = String(c.id).split("-");
+      const dur = parseFloat(String(c.duration).replace(" min", "")) / 60;
+      await financeGateway.createSession({
+        turma_id: tId,
+        date: `${todayStr}T${c.time}:00`,
+        duration_hours: Number.isFinite(dur) && dur > 0 ? dur : 1,
+      });
+      alert(`Aula "${c.title}" registrada.`);
+      await load();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setRegistering(null);
+    }
+  }
+
+  // Gates
   if (!ready) {
     return (
-      <main className="p-6">
-        <div className="animate-pulse text-sm text-gray-600">Preparando sessão…</div>
-      </main>
+      <div className="flex items-center gap-2 p-6 text-sm text-[var(--p-text-muted)]">
+        <Loader2 className="h-4 w-4 animate-spin" /> Preparando sessão…
+      </div>
     );
   }
-
-  // se não pode ler nada relevante da Home, bloqueia
   if (!canReadFinance && !canReadRegistry) {
     return (
-      <main className="p-6 text-sm text-gray-600">
+      <div className="p-6 text-sm text-[var(--p-text-muted)]">
         Acesso negado.
-      </main>
+      </div>
     );
   }
 
-  // “perfil professor puro”: sem finanças e com classes
-  const isTeacherOnly = !isAdmin && !!perms?.classes?.write && !canReadFinance;
-  if (isTeacherOnly) {
-    return (
-      <main className="p-6 text-sm text-gray-600">
-        Redirecionando para sua agenda…
-      </main>
-    );
-  }
+  // KPI cards (4 unificados)
+  const kpiCards = [
+    {
+      label: "Receita do mês",
+      value: maskMoney(grossRevenue),
+      delta:
+        delta !== null
+          ? `${delta >= 0 ? "+" : ""}${delta.toFixed(1).replace(".", ",")}%`
+          : "—",
+      trend: delta === null ? null : delta >= 0 ? "up" : "down",
+      icon: DollarSign,
+      hint: "vs. mês anterior",
+    },
+    {
+      label: "Pagamentos em dia",
+      value: `${paidPct}%`,
+      delta: `${paidOnTime}/${payments.length || 0}`,
+      trend: null,
+      icon: CheckCircle2,
+      hint: "mensalidades pagas",
+    },
+    {
+      label: "Em atraso",
+      value: maskCount(overdueCount),
+      delta: maskMoney(currKpis?.atrasado || 0),
+      trend: overdueCount > 0 ? "down" : null,
+      icon: AlertCircle,
+      hint: "pendentes",
+    },
+    {
+      label: "Alunos ativos",
+      value: maskCount(activeStudents),
+      delta: `${students.length} total`,
+      trend: null,
+      icon: Users,
+      hint: "este mês",
+    },
+  ];
 
-  // Regra de cor para alunos ativos
-  const activeStudents = Number(counts.studentsActive ?? 0);
-  const activeStudentsTone =
-    activeStudents >= 36 ? "success"
-    : activeStudents >= 25 ? "warning"
-    : "danger";
+  return (
+    <div className="space-y-6">
+      {/* Header com greeting + actions */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wider text-[var(--p-text-faint)]">
+            {longDate()}
+          </div>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight md:text-3xl">
+            {greeting()}
+          </h1>
+          <p className="mt-1 text-sm text-[var(--p-text-muted)]">
+            {loading
+              ? "Carregando…"
+              : `Você tem ${todayClasses.length} ${
+                  todayClasses.length === 1 ? "aula" : "aulas"
+                } hoje${
+                  canReadFinance
+                    ? ` e ${overdueCount} ${
+                        overdueCount === 1 ? "mensalidade" : "mensalidades"
+                      } em atraso`
+                    : ""
+                }.`}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="month"
+            value={ym}
+            onChange={(e) => setYm(e.target.value.slice(0, 7))}
+            className="rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            aria-label="Mês"
+          />
+          <button
+            onClick={() => setShowValues((v) => !v)}
+            className="p-btn p-btn-ghost"
+            title={showValues ? "Ocultar valores" : "Mostrar valores"}
+          >
+            {showValues ? (
+              <EyeOff className="h-4 w-4" />
+            ) : (
+              <Eye className="h-4 w-4" />
+            )}
+            <span className="hidden sm:inline">
+              {showValues ? "Ocultar" : "Mostrar"}
+            </span>
+          </button>
+          <button onClick={() => setOpenMail(true)} className="p-btn p-btn-ghost">
+            <Mail className="h-4 w-4" />
+            <span className="hidden sm:inline">E-mail</span>
+          </button>
+          <div ref={menuRef} className="relative">
+            <button
+              className="p-btn p-btn-primary"
+              onClick={() => setMenuOpen((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+            >
+              <Plus className="h-4 w-4" />
+              <span>Novo</span>
+            </button>
+            {menuOpen && (
+              <div
+                role="menu"
+                className="absolute right-0 top-full z-40 mt-1 w-56 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] p-1 shadow-lg"
+              >
+                {[
+                  { icon: Users, label: "Novo aluno", href: "/alunos" },
+                  { icon: BookOpen, label: "Nova turma", href: "/turmas" },
+                  { icon: Wallet, label: "Novo lançamento", href: "/financeiro" },
+                  { icon: Calendar, label: "Nova aula", href: "/agenda" },
+                ].map(({ icon: Icon, label, href }) => (
+                  <Link
+                    key={label}
+                    href={href}
+                    className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-[var(--p-text)] hover:bg-[var(--p-surface-2)]"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <Icon className="h-4 w-4 text-[var(--p-text-muted)]" />
+                    {label}
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
-  async function onSendMail(e) {
-    e?.preventDefault?.();
+      {error && (
+        <div className="rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-4 py-3 text-sm text-[var(--p-danger)]">
+          Erro: {error}
+        </div>
+      )}
+
+      {/* KPI cards principais */}
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
+        {kpiCards.map(({ label, value, delta: d, trend, icon: Icon, hint }) => (
+          <div
+            key={label}
+            className="p-card p-card-hover flex flex-col gap-3 p-4 md:p-5"
+          >
+            <div className="flex items-start justify-between">
+              <div className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--p-primary-50)] text-[var(--p-primary)]">
+                <Icon className="h-4 w-4" />
+              </div>
+              {trend && (
+                <div
+                  className={[
+                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
+                    trend === "up"
+                      ? "bg-[var(--p-success-50)] text-[var(--p-success)]"
+                      : "bg-[var(--p-danger-50)] text-[var(--p-danger)]",
+                  ].join(" ")}
+                >
+                  {trend === "up" ? (
+                    <TrendingUp className="h-3 w-3" />
+                  ) : (
+                    <TrendingDown className="h-3 w-3" />
+                  )}
+                  {d}
+                </div>
+              )}
+              {!trend && d && (
+                <span className="text-[11px] text-[var(--p-text-faint)] tabular-nums">
+                  {d}
+                </span>
+              )}
+            </div>
+            <div>
+              <div className="text-xs text-[var(--p-text-muted)]">{label}</div>
+              <div className="p-kpi-value mt-1 text-2xl md:text-[26px] text-[var(--p-text)]">
+                {loading ? "…" : value}
+              </div>
+              <div className="mt-0.5 text-xs text-[var(--p-text-faint)]">
+                {hint}
+              </div>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      {/* Linha 2: Aulas hoje + Receita sparkline */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6">
+        <div className="p-card lg:col-span-2">
+          <div className="flex items-center justify-between border-b border-[var(--p-border)] px-5 py-4">
+            <div className="flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-[var(--p-text-muted)]" />
+              <h2 className="text-sm font-semibold">Aulas de hoje</h2>
+              <span className="p-chip p-chip-neutral">
+                {todayClasses.length}
+              </span>
+            </div>
+            <Link
+              href="/agenda"
+              className="inline-flex items-center gap-1 text-xs font-medium text-[var(--p-primary)] hover:text-[var(--p-primary-600)]"
+            >
+              Ver agenda <ArrowUpRight className="h-3 w-3" />
+            </Link>
+          </div>
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 px-5 py-12 text-sm text-[var(--p-text-muted)]">
+              <Loader2 className="h-4 w-4 animate-spin" /> Carregando…
+            </div>
+          ) : todayClasses.length === 0 ? (
+            <div className="px-5 py-12 text-center text-sm text-[var(--p-text-muted)]">
+              Sem aulas agendadas para hoje.
+            </div>
+          ) : (
+            <ul className="divide-y divide-[var(--p-border)]">
+              {todayClasses.map((c) => (
+                <li
+                  key={c.id}
+                  className="flex items-center gap-4 px-5 py-3 hover:bg-[var(--p-surface-2)]"
+                >
+                  <div className="flex w-14 flex-col items-start">
+                    <div className="text-sm font-semibold tabular-nums">
+                      {c.time}
+                    </div>
+                    <div className="text-xs text-[var(--p-text-faint)]">
+                      {c.duration}
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-medium truncate">
+                        {c.title}
+                      </div>
+                      {c.room && c.room !== "—" && (
+                        <span className="p-chip p-chip-neutral">{c.room}</span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 text-xs text-[var(--p-text-muted)]">
+                      Prof. {c.teacher}
+                    </div>
+                  </div>
+                  <button
+                    className="hidden sm:inline-flex p-btn p-btn-ghost text-xs h-8 px-3"
+                    onClick={() => handleRegisterClass(c)}
+                    disabled={registering === c.id}
+                  >
+                    {registering === c.id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      "Registrar"
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Receita sparkline */}
+        {canReadFinance && (
+          <div className="p-card p-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Receita — mês atual</h2>
+              {delta !== null && (
+                <span
+                  className={`p-chip ${
+                    delta >= 0 ? "p-chip-success" : "p-chip-danger"
+                  }`}
+                >
+                  {delta >= 0 ? "+" : ""}
+                  {delta.toFixed(0)}%
+                </span>
+              )}
+            </div>
+            <div className="mt-4 flex items-end gap-1 h-20">
+              {sparkBars.map((h, i) => (
+                <div
+                  key={i}
+                  className="flex-1 rounded-sm bg-gradient-to-t from-[var(--p-primary)] to-[var(--p-accent)] opacity-80"
+                  style={{ height: `${h}%` }}
+                />
+              ))}
+            </div>
+            <div className="mt-3 flex items-baseline justify-between">
+              <div>
+                <div className="text-xs text-[var(--p-text-muted)]">Recebido</div>
+                <div className="p-kpi-value text-xl">
+                  {loading ? "…" : maskMoney(recebido)}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-[var(--p-text-muted)]">A receber</div>
+                <div className="p-kpi-value text-xl text-[var(--p-text-muted)]">
+                  {loading ? "…" : maskMoney(currKpis?.a_receber || 0)}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Linha 3: Próximos 7 dias / Contas a pagar / Aniversariantes */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {canReadFinance && (
+          <ListCard
+            title="Vencem nos próximos 7 dias"
+            icon={DollarSign}
+            empty="Nada a vencer no período."
+            items={upcoming7d}
+            renderItem={(r) => (
+              <div className="flex items-center justify-between gap-3 px-4 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs tabular-nums text-[var(--p-text-muted)]">
+                      {fmtBRDateDots(r.due_date)}
+                    </span>
+                    {r.isToday && (
+                      <span className="p-chip p-chip-warning">Hoje</span>
+                    )}
+                  </div>
+                  <div className="text-sm font-medium truncate">
+                    {r.student_name}
+                  </div>
+                  <div className="text-xs text-[var(--p-text-faint)] truncate">
+                    {r.payer_name}
+                  </div>
+                </div>
+                <div className="text-sm font-semibold tabular-nums">
+                  {maskMoney(r.amount)}
+                </div>
+              </div>
+            )}
+            loading={loading}
+          />
+        )}
+
+        {canReadFinance && (
+          <ListCard
+            title={
+              <span>
+                Contas a pagar (5 dias)
+                {payablesInclPast && (
+                  <span className="ml-2 text-[10px] font-normal rounded bg-[var(--p-warning-50)] text-[var(--p-warning)] px-1.5 py-0.5">
+                    inclui atrasados
+                  </span>
+                )}
+              </span>
+            }
+            icon={CreditCard}
+            empty="Nada a pagar no período."
+            items={payables5d}
+            link={{ href: "/financeiro/gastos", label: "Ver todos" }}
+            renderItem={(e) => (
+              <div className="flex items-center justify-between gap-3 px-4 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs tabular-nums text-[var(--p-text-muted)]">
+                      {fmtBRDateDots(e.due_date)}
+                    </span>
+                    {e.isToday && (
+                      <span className="p-chip p-chip-warning">Hoje</span>
+                    )}
+                    {!e.isToday && e.isPast && (
+                      <span className="p-chip p-chip-danger">Atrasado</span>
+                    )}
+                  </div>
+                  <div className="text-sm font-medium truncate">{e.title}</div>
+                </div>
+                <div className="text-sm font-semibold tabular-nums text-[var(--p-danger)]">
+                  −{maskMoney(e.amount)}
+                </div>
+              </div>
+            )}
+            loading={loading}
+          />
+        )}
+
+        {canReadRegistry && (
+          <ListCard
+            title="Aniversariantes do mês"
+            icon={Cake}
+            empty="Nenhum aniversariante."
+            items={birthdays}
+            loading={loading}
+            renderItem={(b) => (
+              <div className="flex items-center gap-3 px-4 py-2">
+                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--p-primary-50)] text-[var(--p-primary)] text-xs font-semibold tabular-nums">
+                  {String(b.dd).padStart(2, "0")}
+                </span>
+                <div className="text-sm truncate">{b.name}</div>
+              </div>
+            )}
+          />
+        )}
+      </section>
+
+      {/* Linha 4: Atividade recente + Resumo de despesas */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6">
+        <div className="p-card lg:col-span-2">
+          <div className="flex items-center justify-between border-b border-[var(--p-border)] px-5 py-4">
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-[var(--p-text-muted)]" />
+              <h2 className="text-sm font-semibold">Atividade recente</h2>
+            </div>
+          </div>
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 px-5 py-12 text-sm text-[var(--p-text-muted)]">
+              <Loader2 className="h-4 w-4 animate-spin" /> Carregando…
+            </div>
+          ) : recent.length === 0 ? (
+            <div className="px-5 py-12 text-center text-sm text-[var(--p-text-muted)]">
+              Sem movimentações recentes.
+            </div>
+          ) : (
+            <ul className="divide-y divide-[var(--p-border)]">
+              {recent.map((r, i) => {
+                const { cls, icon: Icon, label } = tagChip(r.tag);
+                return (
+                  <li key={i} className="flex items-start gap-3 px-5 py-3">
+                    <div className={`p-chip ${cls} shrink-0`}>
+                      <Icon className="h-3 w-3" />
+                      {label}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm">
+                        <span className="font-medium">{r.who}</span>{" "}
+                        <span className="text-[var(--p-text-muted)]">
+                          {r.what}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-xs text-[var(--p-text-faint)]">
+                        {fmtRelative(r.when)}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        {/* Resumo despesas / custos */}
+        {canReadFinance && (
+          <div className="space-y-3">
+            <SmallStat
+              label="Gastos do mês"
+              value={maskMoney(expKpis.total)}
+              hint={`${maskMoney(expKpis.paid)} pagos`}
+              tone="neutral"
+              icon={CreditCard}
+            />
+            <SmallStat
+              label="Em atraso"
+              value={maskMoney(expKpis.overdue)}
+              hint="despesas vencidas"
+              tone="danger"
+              icon={AlertCircle}
+            />
+            <SmallStat
+              label="Custo professores"
+              value={maskMoney(expKpis.teachers)}
+              hint="repasses do mês"
+              tone="warning"
+              icon={Users}
+            />
+          </div>
+        )}
+      </section>
+
+      {/* Quick actions */}
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        {[
+          { icon: Users, label: "Alunos", href: "/alunos" },
+          { icon: CreditCard, label: "Mensalidades", href: "/financeiro/mensalidades" },
+          { icon: BookOpen, label: "Turmas", href: "/turmas" },
+          { icon: Calendar, label: "Agenda", href: "/agenda" },
+        ].map(({ icon: Icon, label, href }) => (
+          <Link
+            key={label}
+            href={href}
+            className="p-card p-card-hover flex items-center gap-3 px-4 py-3"
+          >
+            <div className="grid h-9 w-9 place-items-center rounded-lg bg-[var(--p-primary-50)] text-[var(--p-primary)]">
+              <Icon className="h-4 w-4" />
+            </div>
+            <div className="text-sm font-medium">{label}</div>
+          </Link>
+        ))}
+      </section>
+
+      {/* Modal: Enviar e-mail */}
+      {openMail && (
+        <SendMailModal onClose={() => setOpenMail(false)} />
+      )}
+    </div>
+  );
+}
+
+// ─── Componentes auxiliares ──────────────────────────────────────
+function ListCard({
+  title,
+  icon: Icon,
+  items,
+  renderItem,
+  empty,
+  link,
+  loading,
+}) {
+  return (
+    <div className="p-card overflow-hidden">
+      <div className="flex items-center justify-between border-b border-[var(--p-border)] px-4 py-3">
+        <div className="flex items-center gap-2 min-w-0">
+          {Icon && <Icon className="h-4 w-4 text-[var(--p-text-muted)] shrink-0" />}
+          <h2 className="text-sm font-semibold truncate">{title}</h2>
+        </div>
+        {link && (
+          <Link
+            href={link.href}
+            className="inline-flex items-center gap-1 text-xs font-medium text-[var(--p-primary)] hover:text-[var(--p-primary-600)]"
+          >
+            {link.label} <ArrowUpRight className="h-3 w-3" />
+          </Link>
+        )}
+      </div>
+      {loading ? (
+        <div className="flex items-center justify-center gap-2 px-4 py-6 text-xs text-[var(--p-text-muted)]">
+          <Loader2 className="h-3 w-3 animate-spin" /> Carregando…
+        </div>
+      ) : items.length === 0 ? (
+        <div className="px-4 py-6 text-center text-xs text-[var(--p-text-muted)]">
+          {empty}
+        </div>
+      ) : (
+        <ul className="max-h-72 overflow-y-auto divide-y divide-[var(--p-border)]">
+          {items.map((it, i) => (
+            <li key={it.id || i}>{renderItem(it)}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function SmallStat({ label, value, hint, tone, icon: Icon }) {
+  const toneCls =
+    tone === "danger"
+      ? "text-[var(--p-danger)]"
+      : tone === "warning"
+      ? "text-[var(--p-warning)]"
+      : tone === "success"
+      ? "text-[var(--p-success)]"
+      : "text-[var(--p-text)]";
+  return (
+    <div className="p-card flex items-center gap-3 p-4">
+      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[var(--p-primary-50)] text-[var(--p-primary)]">
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-xs text-[var(--p-text-muted)]">{label}</div>
+        <div className={`p-kpi-value text-lg ${toneCls}`}>{value}</div>
+        <div className="text-[11px] text-[var(--p-text-faint)]">{hint}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Modal: Enviar e-mail ────────────────────────────────────────
+function SendMailModal({ onClose }) {
+  const [form, setForm] = useState({ to: "", subject: "", message: "" });
+  const [sending, setSending] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const to = form.to.trim();
+    const subject = form.subject.trim();
+    const message = form.message.trim();
+    if (!to) return setErr("Informe o(s) destinatário(s).");
+    if (!subject) return setErr("Informe o assunto.");
+    if (!message) return setErr("Escreva a mensagem.");
     try {
       setSending(true);
-      const to = mailForm.to.trim();
-      const subject = mailForm.subject.trim();
-      const message = mailForm.message.trim();
-      if (!to) throw new Error("Informe o(s) destinatário(s).");
-      if (!subject) throw new Error("Informe o assunto.");
-      if (!message) throw new Error("Escreva a mensagem.");
-      // 🔑 chamada real para Mailgun via rota /api/send-mail
       const res = await fetch("/api/send-mail", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -365,312 +1145,71 @@ export default function Page() {
           to,
           subject,
           html: `<p>${message.replace(/\n/g, "<br/>")}</p>`,
-          text: message
+          text: message,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Falha no envio");
       alert("E-mail enviado ✅");
-      setOpenMail(false);
-      setMailForm({ to: "", subject: "", message: "" });
-    } catch (err) {
-      alert(err.message || String(err));
+      onClose();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
     } finally {
       setSending(false);
     }
   }
 
   return (
-    <main className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2 min-w-0">
-          <h1 className="text-2xl font-bold">Início</h1>
-          <label className="text-sm text-slate-600 whitespace-nowrap">Mês:</label>
+    <AppModal
+      title="Enviar e-mail"
+      onClose={sending ? () => {} : onClose}
+      maxWidth="lg"
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">
+            Para * (separe por vírgula)
+          </span>
           <input
-            type="month"
-            value={ym}
-            onChange={(e) => setYm(e.target.value.slice(0, 7))}
-            className="rounded-lg border px-3 py-2 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-600 focus:border-gray-600 w-[170px] sm:w-auto"
+            value={form.to}
+            onChange={(e) => setForm((f) => ({ ...f, to: e.target.value }))}
+            placeholder="aluno@ex.com, responsavel@ex.com"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
           />
-        </div>
-        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-          <select
-            value={panelGroup}
-            onChange={(e) => setPanelGroup(e.target.value)}
-            className="rounded-lg border px-3 py-2 bg-white shadow-sm text-gray-800 hover:border-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-600 focus:border-gray-600 transition-colors"
-            title="Escolha o conjunto de cards"
-          >
-            <option value="receitas">Receitas</option>
-            <option value="gastos">Gastos</option>
-            <option value="custos">Custos</option>
-          </select>
-          <button
-            onClick={() => setShowValues((v) => !v)}
-            className="rounded-lg border px-3 py-2 text-gray-700 border-gray-700 hover:bg-gray-700/10 focus:outline-none focus:ring-2 focus:ring-gray-600 transition-colors"
-          >
-            {showValues ? "Ocultar valores" : "Mostrar valores"}
-          </button>
-          <button onClick={() => setOpenMail(true)} className="rounded-lg border px-3 py-2 bg-gray-700 text-white border-gray-800 hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-600 shadow-sm transition-colors">
-            Enviar e-mail
-          </button>
-        </div>
-      </div>
-
-      {/* KPIs */}
-      {loading ? (
-        <div className="p-4">Carregando…</div>
-      ) : (
-        <>
-          {/* 1ª linha: Alunos ativos */}
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Kpi title="Alunos ativos" value={maskCount(counts.studentsActive)} tone={activeStudentsTone} />
-          </section>
-
-          {/* 2ª linha: cards conforme grupo */}
-          {panelGroup === "receitas" && (
-            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Kpi
-                title="Receita total"
-                value={maskMoney(combined?.total || 0)}
-                tone="neutral"
-                showBar
-              />
-              <Kpi title="Receita recebida"  value={maskMoney(revKpis?.receita_recebida    || 0)} tone="success" showBar />
-              <Kpi title="Receita atrasada"  value={maskMoney(revKpis?.receita_atrasada    || 0)} tone="danger" showBar />
-              <Kpi title="Receita a receber" value={maskMoney(revKpis?.receita_a_receber   || 0)} tone="warning" showBar />
-            </section>
-          )}
-
-          {panelGroup === "gastos" && (
-            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <Kpi title="Gastos totais"    value={maskMoney(kpisExp.total)}   tone="neutral" showBar />
-              <Kpi title="Gastos pagos"     value={maskMoney(kpisExp.paid)}    tone="success" showBar />
-              <Kpi title="Gastos em atraso" value={maskMoney(kpisExp.overdue)} tone="danger" showBar />
-            </section>
-          )}
-
-          {panelGroup === "custos" && (
-            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <Kpi title="Custo professores" value={maskMoney(kpisExp.teachers || 0)} tone="warning" showBar />
-            </section>
-          )}
-        </>
-      )}
-
-      {/* Próximos 7 dias + Contas a pagar (5 dias) + Aniversariantes */}
-      <section className="grid gap-4 lg:grid-cols-3">
-        <div className="border rounded-xl overflow-hidden shadow-sm">
-          <div className="px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">Vencem nos próximos 7 dias</div>
-          {upcoming.length === 0 ? (
-            <div className="p-4 text-slate-600">Nada a vencer no período.</div>
-          ) : (
-            <div className="max-h-80 overflow-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 z-10 bg-white/90 border-b">
-                <tr>
-                  <Th>Vencimento</Th>
-                  <Th>Aluno</Th>
-                  <Th>Pagador</Th>
-                  <Th className="text-right">Valor</Th>
-                </tr>
-                </thead>
-                <tbody>
-                  {upcoming.map((r) => (
-                    <tr key={r.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
-                      <Td>
-                        {fmtBRDateDots(r.due_date)}
-                        {r.isToday && (
-                          <span className="ml-2 rounded-full px-2 py-0.5 text-xs bg-amber-100 text-amber-800">Hoje</span>
-                        )}
-                      </Td>
-                      <Td>{r.student_name}</Td>
-                      <Td>{r.payer_name}</Td>
-                      <Td className="text-right tabular-nums font-mono">{maskMoney(r.amount)}</Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <div className="border rounded-xl overflow-hidden shadow-sm">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">
-            <span>
-              Contas a pagar (próximos 5 dias)
-              {payablesInclPast && (
-                <span className="ml-2 text-xs font-normal bg-white/15 rounded px-2 py-0.5">inclui atrasados</span>
-              )}
-            </span>
-            <a href="/financeiro/gastos" className="text-xs font-normal underline underline-offset-2 hover:opacity-90">Ver todos</a>
-          </div>
-          {payables5.length === 0 ? (
-            <div className="p-4 text-slate-600">Nada a pagar no período.</div>
-          ) : (
-            <div className="max-h-80 overflow-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 z-10 bg-white/90 border-b">
-                  <tr>
-                    <Th>Vencimento</Th>
-                    <Th>Descrição</Th>
-                    <Th className="text-right">Valor</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payables5.map((e) => (
-                    <tr key={e.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
-                      <Td>
-                        {fmtBRDateDots(e.due_date)}
-                        {e.isToday && (
-                          <span className="ml-2 rounded-full px-2 py-0.5 text-xs bg-amber-100 text-amber-800">Hoje</span>
-                        )}
-                        {!e.isToday && e.isPast && (
-                          <span className="ml-2 rounded-full px-2 py-0.5 text-xs bg-rose-100 text-rose-800">Atrasado</span>
-                        )}
-                      </Td>
-                      <Td>{e.title}</Td>
-                      <Td className="text-right tabular-nums font-mono">{maskMoney(e.amount)}</Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <div className="border rounded-xl overflow-hidden shadow-sm">
-          <div className="px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">Aniversariantes do mês</div>
-          {birthdays.length === 0 ? (
-            <div className="p-4 text-slate-600">Nenhum aniversariante encontrado.</div>
-          ) : (
-            <div className="max-h-80 overflow-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 z-10 bg-white/90 border-b">
-                <tr>
-                  <Th style={{ width: 80 }}>Dia</Th>
-                  <Th>Nome</Th>
-                </tr>
-                </thead>
-                <tbody>
-                  {birthdays.map((b) => (
-                    <tr key={b.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
-                      <Td>
-                        <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-slate-100 px-2 text-xs font-medium text-slate-700">
-                          {String(b.dd).padStart(2, "0")}
-                        </span>
-                      </Td>
-                      <Td>{b.name}</Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Modal de E-mail */}
-      <Modal
-        open={openMail}
-        onClose={() => setOpenMail(false)}
-        title="Enviar e-mail"
-        footer={
-          <>
-            <button onClick={() => setOpenMail(false)} className="px-3 py-2 border rounded" disabled={sending}>Cancelar</button>
-            <button onClick={onSendMail} className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50" disabled={sending}>
-              {sending ? "Enviando…" : "Enviar"}
-            </button>
-          </>
-        }
-      >
-        <form onSubmit={onSendMail} className="grid gap-3">
-          <div>
-            <label className="block text-sm mb-1">Para* (separe por vírgula)</label>
-            <input
-              value={mailForm.to}
-              onChange={(e) => setMailForm((f) => ({ ...f, to: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              placeholder="aluno@ex.com, responsavel@ex.com"
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1">Assunto*</label>
-            <input
-              value={mailForm.subject}
-              onChange={(e) => setMailForm((f) => ({ ...f, subject: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1">Mensagem*</label>
-            <textarea
-              value={mailForm.message}
-              onChange={(e) => setMailForm((f) => ({ ...f, message: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              rows={8}
-              placeholder="Escreva sua mensagem…"
-              required
-            />
-          </div>
-        </form>
-      </Modal>
-    </main>
-  );
-}
-
-function Kpi({ title, value, tone = "neutral", subtitle, showBar = false }) {
-  // Quando showBar=true aplica padrão com faixa fina colorida e fundo branco.
-  if (showBar) {
-    const accent = {
-      danger: "bg-rose-600",
-      warning: "bg-amber-500",
-      success: "bg-green-600",
-      neutral: "bg-slate-300",
-    }[tone] || "bg-slate-300";
-    return (
-      <div className="rounded-lg border border-slate-200 bg-white shadow-sm p-4 overflow-hidden">
-        <div className={`h-1 w-full ${accent} rounded-t-md -mt-1 mb-3`}></div>
-        <div className="text-[11px] uppercase tracking-wide text-slate-500">{title}</div>
-        <div className="text-2xl font-semibold text-slate-900">{value}</div>
-        {subtitle && <div className="mt-1 text-xs text-slate-600 whitespace-pre-line">{subtitle}</div>}
-      </div>
-    );
-  }
-  // Caso contrário mantém estilo anterior (tinted) para não afetar outros cards.
-  const toneBox = {
-    danger:  "border-red-300 bg-red-50",
-    warning: "border-amber-300 bg-amber-50",
-    success: "border-green-300 bg-green-50",
-    neutral: "border-slate-200 bg-white",
-  }[tone] || "border-slate-200 bg-white";
-  const toneText = {
-    danger:  "text-red-800",
-    warning: "text-amber-800",
-    success: "text-green-800",
-    neutral: "text-slate-900",
-  }[tone] || "text-slate-900";
-  return (
-    <div className={`rounded-xl border p-3 shadow-sm hover:shadow-md transition-shadow ${toneBox}`}>
-      <div className={`text-xs ${toneText} opacity-80`}>{title}</div>
-      <div className={`text-xl font-semibold ${toneText}`}>{value}</div>
-      {subtitle && <div className="mt-1 text-xs text-slate-600">{subtitle}</div>}
-    </div>
-  );
-}
-function Th({ children, className = "", style }) {
-  return (
-    <th className={`text-left px-3 py-2 font-medium ${className}`} style={style}>
-      {children}
-    </th>
-  );
-}
-function Td({ children, className = "", style }) {
-  return (
-    <td className={`px-3 py-2 ${className}`} style={style}>
-      {children}
-    </td>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">
+            Assunto *
+          </span>
+          <input
+            value={form.subject}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, subject: e.target.value }))
+            }
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">
+            Mensagem *
+          </span>
+          <textarea
+            value={form.message}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, message: e.target.value }))
+            }
+            rows={8}
+            placeholder="Escreva sua mensagem…"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <ModalActions
+          onCancel={onClose}
+          submitting={sending}
+          submitLabel="Enviar"
+        />
+      </form>
+    </AppModal>
   );
 }
