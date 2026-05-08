@@ -1,252 +1,423 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Search,
+  Plus,
+  Mail,
+  Pencil,
+  Trash2,
+  Users,
+  Loader2,
+} from "lucide-react";
 import { financeGateway } from "@/lib/financeGateway";
-import Modal from "@/components/Modal";
+import AppModal, {
+  FormError,
+  ModalActions,
+  ConfirmDeleteModal,
+} from "@/components/AppModal";
+
+// ─── Helpers visuais (avatar) ────────────────────────────────────
+const AVATAR_PALETTE = [
+  "#8B1C2C", "#E94F37", "#0F766E", "#D97706", "#1E40AF",
+  "#7C3AED", "#BE123C", "#0891B2", "#15803D", "#9333EA", "#DC2626", "#059669",
+];
+
+function initialsFrom(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function colorFor(name) {
+  const s = String(name || "");
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
+}
 
 export default function PagadoresPage() {
-  const [list, setList] = useState([]);
+  const [payers, setPayers] = useState([]);
+  const [studentsByPayer, setStudentsByPayer] = useState({});
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [q, setQ] = useState("");
 
-  // ---- Modal: Cadastrar ----
-  const [openCreate, setOpenCreate] = useState(false);
-  const [savingCreate, setSavingCreate] = useState(false);
-  const [formCreate, setFormCreate] = useState({ name: "", email: "" });
-
-  // ---- Modal: Editar ----
-  const [openEdit, setOpenEdit] = useState(false);
-  const [savingEdit, setSavingEdit] = useState(false);
-  const [editId, setEditId] = useState(null);
-  const [formEdit, setFormEdit] = useState({ name: "", email: "" });
+  // modais
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [toDelete, setToDelete] = useState(null);
 
   async function load() {
-    setLoading(true);
-    const rows = await financeGateway.listPayers();
-    setList(rows);
-    setLoading(false);
+    try {
+      setError(null);
+      const [py, st] = await Promise.all([
+        financeGateway.listPayers(),
+        financeGateway.listStudents(),
+      ]);
+      setPayers(Array.isArray(py) ? py : []);
+      const grouped = {};
+      for (const s of st || []) {
+        if (!s.payer_id) continue;
+        if (!grouped[s.payer_id]) grouped[s.payer_id] = [];
+        grouped[s.payer_id].push(s);
+      }
+      setStudentsByPayer(grouped);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
   }
+
   useEffect(() => {
-    load();
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // -------- Cadastrar ----------
-  function resetCreate() {
-    setFormCreate({ name: "", email: "" });
-    setSavingCreate(false);
-  }
-  async function onSubmitCreate(e) {
-    e?.preventDefault?.();
-    try {
-      setSavingCreate(true);
-      if (!formCreate.name.trim()) throw new Error("Nome é obrigatório.");
-      await financeGateway.createPayer({
-        name: formCreate.name.trim(),
-        email: formCreate.email.trim() || null,
-      });
-      resetCreate();
-      setOpenCreate(false);
-      await load();
-    } catch (err) {
-      alert(err.message || String(err));
-    } finally {
-      setSavingCreate(false);
-    }
-  }
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    if (!term) return payers;
+    return payers.filter((p) => {
+      const n = String(p.name || "").toLowerCase();
+      const e = String(p.email || "").toLowerCase();
+      return n.includes(term) || e.includes(term);
+    });
+  }, [payers, q]);
 
-  // -------- Editar ----------
-  function openEditModal(p) {
-    setEditId(p.id);
-    setFormEdit({ name: p.name || "", email: p.email || "" });
-    setOpenEdit(true);
-  }
-  function closeEdit() {
-    if (savingEdit) return;
-    setOpenEdit(false);
-    setEditId(null);
-  }
-  async function onSubmitEdit(e) {
-    e?.preventDefault?.();
-    if (!editId) return;
-    try {
-      setSavingEdit(true);
-      if (!formEdit.name.trim()) throw new Error("Nome é obrigatório.");
-      await financeGateway.updatePayer(editId, {
-        name: formEdit.name.trim(),
-        email: formEdit.email.trim() || null,
-      });
-      closeEdit();
-      await load();
-    } catch (err) {
-      alert(err.message || String(err));
-    } finally {
-      setSavingEdit(false);
-    }
-  }
+  const withStudents = useMemo(
+    () => payers.filter((p) => (studentsByPayer[p.id] || []).length > 0).length,
+    [payers, studentsByPayer]
+  );
 
-  // -------- Ações de linha ----------
-  async function onDelete(p) {
-    if (!confirm(`Excluir pagador "${p.name}"?\n\nAtenção: não pode estar em uso por alunos/lançamentos.`)) {
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Pagadores</h1>
+          <p className="mt-1 text-sm text-[var(--p-text-muted)]">
+            {loading
+              ? "Carregando…"
+              : `${payers.length} pagadores · ${withStudents} com alunos vinculados`}
+          </p>
+        </div>
+        <button
+          className="p-btn p-btn-primary self-start sm:self-auto"
+          onClick={() => setCreateOpen(true)}
+        >
+          <Plus className="h-4 w-4" />
+          <span>Novo pagador</span>
+        </button>
+      </div>
+
+      {/* Busca */}
+      <div className="max-w-md">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--p-text-faint)]" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar por nome ou e-mail…"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] py-2.5 pl-9 pr-3 text-sm placeholder:text-[var(--p-text-faint)] focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-4 py-3 text-sm text-[var(--p-danger)]">
+          Erro ao carregar pagadores: {error}
+        </div>
+      )}
+
+      {/* Lista */}
+      <div className="p-card overflow-hidden">
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 px-5 py-12 text-sm text-[var(--p-text-muted)]">
+            <Loader2 className="h-4 w-4 animate-spin" /> Carregando pagadores…
+          </div>
+        ) : (
+          <>
+            {/* Tabela (desktop) */}
+            <div className="hidden md:block">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--p-border)] bg-[var(--p-surface-2)] text-left text-xs font-medium uppercase tracking-wider text-[var(--p-text-muted)]">
+                    <th className="px-5 py-3">Pagador</th>
+                    <th className="px-5 py-3">E-mail</th>
+                    <th className="px-5 py-3">Alunos</th>
+                    <th className="px-5 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--p-border)]">
+                  {filtered.map((p) => {
+                    const students = studentsByPayer[p.id] || [];
+                    return (
+                      <tr key={p.id} className="hover:bg-[var(--p-surface-2)]">
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
+                              style={{ background: colorFor(p.name) }}
+                            >
+                              {initialsFrom(p.name)}
+                            </div>
+                            <div className="font-medium truncate">{p.name || "—"}</div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3">
+                          {p.email ? (
+                            <span className="inline-flex items-center gap-1.5 text-xs text-[var(--p-text-muted)]">
+                              <Mail className="h-3 w-3" /> {p.email}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-[var(--p-text-faint)]">—</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3">
+                          {students.length === 0 ? (
+                            <span className="text-xs text-[var(--p-text-faint)]">Sem vínculos</span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {students.slice(0, 4).map((s) => (
+                                <span key={s.id} className="p-chip p-chip-neutral">
+                                  {s.name}
+                                </span>
+                              ))}
+                              {students.length > 4 && (
+                                <span className="p-chip p-chip-neutral">
+                                  +{students.length - 4}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          <div className="inline-flex gap-1">
+                            <button
+                              onClick={() => setEditTarget(p)}
+                              className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-text)]"
+                              aria-label="Editar pagador"
+                              title="Editar"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => setToDelete(p)}
+                              className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                              aria-label="Remover pagador"
+                              title="Remover"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Lista (mobile) */}
+            <ul className="divide-y divide-[var(--p-border)] md:hidden">
+              {filtered.map((p) => {
+                const students = studentsByPayer[p.id] || [];
+                return (
+                  <li key={p.id} className="flex items-start gap-3 px-4 py-3">
+                    <div
+                      className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-sm font-semibold text-white"
+                      style={{ background: colorFor(p.name) }}
+                    >
+                      {initialsFrom(p.name)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium truncate">{p.name || "—"}</div>
+                          {p.email && (
+                            <div className="text-xs text-[var(--p-text-muted)] truncate">
+                              {p.email}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <button
+                            onClick={() => setEditTarget(p)}
+                            className="rounded p-1 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-text)]"
+                            aria-label="Editar pagador"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => setToDelete(p)}
+                            className="rounded p-1 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                            aria-label="Remover pagador"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                      {students.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {students.slice(0, 3).map((s) => (
+                            <span key={s.id} className="p-chip p-chip-neutral">
+                              {s.name}
+                            </span>
+                          ))}
+                          {students.length > 3 && (
+                            <span className="p-chip p-chip-neutral">
+                              +{students.length - 3}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {filtered.length === 0 && !error && (
+              <div className="flex flex-col items-center justify-center gap-2 px-5 py-12 text-center">
+                <div className="grid h-12 w-12 place-items-center rounded-full bg-[var(--p-surface-2)] text-[var(--p-text-muted)]">
+                  <Users className="h-5 w-5" />
+                </div>
+                <div className="text-sm font-medium">Nenhum pagador encontrado</div>
+                <div className="text-xs text-[var(--p-text-muted)]">
+                  {q ? "Tente ajustar a busca." : "Cadastre um pagador para começar."}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {!loading && filtered.length > 0 && (
+        <div className="flex items-center justify-between text-xs text-[var(--p-text-muted)]">
+          <div>
+            Mostrando {filtered.length} de {payers.length}
+          </div>
+        </div>
+      )}
+
+      {/* Modais */}
+      {createOpen && (
+        <PayerFormModal
+          mode="create"
+          onClose={() => setCreateOpen(false)}
+          onSaved={async () => {
+            setCreateOpen(false);
+            await load();
+          }}
+        />
+      )}
+
+      {editTarget && (
+        <PayerFormModal
+          mode="edit"
+          initial={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSaved={async () => {
+            setEditTarget(null);
+            await load();
+          }}
+        />
+      )}
+
+      {toDelete && (
+        <ConfirmDeleteModal
+          title="Remover pagador"
+          itemName={toDelete.name}
+          description={
+            (studentsByPayer[toDelete.id] || []).length > 0
+              ? `Este pagador tem ${(studentsByPayer[toDelete.id] || []).length} aluno(s) vinculado(s). Remova ou reatribua antes de continuar.`
+              : "Esta ação não pode ser desfeita."
+          }
+          onCancel={() => setToDelete(null)}
+          onConfirm={async () => {
+            await financeGateway.deletePayer(toDelete.id);
+            setToDelete(null);
+            await load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Modal de formulário (create + edit) ─────────────────────────
+function PayerFormModal({ mode, initial, onClose, onSaved }) {
+  const isEdit = mode === "edit";
+  const [name, setName] = useState(initial?.name || "");
+  const [email, setEmail] = useState(initial?.email || "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setErr("Nome é obrigatório");
       return;
     }
     try {
-      await financeGateway.deletePayer(p.id);
-      await load();
-    } catch (err) {
-      alert(err.message || String(err));
+      setSaving(true);
+      const payload = { name: trimmed, email: email.trim() || null };
+      if (isEdit) {
+        await financeGateway.updatePayer(initial.id, payload);
+      } else {
+        await financeGateway.createPayer(payload);
+      }
+      await onSaved();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
     }
   }
 
   return (
-    <main className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Pagadores</h1>
-        <button onClick={() => setOpenCreate(true)} className="border rounded px-3 py-2">
-          + Cadastrar pagador
-        </button>
-      </div>
-
-      <section className="border rounded overflow-auto">
-        {loading ? (
-          <div className="p-4">Carregando…</div>
-        ) : list.length === 0 ? (
-          <div className="p-4">Nenhum pagador cadastrado.</div>
-        ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <Th>Nome</Th>
-                <Th>E-mail</Th>
-                <Th>Criado em</Th>
-                <Th>Ações</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((p) => (
-                <tr key={p.id} className="border-t">
-                  <Td>{p.name}</Td>
-                  <Td>{p.email || "-"}</Td>
-                  <Td>{p.created_at ? new Date(p.created_at).toLocaleString("pt-BR") : "-"}</Td>
-                  <Td className="py-2">
-                    <div className="flex gap-2">
-                      <button onClick={() => openEditModal(p)} className="px-2 py-1 border rounded">
-                        Editar
-                      </button>
-                      <button onClick={() => onDelete(p)} className="px-2 py-1 border rounded">
-                        Excluir
-                      </button>
-                    </div>
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-
-      {/* Modal CADASTRAR */}
-      <Modal
-        open={openCreate}
-        onClose={() => {
-          if (savingCreate) return;
-          setOpenCreate(false);
-          resetCreate();
-        }}
-        title="Cadastrar pagador"
-        footer={
-          <>
-            <button
-              onClick={() => {
-                if (savingCreate) return;
-                setOpenCreate(false);
-                resetCreate();
-              }}
-              className="px-3 py-2 border rounded disabled:opacity-50"
-              disabled={savingCreate}
-            >
-              Cancelar
-            </button>
-            <button
-              onClick={onSubmitCreate}
-              className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
-              disabled={savingCreate}
-            >
-              {savingCreate ? "Salvando…" : "Salvar"}
-            </button>
-          </>
-        }
-      >
-        <form onSubmit={onSubmitCreate} className="grid gap-3 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <label className="block text-sm mb-1">Nome*</label>
-            <input
-              value={formCreate.name}
-              onChange={(e) => setFormCreate((f) => ({ ...f, name: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
-            />
-          </div>
-          <div className="sm:col-span-2">
-            <label className="block text-sm mb-1">E-mail</label>
-            <input
-              type="email"
-              value={formCreate.email}
-              onChange={(e) => setFormCreate((f) => ({ ...f, email: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              placeholder="opcional"
-            />
-          </div>
-        </form>
-      </Modal>
-
-      {/* Modal EDITAR */}
-      <Modal
-        open={openEdit}
-        onClose={closeEdit}
-        title="Editar pagador"
-        footer={
-          <>
-            <button onClick={closeEdit} className="px-3 py-2 border rounded disabled:opacity-50" disabled={savingEdit}>
-              Cancelar
-            </button>
-            <button
-              onClick={onSubmitEdit}
-              className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
-              disabled={savingEdit}
-            >
-              {savingEdit ? "Salvando…" : "Salvar"}
-            </button>
-          </>
-        }
-      >
-        <form onSubmit={onSubmitEdit} className="grid gap-3 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <label className="block text-sm mb-1">Nome*</label>
-            <input
-              value={formEdit.name}
-              onChange={(e) => setFormEdit((f) => ({ ...f, name: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              required
-            />
-          </div>
-          <div className="sm:col-span-2">
-            <label className="block text-sm mb-1">E-mail</label>
-            <input
-              type="email"
-              value={formEdit.email}
-              onChange={(e) => setFormEdit((f) => ({ ...f, email: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              placeholder="opcional"
-            />
-          </div>
-        </form>
-      </Modal>
-    </main>
+    <AppModal
+      title={isEdit ? "Editar pagador" : "Novo pagador"}
+      onClose={saving ? () => {} : onClose}
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">Nome *</span>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ex.: João Silva"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">E-mail</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="pagador@exemplo.com"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <ModalActions
+          onCancel={onClose}
+          submitting={saving}
+          submitLabel={isEdit ? "Salvar" : "Cadastrar"}
+          submitIcon={saving ? Loader2 : Plus}
+        />
+      </form>
+    </AppModal>
   );
-}
-
-function Th({ children }) {
-  return <th className="text-left px-3 py-2 font-medium">{children}</th>;
-}
-function Td({ children }) {
-  return <td className="px-3 py-2">{children}</td>;
 }
