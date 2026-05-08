@@ -1,61 +1,415 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { financeGateway } from "@/lib/financeGateway";
+import {
+  BarChart3,
+  PieChart,
+  TrendingUp,
+  Users,
+  BookOpen,
+  DollarSign,
+  Download,
+  Calendar,
+  ClipboardCheck,
+  Loader2,
+  ArrowRight,
+} from "lucide-react";
 
+// ─── Catálogo de relatórios ──────────────────────────────────────
+// `href` presente = relatório real disponível.
+// `href` ausente  = card "em breve" (estilo desabilitado).
+const REPORTS = [
+  {
+    key: "assiduidade",
+    title: "Assiduidade",
+    desc: "Presenças, ausências e % de assiduidade por turma e mês.",
+    icon: ClipboardCheck,
+    accent: "#0F766E",
+    href: "/relatorios/assiduidade",
+  },
+  {
+    key: "inadimplencia",
+    title: "Inadimplência",
+    desc: "Mensalidades pendentes e vencidas, por aluno/pagador.",
+    icon: TrendingUp,
+    accent: "#DC2626",
+    href: "/relatorios/inadimplencia",
+  },
+  {
+    key: "receita",
+    title: "Receita por mês",
+    desc: "Evolução da receita bruta e líquida.",
+    icon: DollarSign,
+    accent: "var(--p-primary)",
+    // sem href: já está renderizado no destaque acima
+  },
+  {
+    key: "alunos",
+    title: "Alunos por status",
+    desc: "Distribuição da base ativa.",
+    icon: Users,
+    accent: "#1E40AF",
+  },
+  {
+    key: "turmas",
+    title: "Ocupação das turmas",
+    desc: "Vagas preenchidas vs. capacidade.",
+    icon: BookOpen,
+    accent: "#7C3AED",
+  },
+  {
+    key: "gastos",
+    title: "Gastos por categoria",
+    desc: "Quebra das despesas mensais.",
+    icon: PieChart,
+    accent: "#E94F37",
+  },
+  {
+    key: "aulas",
+    title: "Aulas por professor",
+    desc: "Horas ministradas e repasses.",
+    icon: BarChart3,
+    accent: "#0891B2",
+  },
+];
 
-export default function RelatoriosHubPage() {
-  return (
-    <main className="p-6 space-y-6">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Relatórios</h1>
-      </header>
+const MONTH_ABBR = [
+  "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+  "Jul", "Ago", "Set", "Out", "Nov", "Dez",
+];
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Card
-          title="Assiduidade"
-          desc="Presenças, ausências e % de assiduidade por turma e mês."
-          href="/relatorios/assiduidade"
-          cta="Abrir"
-        />
-
-        {/* Deixe reservado para futuros relatórios */}
-        <Card
-          title="Financeiro (em breve)"
-          desc="Resumo financeiro e projeções (a consolidar com despesas)."
-          disabled
-        />
-
-        {/* Inadimplência */}
-        <div className="rounded border p-4">
-          <h2 className="text-lg font-medium">Inadimplência</h2>
-          <p className="mt-1 text-sm text-gray-600">
-            Mensalidades pendentes e vencidas, por aluno/pagador.
-          </p>
-          <Link href="/relatorios/inadimplencia" className="mt-3 inline-block rounded border px-3 py-2">
-            Abrir
-          </Link>
-        </div>
-      </section>
-    </main>
-  );
+function money(v) {
+  return (Number(v) || 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+}
+function currentYm() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function addMonthsToYm(ym, offset) {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(y, m - 1 + offset, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function ymLabel(ym) {
+  const [, m] = ym.split("-").map(Number);
+  return MONTH_ABBR[(m - 1 + 12) % 12];
+}
+function periodMonths(key) {
+  if (key === "1m") return 1;
+  if (key === "3m") return 3;
+  if (key === "12m") return 12;
+  if (key === "ytd") return new Date().getMonth() + 1;
+  return 6;
 }
 
-function Card({ title, desc, href, cta = "Ver", disabled = false }) {
-  if (disabled) {
-    return (
-      <div className="rounded border p-4 opacity-60">
-        <div className="font-semibold">{title}</div>
-        <div className="text-sm text-slate-600 mt-1">{desc}</div>
-      </div>
-    );
+export default function RelatoriosHubPage() {
+  const [period, setPeriod] = useState("6m");
+  const [data, setData] = useState([]); // [{ ym, gross, net, recebido, expenses }]
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const n = periodMonths(period);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const currYm = currentYm();
+        const yms = [];
+        for (let i = n - 1; i >= 0; i--) yms.push(addMonthsToYm(currYm, -i));
+        const results = await Promise.all(
+          yms.map((ym) =>
+            Promise.all([
+              financeGateway.getCombinedRevenueKpis({ ym }),
+              financeGateway.listExpenseEntries({ ym }),
+            ])
+          )
+        );
+        if (cancelled) return;
+        const out = yms.map((ym, idx) => {
+          const [kpis, exp] = results[idx];
+          const recebido = Number(kpis?.recebido || 0);
+          const aReceber = Number(kpis?.a_receber || 0);
+          const atrasado = Number(kpis?.atrasado || 0);
+          const expPaid = Number(exp?.kpis?.paid || 0);
+          const gross = recebido + aReceber + atrasado;
+          const net = recebido - expPaid;
+          return { ym, gross, net, recebido, expenses: expPaid };
+        });
+        setData(out);
+      } catch (e) {
+        if (!cancelled) setError(e?.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [n]);
+
+  const summary = useMemo(() => {
+    if (data.length === 0) return { avg: 0, growth: null, projected: 0 };
+    const sum = data.reduce((a, x) => a + x.gross, 0);
+    const avg = sum / data.length;
+    const first = data[0]?.gross || 0;
+    const last = data[data.length - 1]?.gross || 0;
+    const growth = first > 0 ? ((last - first) / first) * 100 : null;
+    let projected = last;
+    if (data.length >= 2) {
+      const prev = data[data.length - 2].gross;
+      const delta = last - prev;
+      projected = Math.max(0, last + delta);
+    }
+    return { avg, growth, projected };
+  }, [data]);
+
+  const max = Math.max(1, ...data.map((x) => x.gross));
+
+  function handleExport() {
+    if (data.length === 0) return;
+    const rows = [
+      ["Mes", "Bruta", "Recebido", "Liquida", "Despesas"],
+      ...data.map((m) => [
+        m.ym,
+        m.gross.toFixed(2),
+        m.recebido.toFixed(2),
+        m.net.toFixed(2),
+        m.expenses.toFixed(2),
+      ]),
+    ];
+    const csv = rows
+      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(";"))
+      .join("\n");
+    const bom = "﻿";
+    const blob = new Blob([bom + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `relatorio-receita-${currentYm()}-${n}m.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
+
   return (
-    <div className="rounded border p-4">
-      <div className="font-semibold">{title}</div>
-      <div className="text-sm text-slate-600 mt-1 mb-3">{desc}</div>
-      <Link href={href} className="inline-block border rounded px-3 py-2">
-        {cta}
-      </Link>
+    <div className="space-y-8">
+      {/* Header */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Relatórios</h1>
+          <p className="mt-1 text-sm text-[var(--p-text-muted)]">
+            Visão geral da operação · últimos {n} {n === 1 ? "mês" : "meses"}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] p-1 text-xs">
+            {[
+              { k: "1m", l: "1M" },
+              { k: "3m", l: "3M" },
+              { k: "6m", l: "6M" },
+              { k: "12m", l: "12M" },
+              { k: "ytd", l: "YTD" },
+            ].map((p) => {
+              const active = period === p.k;
+              return (
+                <button
+                  key={p.k}
+                  onClick={() => setPeriod(p.k)}
+                  className={[
+                    "rounded-md px-3 py-1 transition-colors",
+                    active
+                      ? "bg-[var(--p-primary)] text-white"
+                      : "text-[var(--p-text-muted)] hover:text-[var(--p-text)]",
+                  ].join(" ")}
+                >
+                  {p.l}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            className="p-btn p-btn-ghost"
+            onClick={handleExport}
+            disabled={loading || data.length === 0}
+          >
+            <Download className="h-4 w-4" />
+            <span className="hidden sm:inline">Exportar</span>
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-4 py-3 text-sm text-[var(--p-danger)]">
+          Erro ao carregar relatórios: {error}
+        </div>
+      )}
+
+      {/* Destaque: gráfico de receita */}
+      <div className="p-card p-5 md:p-6">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-medium uppercase tracking-wider text-[var(--p-text-faint)]">
+              Destaque
+            </div>
+            <div className="mt-0.5 text-base font-semibold">Receita por mês</div>
+            <div className="text-xs text-[var(--p-text-muted)]">Bruta vs. líquida</div>
+          </div>
+          <div className="inline-flex items-center gap-3 text-xs text-[var(--p-text-muted)]">
+            <span className="inline-flex items-center gap-1.5">
+              <span
+                className="h-2.5 w-2.5 rounded-sm"
+                style={{ background: "var(--p-primary)" }}
+              />{" "}
+              Bruta
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span
+                className="h-2.5 w-2.5 rounded-sm"
+                style={{ background: "var(--p-accent)" }}
+              />{" "}
+              Líquida
+            </span>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="flex h-48 items-center justify-center gap-2 text-sm text-[var(--p-text-muted)]">
+            <Loader2 className="h-4 w-4 animate-spin" /> Carregando…
+          </div>
+        ) : data.length === 0 ? (
+          <div className="flex h-48 items-center justify-center text-sm text-[var(--p-text-muted)]">
+            Sem dados no período.
+          </div>
+        ) : (
+          <div className="flex items-end gap-3 md:gap-6 h-48">
+            {data.map((m) => {
+              const gH = (m.gross / max) * 100;
+              const nH = (Math.max(0, m.net) / max) * 100;
+              return (
+                <div key={m.ym} className="flex flex-1 flex-col items-center gap-1.5">
+                  <div className="relative flex h-full w-full items-end gap-1">
+                    <div
+                      className="flex-1 rounded-md"
+                      style={{ height: `${gH}%`, background: "var(--p-primary)" }}
+                      title={`Bruta ${money(m.gross)}`}
+                    />
+                    <div
+                      className="flex-1 rounded-md"
+                      style={{ height: `${nH}%`, background: "var(--p-accent)" }}
+                      title={`Líquida ${money(m.net)}`}
+                    />
+                  </div>
+                  <div className="text-[11px] text-[var(--p-text-muted)]">
+                    {ymLabel(m.ym)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="mt-5 grid grid-cols-3 gap-3 border-t border-[var(--p-border)] pt-4">
+          <div>
+            <div className="text-xs text-[var(--p-text-muted)]">Média mensal</div>
+            <div className="p-kpi-value text-lg">
+              {loading ? "…" : money(summary.avg)}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-[var(--p-text-muted)]">Crescimento {n}m</div>
+            <div
+              className={`p-kpi-value text-lg ${
+                summary.growth !== null && summary.growth >= 0
+                  ? "text-[var(--p-success)]"
+                  : summary.growth !== null
+                  ? "text-[var(--p-danger)]"
+                  : ""
+              }`}
+            >
+              {loading
+                ? "…"
+                : summary.growth === null
+                ? "—"
+                : `${summary.growth >= 0 ? "+" : ""}${summary.growth
+                    .toFixed(1)
+                    .replace(".", ",")}%`}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-[var(--p-text-muted)]">Projeção próximo mês</div>
+            <div className="p-kpi-value text-lg">
+              {loading ? "…" : money(summary.projected)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Grid de relatórios */}
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-[var(--p-text-muted)]">
+          Todos os relatórios
+        </h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 lg:gap-4">
+          {REPORTS.map((r) => {
+            const Icon = r.icon;
+            const cardClasses =
+              "p-card flex flex-col items-start gap-3 p-5 text-left transition-shadow";
+            const inner = (
+              <>
+                <div
+                  className="grid h-10 w-10 place-items-center rounded-lg text-white"
+                  style={{ background: r.accent }}
+                >
+                  <Icon className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold">{r.title}</div>
+                  <div className="mt-0.5 text-xs text-[var(--p-text-muted)]">
+                    {r.desc}
+                  </div>
+                </div>
+                <div
+                  className={`mt-auto inline-flex items-center gap-1.5 text-xs font-medium ${
+                    r.href ? "text-[var(--p-primary)]" : "text-[var(--p-text-faint)]"
+                  }`}
+                >
+                  {r.href ? (
+                    <>
+                      <ArrowRight className="h-3 w-3" /> Abrir
+                    </>
+                  ) : (
+                    <>
+                      <Calendar className="h-3 w-3" /> Em breve
+                    </>
+                  )}
+                </div>
+              </>
+            );
+
+            if (r.href) {
+              return (
+                <Link key={r.key} href={r.href} className={`${cardClasses} p-card-hover`}>
+                  {inner}
+                </Link>
+              );
+            }
+            return (
+              <div key={r.key} className={`${cardClasses} opacity-70`}>
+                {inner}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
