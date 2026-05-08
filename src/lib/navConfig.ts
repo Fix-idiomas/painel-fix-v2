@@ -19,7 +19,7 @@ export interface NavContext {
 
 export const NAV_ITEMS: NavItem[] = [
   { key: "home", label: "Início", href: "/recepcao", meta: { icon: "home" } },
-  { key: "dashboard", label: "Dashboard", href: "/", requireAdmin: true, meta: { icon: "gauge" } },
+  { key: "dashboard", label: "Dashboard", href: "/painel", requireAdmin: true, meta: { icon: "gauge" } },
   { key: "turmas",   label: "Turmas",   href: "/turmas",   perm: { area: "classes",  action: "read" }, meta: { icon: "teacher" } },
   { key: "agenda",   label: "Agenda",   href: "/agenda",   perm: { area: "classes",  action: "read" }, meta: { icon: "calendar" } },
   { key: "relatorios", label: "Relatórios", href: "/relatorios", meta: { icon: "chart" } },

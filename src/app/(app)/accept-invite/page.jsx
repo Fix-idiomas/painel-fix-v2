@@ -63,7 +63,7 @@ export default function AcceptInvitePage() {
         // limpar stash e ir para home
         localStorage.removeItem("invite_query");
         setStatus("Convite aceito! Redirecionando…");
-        setTimeout(() => (window.location.href = "/"), 800);
+        setTimeout(() => (window.location.href = "/painel"), 800);
       } catch (e) {
         console.error(e);
         setStatus("Falha ao aceitar convite.");

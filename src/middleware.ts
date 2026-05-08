@@ -54,19 +54,9 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  // Raiz: se autenticado, permanece em '/'; se não, vai para login preservando next
-  if (pathname === '/') {
-    if (!session) {
-      const url = req.nextUrl.clone();
-      url.pathname = '/login';
-      url.searchParams.set('next', '/');
-      return NextResponse.redirect(url);
-    }
-    return res;
-  }
-
   // Público (acesso livre)
   const isPublic =
+    pathname === '/' ||           // landing page pública
     pathname === '/login' ||
     pathname === '/signup' ||
     pathname === '/reset-password' ||
