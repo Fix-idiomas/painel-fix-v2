@@ -2,20 +2,69 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import Modal from "@/components/Modal";
-import { financeGateway } from "@/lib/financeGateway";
-// ⚠️ Ajuste esta importação conforme seu SessionContext exporta:
-// - se você tiver `export function useSession() { ... }`, use a linha abaixo.
-// - se exporta o próprio contexto, troque para useContext(SessionContext).
 import { useSession } from "@/contexts/SessionContext";
+import { financeGateway } from "@/lib/financeGateway";
+import { supabase } from "@/lib/supabaseClient";
+import {
+  Search,
+  Plus,
+  Users,
+  Clock,
+  Trash2,
+  CheckCircle2,
+  PauseCircle,
+  BookOpen,
+  Loader2,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  Check,
+  Pencil,
+  UsersRound,
+  ExternalLink,
+} from "lucide-react";
+import AppModal, {
+  FormError,
+  ModalActions,
+  ConfirmDeleteModal,
+} from "@/components/AppModal";
 
-// Helpers
+// ─── Helpers ──────────────────────────────────────────────────────
+const AVATAR_PALETTE = [
+  "#8B1C2C", "#E94F37", "#0F766E", "#D97706", "#1E40AF",
+  "#7C3AED", "#BE123C", "#0891B2", "#15803D", "#9333EA", "#DC2626", "#059669",
+];
+const WEEKDAY_ABBR = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+function colorFor(name) {
+  const s = String(name || "");
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
+}
+
+function formatScheduleLine(rule) {
+  if (!rule) return null;
+  const wd = Number.isInteger(rule.weekday) ? WEEKDAY_ABBR[rule.weekday] : "?";
+  const t = String(rule.time || "").slice(0, 5) || "—";
+  const dur = Number(rule.duration_hours || 0);
+  const mins = dur > 0 ? ` · ${Math.round(dur * 60)}min` : "";
+  return `${wd} ${t}${mins}`;
+}
+
+function statusChip(s) {
+  if (s === "lotada")
+    return { cls: "p-chip-warning", icon: Users, label: "Lotada" };
+  if (s === "vazia")
+    return { cls: "p-chip-neutral", icon: PauseCircle, label: "Sem alunos" };
+  return { cls: "p-chip-success", icon: CheckCircle2, label: "Ativa" };
+}
+
 const norm = (v) => (v === undefined || v === null ? "" : String(v));
 
 function teacherMatchesTurma(turma, teacherIdEff, teacherNameEff) {
   const tid = norm(teacherIdEff);
   const tname = (teacherNameEff || "").trim();
-
   const directMatches = [
     norm(turma.teacher_id),
     norm(turma.teacherId),
@@ -23,23 +72,20 @@ function teacherMatchesTurma(turma, teacherIdEff, teacherNameEff) {
     norm(turma.teacher?.id),
   ];
   if (tid && directMatches.some((x) => x && norm(x) === tid)) return true;
-
-  // Fallback por nome (caso IDs não coincidam)
-  const turmaTeacherName =
-    (turma.teacher_name ??
-      turma.teacher?.name ??
-      turma.teacherName ??
-      "").trim();
-
+  const turmaTeacherName = (
+    turma.teacher_name ??
+    turma.teacher?.name ??
+    turma.teacherName ??
+    ""
+  ).trim();
   if (tname && turmaTeacherName && turmaTeacherName === tname) return true;
-
   return false;
 }
 
+// ─── Página ──────────────────────────────────────────────────────
 export default function TurmasPage() {
-  // --- Sessão / RBAC ---
   const sessionCtx = useSession?.() ?? {};
-  const session = sessionCtx.session ?? sessionCtx; // compat: alguns projetos retornam direto
+  const session = sessionCtx.session ?? sessionCtx;
   const ready = sessionCtx.ready ?? true;
   const role = session?.role ?? "admin";
   const teacherId = session?.teacherId ?? null;
@@ -48,587 +94,1258 @@ export default function TurmasPage() {
   const [turmas, setTurmas] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [students, setStudents] = useState([]);
+  const [membersByTurma, setMembersByTurma] = useState({});
   const [loading, setLoading] = useState(true);
-  // filtros locais
+  const [error, setError] = useState(null);
+
   const [q, setQ] = useState("");
-  // Começa em "- Selecione -" para todos os perfis
-  const [teacherFilter, setTeacherFilter] = useState("none");
+  const [teacherFilter, setTeacherFilter] = useState("all");
 
-  // seleção para gerenciar membros
-  const [selectedTurma, setSelectedTurma] = useState(null);
-  const [members, setMembers] = useState([]); // alunos na turma selecionada
-
-  // modal criar/editar turma
-  const [openEditTurma, setOpenEditTurma] = useState(false);
-  const [savingTurma, setSavingTurma] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [formTurma, setFormTurma] = useState({ name: "", teacher_id: "", capacity: 20 });
-
-  // modal gerenciar alunos
-  const [openManage, setOpenManage] = useState(false);
-  const [savingManage, setSavingManage] = useState(false);
-  const [addStudentId, setAddStudentId] = useState("");
+  // Modais
+  const [editTarget, setEditTarget] = useState(undefined); // null = novo, obj = edit, undefined = fechado
+  const [manageTarget, setManageTarget] = useState(null);
+  const [detailsTarget, setDetailsTarget] = useState(null);
+  const [toDelete, setToDelete] = useState(null);
 
   async function load() {
-    setLoading(true);
-
-    // 1) carrega dados base
-    const [ts, ths, sts] = await Promise.all([
-      financeGateway.listTurmas?.() ?? [],
-      financeGateway.listTeachers?.() ?? [],
-      financeGateway.listStudents?.() ?? [],
-    ]);
-
-    setTeachers(ths);
-    setStudents(sts);
-
-    // 2) mapa de professores
-    const teacherById = Object.fromEntries((ths || []).map((t) => [t.id, t]));
-
-    // 3) enriquece cada turma com teacher_name e students_count
-    const toArray = (x) =>
-      Array.isArray(x) ? x : Array.isArray(x?.data) ? x.data : Array.isArray(x?.rows) ? x.rows : [];
-
-    async function countMembers(turmaId, t) {
-      if (typeof financeGateway.countStudentsInTurma === "function") {
-        try {
-          const n = await financeGateway.countStudentsInTurma(turmaId);
-          return Number(n || 0);
-        } catch {}
+    try {
+      setError(null);
+      const [tu, ts, sts, membersRes] = await Promise.all([
+        financeGateway.listTurmas(),
+        financeGateway.listTeachers(),
+        financeGateway.listStudents(),
+        supabase.from("turma_members").select("turma_id"),
+      ]);
+      if (membersRes?.error) throw new Error(membersRes.error.message);
+      setTurmas(Array.isArray(tu) ? tu : []);
+      setTeachers(Array.isArray(ts) ? ts : []);
+      setStudents(Array.isArray(sts) ? sts : []);
+      const counts = {};
+      for (const m of membersRes.data || []) {
+        counts[m.turma_id] = (counts[m.turma_id] || 0) + 1;
       }
-      if (typeof financeGateway.listTurmaMembers === "function") {
-        try {
-          const m = await financeGateway.listTurmaMembers(turmaId);
-          return toArray(m).length;
-        } catch {}
-      }
-      if (Array.isArray(t?.student_ids)) return t.student_ids.length;
-      if (typeof t?.students_count === "number") return t.students_count;
-      return 0;
+      setMembersByTurma(counts);
+    } catch (e) {
+      setError(e?.message || String(e));
     }
-
-    const enriched = await Promise.all(
-      toArray(ts).map(async (t) => {
-        const teacher_name = t.teacher_name ?? teacherById[t.teacher_id]?.name ?? "-";
-        const students_count = await countMembers(t.id, t);
-        return { ...t, teacher_name, students_count };
-      })
-    );
-
-    setTurmas(enriched);
-    setLoading(false);
   }
 
   useEffect(() => {
-    if (!ready) return; // evita carregar antes da sessão estar pronta
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!ready) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [ready]);
 
-  // Sem sincronismo adicional: o default é sempre "none" para todos
+  const teacherMap = useMemo(() => {
+    const m = {};
+    for (const t of teachers) m[t.id] = t.name;
+    return m;
+  }, [teachers]);
 
+  const decorated = useMemo(() => {
+    return turmas.map((t) => {
+      const studentsCount = membersByTurma[t.id] || 0;
+      const capacity = Number(t.capacity || 0);
+      let status = "ativa";
+      if (studentsCount === 0) status = "vazia";
+      else if (capacity > 0 && studentsCount >= capacity) status = "lotada";
+      return {
+        ...t,
+        _teacherName: t.teacher_id ? teacherMap[t.teacher_id] || "—" : "Sem professor",
+        _students: studentsCount,
+        _status: status,
+      };
+    });
+  }, [turmas, teacherMap, membersByTurma]);
 
-
-  // Tenta obter um teacherId/Name efetivo para professor
+  // RBAC professor: vê só as próprias
   const { effectiveTeacherId, effectiveTeacherName } = useMemo(() => {
-    if (!isProfessor) return { effectiveTeacherId: null, effectiveTeacherName: null };
-
-    // 1) direto da sessão
-    if (teacherId) return { effectiveTeacherId: norm(teacherId), effectiveTeacherName: session?.name || null };
-
-    // 2) inferir pelo user_id
-    const byUser = teachers.find((t) => norm(t.user_id ?? t.userId) === norm(session?.userId));
-    if (byUser?.id) return { effectiveTeacherId: norm(byUser.id), effectiveTeacherName: byUser.name || null };
-
-    // 3) fallback por nome da sessão
-    const byName = teachers.find((t) => (t.name || "").trim() === (session?.name || "").trim());
-    if (byName?.id) return { effectiveTeacherId: norm(byName.id), effectiveTeacherName: byName.name || null };
-
-    return { effectiveTeacherId: null, effectiveTeacherName: (session?.name || null) };
+    if (!isProfessor)
+      return { effectiveTeacherId: null, effectiveTeacherName: null };
+    if (teacherId)
+      return {
+        effectiveTeacherId: norm(teacherId),
+        effectiveTeacherName: session?.name || null,
+      };
+    const byUser = teachers.find(
+      (t) => norm(t.user_id ?? t.userId) === norm(session?.userId)
+    );
+    if (byUser?.id)
+      return {
+        effectiveTeacherId: norm(byUser.id),
+        effectiveTeacherName: byUser.name || null,
+      };
+    const byName = teachers.find(
+      (t) => (t.name || "").trim() === (session?.name || "").trim()
+    );
+    if (byName?.id)
+      return {
+        effectiveTeacherId: norm(byName.id),
+        effectiveTeacherName: byName.name || null,
+      };
+    return {
+      effectiveTeacherId: null,
+      effectiveTeacherName: session?.name || null,
+    };
   }, [isProfessor, teacherId, teachers, session?.userId, session?.name]);
 
-  // 🔒 RBAC: professor vê só as próprias turmas (robusto)
   const visibleTurmas = useMemo(() => {
-    if (!isProfessor) return turmas;
-
-    // Se não conseguimos inferir nada, mostra lista vazia (com diagnóstico na UI)
+    if (!isProfessor) return decorated;
     if (!effectiveTeacherId && !effectiveTeacherName) return [];
-
-    return turmas.filter((t) =>
+    return decorated.filter((t) =>
       teacherMatchesTurma(t, effectiveTeacherId, effectiveTeacherName)
     );
-  }, [turmas, isProfessor, effectiveTeacherId, effectiveTeacherName]);
+  }, [decorated, isProfessor, effectiveTeacherId, effectiveTeacherName]);
 
-  // Filtro por nome/professor (apenas client-side, não altera RBAC)
-  const filteredTurmas = useMemo(() => {
-    const term = (q || "").trim().toLowerCase();
-    const teacherIdSel = String(teacherFilter || "all");
-    // Quando o seletor estiver em "- Selecione -", não mostrar nenhuma turma
-    if (teacherIdSel === "none") return [];
-
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
     return visibleTurmas.filter((t) => {
-      const nameOk = !term || String(t.name || "").toLowerCase().includes(term);
-      const teacherOk =
-        teacherIdSel === "all" || String(t.teacher_id || "") === teacherIdSel;
-      return nameOk && teacherOk;
+      if (teacherFilter === "none") {
+        if (t.teacher_id) return false;
+      } else if (teacherFilter !== "all") {
+        if (t.teacher_id !== teacherFilter) return false;
+      }
+      if (!term) return true;
+      const n = String(t.name || "").toLowerCase();
+      const tn = String(t._teacherName || "").toLowerCase();
+      return n.includes(term) || tn.includes(term);
     });
   }, [visibleTurmas, q, teacherFilter]);
 
-  async function openManageMembers(t) {
-    // 🔒 professor não pode gerenciar alunos
-    if (isProfessor) {
-      alert("Professores não podem gerenciar alunos da turma.");
-      return;
+  const counts = useMemo(() => {
+    const c = {
+      total: visibleTurmas.length,
+      ativa: 0,
+      lotada: 0,
+      vazia: 0,
+      matriculados: 0,
+    };
+    for (const t of visibleTurmas) {
+      c[t._status] = (c[t._status] || 0) + 1;
+      c.matriculados += t._students;
     }
-    setSelectedTurma(t);
-    const m = await financeGateway.listTurmaMembers(t.id);
-    setMembers(m);
-    setAddStudentId("");
-    setOpenManage(true);
-  }
+    return c;
+  }, [visibleTurmas]);
 
-  function openCreateTurma() {
-    // 🔒 professor não cria turmas
-    if (isProfessor) return;
-    setEditingId(null);
-    setFormTurma({ name: "", teacher_id: "", capacity: 20 });
-    setOpenEditTurma(true);
-  }
-  function openEditTurmaModal(t) {
-    // 🔒 professor não edita turmas
-    if (isProfessor) return;
-    setEditingId(t.id);
-    setFormTurma({ name: t.name || "", teacher_id: t.teacher_id || "", capacity: t.capacity || 20 });
-    setOpenEditTurma(true);
-  }
-  function closeEditTurma() {
-    if (savingTurma) return;
-    setOpenEditTurma(false);
-    setEditingId(null);
-  }
-
-  async function onSubmitTurma(e) {
-    e?.preventDefault?.();
-    try {
-      setSavingTurma(true);
-      const payload = {
-        name: formTurma.name.trim(),
-        teacher_id: formTurma.teacher_id || null,
-        capacity: Number(formTurma.capacity || 20),
-      };
-      if (!payload.name) throw new Error("Nome é obrigatório.");
-      if (!payload.teacher_id) throw new Error("Professor é obrigatório.");
-
-      if (editingId) {
-        await financeGateway.updateTurma(editingId, payload);
-      } else {
-        await financeGateway.createTurma(payload);
-      }
-      closeEditTurma();
-      await load();
-    } catch (err) {
-      alert(err.message || String(err));
-    } finally {
-      setSavingTurma(false);
-    }
-  }
-
-  async function onDeleteTurma(t) {
-    // 🔒 professor não exclui turmas
-    if (isProfessor) return;
-    if (!confirm(`Excluir turma "${t.name}"?`)) return;
-    try {
-      await financeGateway.deleteTurma(t.id);
-      if (selectedTurma?.id === t.id) setOpenManage(false);
-      await load();
-    } catch (e) {
-      alert(e.message || String(e));
-    }
-  }
-
-  async function onAddMember() {
-    if (!selectedTurma || !addStudentId) return;
-    try {
-      setSavingManage(true);
-      await financeGateway.addStudentToTurma(selectedTurma.id, addStudentId);
-      const m = await financeGateway.listTurmaMembers(selectedTurma.id);
-      setMembers(m);
-      setAddStudentId("");
-      await load(); // atualiza contadores na listagem
-    } catch (e) {
-      alert(e.message || String(e));
-    } finally {
-      setSavingManage(false);
-    }
-  }
-
-  async function onRemoveMember(student_id) {
-    if (!selectedTurma) return;
-    try {
-      setSavingManage(true);
-      await financeGateway.removeStudentFromTurma(selectedTurma.id, student_id);
-      const m = await financeGateway.listTurmaMembers(selectedTurma.id);
-      setMembers(m);
-      await load();
-    } catch (e) {
-      alert(e.message || String(e));
-    } finally {
-      setSavingManage(false);
-    }
-  }
-
-  // alunos que NÃO estão nesta turma (para o select)
-  const candidates = useMemo(() => {
-    const memberIds = new Set(members.map((m) => m.id));
-    return students.filter((s) => !memberIds.has(s.id));
-  }, [students, members]);
-
-  // Espera o ready para evitar hydration mismatch
   if (!ready) {
     return (
-      <main className="p-6">
-        <div className="animate-pulse text-sm text-gray-500">Preparando sessão…</div>
-      </main>
+      <div className="flex items-center gap-2 p-6 text-sm text-[var(--p-text-muted)]">
+        <Loader2 className="h-4 w-4 animate-spin" /> Preparando sessão…
+      </div>
     );
   }
 
   return (
-    <main className="p-6 space-y-6">
-
-      <div className="flex items-center justify-between">
-        <div className="flex items-center">
-          <h1 className="text-2xl font-bold">Turmas</h1>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
+            Turmas
+          </h1>
+          <p className="mt-1 text-sm text-[var(--p-text-muted)]">
+            {loading
+              ? "Carregando…"
+              : `${counts.total} turmas · ${counts.ativa} ativas · ${counts.lotada} lotadas · ${counts.vazia} sem alunos · ${counts.matriculados} matriculados`}
+          </p>
           {isProfessor && !effectiveTeacherId && (
-            <div className="ml-4 text-xs px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-200">
-              Sem professor vinculado à sessão. Defina <code>session.teacherId</code> ou crie um professor
-              com <code>user_id</code> = <code>{session?.userId || "?"}</code> (mock).
+            <div className="mt-2 inline-flex items-center gap-2 rounded-lg border border-[var(--p-warning)]/30 bg-[var(--p-warning-50)] px-3 py-2 text-xs text-[var(--p-warning)]">
+              Sem professor vinculado à sessão. Defina{" "}
+              <code>session.teacherId</code> para ver suas turmas.
             </div>
           )}
         </div>
-        {/* 🔒 Professor não pode criar turmas */}
         {!isProfessor && (
           <button
-            onClick={openCreateTurma}
-            className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+            className="p-btn p-btn-primary self-start sm:self-auto"
+            onClick={() => setEditTarget(null)}
           >
-            + Criar turma
+            <Plus className="h-4 w-4" />
+            <span>Nova turma</span>
           </button>
         )}
       </div>
 
       {/* Filtros */}
-      <div className="sticky top-0 z-10 -mx-6 px-6 bg-white/90 backdrop-blur border-b py-3">
-        <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
-          <div className="flex-1">
-            <label className="block text-xs text-slate-600 mb-1">Buscar por nome da turma</label>
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Ex.: Inglês Kids, T1, Aline..."
-              className="border rounded px-3 py-2 w-full"
-            />
-          </div>
-          <div className="w-full sm:w-72">
-            <label className="block text-xs text-slate-600 mb-1">Professor</label>
-            <select
-              value={teacherFilter}
-              onChange={(e) => setTeacherFilter(e.target.value)}
-              className="border rounded px-3 py-2 w-full bg-white"
-            >
-              <option value="none"> - Selecione -</option>
-              <option value="all">Todos</option>
-              {teachers.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-          </div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="relative w-full sm:max-w-md">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--p-text-faint)]" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar turma ou professor…"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] py-2.5 pl-9 pr-3 text-sm placeholder:text-[var(--p-text-faint)] focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
         </div>
+        {!isProfessor && (
+          <select
+            value={teacherFilter}
+            onChange={(e) => setTeacherFilter(e.target.value)}
+            aria-label="Filtrar por professor"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40 sm:w-56"
+          >
+            <option value="all">Todos os professores</option>
+            <option value="none">Sem professor</option>
+            {teachers.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
-      <section className="border rounded">
-        {loading ? (
-          <div className="p-4">Carregando…</div>
-        ) : filteredTurmas.length === 0 ? (
-          <div className="p-4 text-sm text-slate-600">
-            {teacherFilter === "none" ? "Busque suas turmas no seletor acima." : "Nenhuma turma encontrada."}
+      {error && (
+        <div className="rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-4 py-3 text-sm text-[var(--p-danger)]">
+          Erro ao carregar turmas: {error}
+        </div>
+      )}
+
+      {/* Lista */}
+      {loading ? (
+        <div className="p-card flex items-center justify-center gap-2 px-5 py-12 text-sm text-[var(--p-text-muted)]">
+          <Loader2 className="h-4 w-4 animate-spin" /> Carregando turmas…
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="p-card flex flex-col items-center justify-center gap-2 px-5 py-12 text-center">
+          <div className="grid h-12 w-12 place-items-center rounded-full bg-[var(--p-surface-2)] text-[var(--p-text-muted)]">
+            <BookOpen className="h-5 w-5" />
           </div>
-        ) : (
-          <>
-            {/* Mobile cards */}
-            <div className="sm:hidden divide-y">
-              {filteredTurmas.map((t) => (
-                <div key={t.id} className="p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-medium leading-tight">{t.name}</div>
-                      <div className="text-xs text-slate-600 mt-1">
-                        Professor: <b>{t.teacher_name ?? "-"}</b>
+          <div className="text-sm font-medium">Nenhuma turma encontrada</div>
+          <div className="text-xs text-[var(--p-text-muted)]">
+            {q
+              ? "Tente ajustar a busca."
+              : isProfessor
+              ? "Você não tem turmas vinculadas."
+              : "Cadastre uma turma para começar."}
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 lg:gap-4">
+          {filtered.map((t) => {
+            const { cls, icon: Icon, label } = statusChip(t._status);
+            const capacity = Number(t.capacity || 0);
+            const fill =
+              capacity > 0
+                ? Math.min(100, Math.round((t._students / capacity) * 100))
+                : 0;
+            const rules = Array.isArray(t.meeting_rules) ? t.meeting_rules : [];
+            return (
+              <div key={t.id} className="p-card p-card-hover flex flex-col">
+                <div
+                  className="h-1.5 rounded-t-2xl"
+                  style={{ background: colorFor(t.name) }}
+                />
+                <div className="flex flex-1 flex-col p-5">
+                  <div className="mb-3 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h3 className="text-base font-semibold truncate">
+                        {t.name || "—"}
+                      </h3>
+                      <div className="mt-0.5 text-xs text-[var(--p-text-muted)] truncate">
+                        Prof. {t._teacherName}
                       </div>
                     </div>
-                    <Link
-                      href={`/turmas/${t.id}`}
-                      className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-                    >
-                      Abrir
-                    </Link>
+                    {!isProfessor && (
+                      <div className="flex shrink-0 gap-1">
+                        <button
+                          onClick={() => setEditTarget(t)}
+                          className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-text)]"
+                          aria-label="Editar"
+                          title="Editar"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setManageTarget(t)}
+                          className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-text)]"
+                          aria-label="Gerenciar alunos"
+                          title="Gerenciar alunos"
+                        >
+                          <UsersRound className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setToDelete(t)}
+                          className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                          aria-label="Remover"
+                          title="Remover"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
-                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-700">
-                    <span className="inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1">
-                      Capacidade: {t.capacity}
-                    </span>
-                    <span className="inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1">
-                      Alunos: {t.students_count}
-                    </span>
-                  </div>
-
-                  {!isProfessor && (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button
-                        onClick={() => openManageMembers(t)}
-                        className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-                      >
-                        Gerenciar
-                      </button>
-                      <button
-                        onClick={() => openEditTurmaModal(t)}
-                        className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-                      >
-                        Editar
-                      </button>
-                      <button
-                        onClick={() => onDeleteTurma(t)}
-                        className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
-                      >
-                        Excluir
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            {/* Desktop/table */}
-            <div className="hidden sm:block overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
-                  <tr>
-                    <Th>Nome</Th>
-                    <Th>Professor</Th>
-                    <Th>Capacidade</Th>
-                    <Th>Alunos</Th>
-                    <Th>Ações</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredTurmas.map((t) => (
-                    <tr key={t.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-100 transition-colors">
-                      <Td>
-                        <Link href={`/turmas/${t.id}`} className="underline hover:no-underline">
-                          {t.name}
-                        </Link>
-                      </Td>
-                      <Td>{t.teacher_name ?? "-"}</Td>
-                      <Td>{t.capacity}</Td>
-                      <Td>{t.students_count}</Td>
-                      <Td className="py-2">
-                        <div className="flex flex-wrap gap-2">
-                          <Link
-                            href={`/turmas/${t.id}`}
-                            className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-                          >
-                            Abrir
-                          </Link>
-
-                          {/* 🔒 Botões restritos a não-professor */}
-                          {!isProfessor && (
-                            <>
-                              <button
-                                onClick={() => openManageMembers(t)}
-                                className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-                              >
-                                Gerenciar
-                              </button>
-                              <button
-                                onClick={() => openEditTurmaModal(t)}
-                                className="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-                              >
-                                Editar
-                              </button>
-                              <button
-                                onClick={() => onDeleteTurma(t)}
-                                className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
-                              >
-                                Excluir
-                              </button>
-                            </>
-                          )}
+                  <div className="flex flex-col gap-1 text-xs text-[var(--p-text-muted)]">
+                    {rules.length === 0 ? (
+                      <span className="inline-flex items-center gap-2 text-[var(--p-text-faint)]">
+                        <Clock className="h-3.5 w-3.5" /> Sem horário cadastrado
+                      </span>
+                    ) : (
+                      rules.slice(0, 3).map((r, i) => (
+                        <div key={i} className="inline-flex items-center gap-2">
+                          <Clock className="h-3.5 w-3.5" />
+                          <span>{formatScheduleLine(r)}</span>
                         </div>
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </section>
+                      ))
+                    )}
+                    {rules.length > 3 && (
+                      <span className="text-[var(--p-text-faint)]">
+                        +{rules.length - 3} outros horários
+                      </span>
+                    )}
+                  </div>
 
-      {/* Modal CRIAR/EDITAR TURMA (não professor) */}
-      {!isProfessor && (
-        <Modal
-          open={openEditTurma}
-          onClose={closeEditTurma}
-          title={editingId ? "Editar turma" : "Criar turma"}
-          footer={
-            <>
-              <button
-                onClick={closeEditTurma}
-                className="px-3 py-2 border rounded disabled:opacity-50"
-                disabled={savingTurma}
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={onSubmitTurma}
-                className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
-                disabled={savingTurma}
-              >
-                {savingTurma ? "Salvando…" : "Salvar"}
-              </button>
-            </>
-          }
-        >
-          <form onSubmit={onSubmitTurma} className="grid gap-3 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <label className="block text-sm mb-1">Nome*</label>
-              <input
-                value={formTurma.name}
-                onChange={(e) => setFormTurma((f) => ({ ...f, name: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm mb-1">Professor</label>
-              <select
-                value={formTurma.teacher_id}
-                onChange={(e) => setFormTurma((f) => ({ ...f, teacher_id: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-                required
-              >
-                <option value="">— selecione um professor —</option>
-                {teachers.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm mb-1">Capacidade</label>
-              <input
-                type="number"
-                min="1"
-                value={formTurma.capacity}
-                onChange={(e) => setFormTurma((f) => ({ ...f, capacity: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-              />
-            </div>
-          </form>
-        </Modal>
-      )}
+                  <div className="mt-4">
+                    <div className="flex items-baseline justify-between">
+                      <div className="text-xs text-[var(--p-text-muted)]">
+                        Ocupação
+                      </div>
+                      <div className="text-xs font-medium tabular-nums">
+                        {t._students}
+                        {capacity > 0 ? `/${capacity}` : ""}
+                      </div>
+                    </div>
+                    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[var(--p-surface-2)]">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${fill}%`,
+                          background:
+                            fill >= 100
+                              ? "var(--p-warning)"
+                              : "var(--p-primary)",
+                        }}
+                      />
+                    </div>
+                  </div>
 
-      {/* Modal GERENCIAR ALUNOS DA TURMA (não professor) */}
-      {!isProfessor && (
-        <Modal
-          open={openManage}
-          onClose={() => {
-            if (savingManage) return;
-            setOpenManage(false);
-          }}
-          title={selectedTurma ? `Alunos de ${selectedTurma.name}` : "Alunos da turma"}
-          footer={
-            <>
-              <button
-                onClick={() => setOpenManage(false)}
-                className="px-3 py-2 border rounded disabled:opacity-50"
-                disabled={savingManage}
-              >
-                Fechar
-              </button>
-            </>
-          }
-        >
-          {!selectedTurma ? (
-            <div className="p-2">Selecione uma turma.</div>
-          ) : (
-            <div className="space-y-4">
-              <div className="flex gap-2 items-end">
-                <div className="flex-1">
-                  <label className="block text-sm mb-1">Adicionar aluno</label>
-                  <select
-                    value={addStudentId}
-                    onChange={(e) => setAddStudentId(e.target.value)}
-                    className="border rounded px-3 py-2 w-full"
-                  >
-                    <option value="">— selecione —</option>
-                    {candidates.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="mt-4 flex items-center justify-between border-t border-[var(--p-border)] pt-3">
+                    <span className={`p-chip ${cls}`}>
+                      <Icon className="h-3 w-3" /> {label}
+                    </span>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setDetailsTarget(t)}
+                        className="text-xs font-medium text-[var(--p-primary)] hover:text-[var(--p-primary-600)]"
+                      >
+                        Detalhes
+                      </button>
+                      <Link
+                        href={`/turmas/${t.id}`}
+                        className="text-xs font-medium text-[var(--p-text-muted)] hover:text-[var(--p-text)] inline-flex items-center gap-1"
+                        title="Abrir página da turma"
+                      >
+                        Abrir <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    </div>
+                  </div>
                 </div>
-                <button onClick={onAddMember} className="px-3 py-2 border rounded">
-                  Adicionar
-                </button>
               </div>
-
-              <div className="border rounded overflow-x-auto">
-                {members.length === 0 ? (
-                  <div className="p-3">Nenhum aluno nesta turma.</div>
-                ) : (
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <Th>Aluno</Th>
-                        <Th>Status</Th>
-                        <Th>Ações</Th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {members.map((s) => (
-                        <tr key={s.id} className="border-t">
-                          <Td>{s.name}</Td>
-                          <Td>{s.status}</Td>
-                          <Td className="py-2">
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => onRemoveMember(s.id)}
-                                className="px-2 py-1 border rounded"
-                              >
-                                Remover
-                              </button>
-                            </div>
-                          </Td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
-          )}
-        </Modal>
+            );
+          })}
+        </div>
       )}
-    </main>
+
+      {/* Modais */}
+      {editTarget !== undefined && !isProfessor && (
+        <TurmaFormModal
+          initial={editTarget}
+          teachers={teachers}
+          onClose={() => setEditTarget(undefined)}
+          onSaved={async () => {
+            setEditTarget(undefined);
+            await load();
+          }}
+        />
+      )}
+
+      {manageTarget && !isProfessor && (
+        <ManageMembersModal
+          turma={manageTarget}
+          allStudents={students}
+          onClose={() => setManageTarget(null)}
+          onChanged={async () => {
+            await load();
+          }}
+        />
+      )}
+
+      {detailsTarget && (
+        <TurmaDetailsModal
+          turma={detailsTarget}
+          teacherName={detailsTarget._teacherName}
+          onClose={() => setDetailsTarget(null)}
+        />
+      )}
+
+      {toDelete && !isProfessor && (
+        <ConfirmDeleteModal
+          title="Remover turma"
+          itemName={toDelete.name}
+          description="Os vínculos de alunos e sessões relacionadas podem ser afetados."
+          onCancel={() => setToDelete(null)}
+          onConfirm={async () => {
+            await financeGateway.deleteTurma(toDelete.id);
+            setToDelete(null);
+            await load();
+          }}
+        />
+      )}
+    </div>
   );
 }
 
-function Th({ children }) {
-  return <th className="text-left px-2 sm:px-3 py-2 font-medium">{children}</th>;
+// ─── Modal: Criar/Editar turma ───────────────────────────────────
+function TurmaFormModal({ initial, teachers, onClose, onSaved }) {
+  const isEdit = !!initial;
+  const [name, setName] = useState(initial?.name || "");
+  const [teacherId, setTeacherId] = useState(initial?.teacher_id || "");
+  const [capacity, setCapacity] = useState(String(initial?.capacity || "10"));
+
+  // Primeira meeting_rule (preview-style quick start)
+  const firstRule = isEdit
+    ? Array.isArray(initial?.meeting_rules) && initial.meeting_rules[0]
+    : null;
+  const [weekday, setWeekday] = useState(
+    String(firstRule?.weekday ?? "1")
+  );
+  const [time, setTime] = useState(
+    firstRule?.time ? String(firstRule.time).slice(0, 5) : "19:00"
+  );
+  const [durationHours, setDurationHours] = useState(
+    String(firstRule?.duration_hours ?? "1")
+  );
+
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const trimmed = name.trim();
+    if (!trimmed) return setErr("Nome é obrigatório.");
+    if (!teacherId) return setErr("Professor é obrigatório.");
+    try {
+      setSaving(true);
+      const payload = {
+        name: trimmed,
+        teacher_id: teacherId,
+        capacity: Math.max(1, Number(capacity) || 10),
+      };
+      if (!isEdit && time) {
+        payload.meeting_rules = [
+          {
+            weekday: Number(weekday),
+            time,
+            duration_hours: Number(durationHours) || 1,
+          },
+        ];
+      }
+      if (isEdit) {
+        await financeGateway.updateTurma(initial.id, payload);
+      } else {
+        await financeGateway.createTurma(payload);
+      }
+      await onSaved();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AppModal
+      title={isEdit ? "Editar turma" : "Nova turma"}
+      onClose={saving ? () => {} : onClose}
+      maxWidth="lg"
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">
+            Nome *
+          </span>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ex.: Turma Intermediário A"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">
+              Professor *
+            </span>
+            <select
+              value={teacherId}
+              onChange={(e) => setTeacherId(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            >
+              <option value="">Selecione um professor</option>
+              {teachers.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">
+              Capacidade
+            </span>
+            <input
+              type="number"
+              min="1"
+              value={capacity}
+              onChange={(e) => setCapacity(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+        </div>
+
+        {!isEdit && (
+          <>
+            <div className="text-xs font-medium text-[var(--p-text-muted)] -mb-2">
+              Primeiro horário (opcional)
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-[var(--p-text-muted)]">
+                  Dia
+                </span>
+                <select
+                  value={weekday}
+                  onChange={(e) => setWeekday(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+                >
+                  {WEEKDAY_ABBR.map((d, i) => (
+                    <option key={i} value={i}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-[var(--p-text-muted)]">
+                  Horário
+                </span>
+                <input
+                  type="time"
+                  value={time}
+                  onChange={(e) => setTime(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-[var(--p-text-muted)]">
+                  Duração (h)
+                </span>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0.5"
+                  value={durationHours}
+                  onChange={(e) => setDurationHours(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+                />
+              </label>
+            </div>
+            <p className="text-[11px] text-[var(--p-text-faint)]">
+              Você poderá adicionar mais horários depois na página da turma.
+            </p>
+          </>
+        )}
+
+        <ModalActions
+          onCancel={onClose}
+          submitting={saving}
+          submitLabel={isEdit ? "Salvar" : "Cadastrar"}
+        />
+      </form>
+    </AppModal>
+  );
 }
-function Td({ children }) {
-  return <td className="px-2 sm:px-3 py-2">{children}</td>;
+
+// ─── Modal: Gerenciar alunos da turma ────────────────────────────
+function ManageMembersModal({ turma, allStudents, onClose, onChanged }) {
+  const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  const [addId, setAddId] = useState("");
+
+  async function reload() {
+    try {
+      setError(null);
+      setLoading(true);
+      const m = await financeGateway.listTurmaMembers(turma.id);
+      setMembers(Array.isArray(m) ? m : []);
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turma.id]);
+
+  const candidates = useMemo(() => {
+    const memberIds = new Set(members.map((m) => m.id));
+    return allStudents.filter((s) => !memberIds.has(s.id));
+  }, [members, allStudents]);
+
+  async function onAdd() {
+    if (!addId) return;
+    try {
+      setBusy(addId);
+      await financeGateway.addStudentToTurma(turma.id, addId);
+      setAddId("");
+      await reload();
+      await onChanged?.();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onRemove(studentId) {
+    try {
+      setBusy(studentId);
+      await financeGateway.removeStudentFromTurma(turma.id, studentId);
+      await reload();
+      await onChanged?.();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <AppModal
+      title={`Alunos · ${turma.name}`}
+      onClose={onClose}
+      maxWidth="2xl"
+    >
+      <div className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={error} />
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <label className="flex flex-1 flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">
+              Adicionar aluno
+            </span>
+            <select
+              value={addId}
+              onChange={(e) => setAddId(e.target.value)}
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            >
+              <option value="">— selecione —</option>
+              {candidates.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={onAdd}
+            disabled={!addId || busy === addId}
+            className="p-btn p-btn-primary"
+          >
+            {busy === addId ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="h-4 w-4" />
+            )}
+            Adicionar
+          </button>
+        </div>
+
+        <div className="rounded-lg border border-[var(--p-border)] overflow-hidden">
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 px-5 py-8 text-xs text-[var(--p-text-muted)]">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Carregando…
+            </div>
+          ) : members.length === 0 ? (
+            <div className="px-5 py-8 text-center text-xs text-[var(--p-text-muted)]">
+              Nenhum aluno nesta turma.
+            </div>
+          ) : (
+            <ul className="divide-y divide-[var(--p-border)]">
+              {members.map((s) => (
+                <li
+                  key={s.id}
+                  className="flex items-center justify-between gap-3 px-4 py-2.5"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
+                      style={{ background: colorFor(s.name) }}
+                    >
+                      {String(s.name || "?").slice(0, 1).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">
+                        {s.name || "—"}
+                      </div>
+                      <div className="text-[11px] text-[var(--p-text-muted)]">
+                        {s.status || "—"}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onRemove(s.id)}
+                    disabled={busy === s.id}
+                    className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)] disabled:opacity-50"
+                    aria-label="Remover"
+                    title="Remover"
+                  >
+                    {busy === s.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="flex justify-end">
+          <button onClick={onClose} className="p-btn p-btn-ghost">
+            Fechar
+          </button>
+        </div>
+      </div>
+    </AppModal>
+  );
+}
+
+// ─── Modal: Detalhes da turma + sessões + presença ───────────────
+function ymOf(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function monthRange(ym) {
+  const [Y, M] = ym.split("-").map(Number);
+  const start = `${ym}-01`;
+  const last = new Date(Y, M, 0).getDate();
+  const end = `${ym}-${String(last).padStart(2, "0")}`;
+  return { start, end };
+}
+function fmtSessionDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return (
+    d.toLocaleDateString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }) +
+    " · " +
+    d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+  );
+}
+
+function TurmaDetailsModal({ turma, teacherName, onClose }) {
+  const [members, setMembers] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [ym, setYm] = useState(ymOf());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState(null);
+  const [attendanceBySession, setAttendanceBySession] = useState({});
+  const [savingAtt, setSavingAtt] = useState(null);
+  const [showNew, setShowNew] = useState(false);
+
+  async function load() {
+    try {
+      setError(null);
+      setLoading(true);
+      const { start, end } = monthRange(ym);
+      const [mem, sess] = await Promise.all([
+        financeGateway.listTurmaMembers(turma.id),
+        financeGateway.listSessionsWithAttendance({
+          turmaId: turma.id,
+          start,
+          end,
+        }),
+      ]);
+      setMembers(Array.isArray(mem) ? mem : []);
+      setSessions(Array.isArray(sess) ? sess : []);
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turma.id, ym]);
+
+  async function loadAttendance(sessionId) {
+    try {
+      const att = await financeGateway.listAttendance(sessionId);
+      const map = {};
+      for (const a of att || [])
+        map[a.student_id] = { present: !!a.present, note: a.note || "" };
+      setAttendanceBySession((prev) => ({ ...prev, [sessionId]: map }));
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  }
+
+  function toggleExpand(sessionId) {
+    if (expanded === sessionId) {
+      setExpanded(null);
+      return;
+    }
+    setExpanded(sessionId);
+    if (!attendanceBySession[sessionId]) loadAttendance(sessionId);
+  }
+
+  async function handleTogglePresence(sessionId, studentId, present) {
+    setSavingAtt(`${sessionId}:${studentId}`);
+    try {
+      const prev = attendanceBySession[sessionId]?.[studentId] || {};
+      await financeGateway.upsertAttendance(sessionId, studentId, {
+        present,
+        note: prev.note || null,
+      });
+      setAttendanceBySession((s) => ({
+        ...s,
+        [sessionId]: {
+          ...(s[sessionId] || {}),
+          [studentId]: { ...prev, present },
+        },
+      }));
+      setSessions((rows) =>
+        rows.map((r) =>
+          r.id === sessionId ? { ...r, has_attendance: true } : r
+        )
+      );
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setSavingAtt(null);
+    }
+  }
+
+  return (
+    <AppModal title={turma.name || "Turma"} onClose={onClose} maxWidth="3xl">
+      <div className="flex flex-col gap-5 px-5 py-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Info label="Professor" value={teacherName || "—"} />
+          <Info label="Capacidade" value={String(turma.capacity || "—")} />
+          <Info label="Alunos" value={String(members.length)} />
+          <Info label="Aulas no mês" value={String(sessions.length)} />
+        </div>
+
+        <FormError message={error} />
+
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold">Registro de aulas</h3>
+            <div className="flex items-center gap-2">
+              <input
+                type="month"
+                value={ym}
+                onChange={(e) => setYm(e.target.value)}
+                className="rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+              />
+              <button
+                type="button"
+                onClick={() => setShowNew((v) => !v)}
+                className="p-btn p-btn-ghost text-xs"
+              >
+                <Plus className="h-3.5 w-3.5" /> Nova aula
+              </button>
+            </div>
+          </div>
+
+          {showNew && (
+            <NewSessionForm
+              turmaId={turma.id}
+              members={members}
+              defaultDuration={turma.meeting_rules?.[0]?.duration_hours || 1}
+              onCancel={() => setShowNew(false)}
+              onCreated={async () => {
+                setShowNew(false);
+                await load();
+              }}
+            />
+          )}
+
+          {loading ? (
+            <div className="flex items-center gap-2 px-2 py-6 text-sm text-[var(--p-text-muted)]">
+              <Loader2 className="h-4 w-4 animate-spin" /> Carregando aulas…
+            </div>
+          ) : sessions.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-[var(--p-border)] px-4 py-6 text-center text-xs text-[var(--p-text-muted)]">
+              Nenhuma aula cadastrada nesse mês.
+            </div>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {sessions.map((s) => {
+                const isOpen = expanded === s.id;
+                const att = attendanceBySession[s.id] || {};
+                const presentCount = Object.values(att).filter(
+                  (a) => a.present
+                ).length;
+                return (
+                  <li
+                    key={s.id}
+                    className="rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleExpand(s.id)}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-[var(--p-surface-2)]"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Calendar className="h-4 w-4 text-[var(--p-text-muted)]" />
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate">
+                            {fmtSessionDate(s.date)}
+                          </div>
+                          <div className="text-xs text-[var(--p-text-muted)]">
+                            {Number(s.duration_hours || 0)}h
+                            {s.has_attendance
+                              ? " · presença registrada"
+                              : " · sem presença"}
+                          </div>
+                        </div>
+                      </div>
+                      {isOpen ? (
+                        <ChevronUp className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
+                    </button>
+
+                    {isOpen && (
+                      <div className="border-t border-[var(--p-border)] px-4 py-3">
+                        {members.length === 0 ? (
+                          <div className="text-xs text-[var(--p-text-muted)]">
+                            A turma ainda não tem alunos vinculados.
+                          </div>
+                        ) : (
+                          <>
+                            <div className="mb-2 text-xs text-[var(--p-text-muted)]">
+                              Presentes:{" "}
+                              <span className="font-medium tabular-nums">
+                                {presentCount}/{members.length}
+                              </span>
+                            </div>
+                            <ul className="flex flex-col divide-y divide-[var(--p-border)]">
+                              {members.map((m) => {
+                                const row = att[m.id] || {
+                                  present: false,
+                                  note: "",
+                                };
+                                const busy = savingAtt === `${s.id}:${m.id}`;
+                                return (
+                                  <li
+                                    key={m.id}
+                                    className="flex items-center justify-between gap-3 py-2"
+                                  >
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <div
+                                        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
+                                        style={{
+                                          background: colorFor(m.name),
+                                        }}
+                                      >
+                                        {String(m.name || "?")
+                                          .slice(0, 1)
+                                          .toUpperCase()}
+                                      </div>
+                                      <span className="truncate text-sm">
+                                        {m.name}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={() =>
+                                          handleTogglePresence(
+                                            s.id,
+                                            m.id,
+                                            true
+                                          )
+                                        }
+                                        className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                                          row.present
+                                            ? "bg-[var(--p-success-50)] text-[var(--p-success)]"
+                                            : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                                        }`}
+                                      >
+                                        <Check className="h-3 w-3" /> Presente
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={() =>
+                                          handleTogglePresence(
+                                            s.id,
+                                            m.id,
+                                            false
+                                          )
+                                        }
+                                        className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                                          !row.present && att[m.id]
+                                            ? "bg-[var(--p-danger-50)] text-[var(--p-danger)]"
+                                            : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                                        }`}
+                                      >
+                                        Falta
+                                      </button>
+                                    </div>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      </div>
+    </AppModal>
+  );
+}
+
+function Info({ label, value }) {
+  return (
+    <div className="rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2">
+      <div className="text-[11px] uppercase tracking-wide text-[var(--p-text-faint)]">
+        {label}
+      </div>
+      <div className="mt-0.5 text-sm font-medium truncate">{value}</div>
+    </div>
+  );
+}
+
+function NewSessionForm({
+  turmaId,
+  members,
+  defaultDuration,
+  onCancel,
+  onCreated,
+}) {
+  const [date, setDate] = useState(() =>
+    new Date().toISOString().slice(0, 16)
+  );
+  const [durationHours, setDurationHours] = useState(
+    String(defaultDuration || 1)
+  );
+  const [notes, setNotes] = useState("");
+  const [presence, setPresence] = useState(() => {
+    const init = {};
+    for (const m of members || []) init[m.id] = true;
+    return init;
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const presentCount = Object.values(presence).filter(Boolean).length;
+
+  function setAll(value) {
+    const next = {};
+    for (const m of members || []) next[m.id] = value;
+    setPresence(next);
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    if (!date) {
+      setErr("Data é obrigatória");
+      return;
+    }
+    try {
+      setSaving(true);
+      const session = await financeGateway.createSession({
+        turma_id: turmaId,
+        date,
+        duration_hours: Number(durationHours) || 1,
+        notes,
+      });
+      const sessionId = session?.id;
+      if (sessionId && (members || []).length > 0) {
+        await Promise.all(
+          members.map((m) =>
+            financeGateway.upsertAttendance(sessionId, m.id, {
+              present: !!presence[m.id],
+              note: null,
+            })
+          )
+        );
+      }
+      await onCreated();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="flex flex-col gap-3 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface-2)] px-3 py-3"
+    >
+      <FormError message={err} />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">
+            Data e hora *
+          </span>
+          <input
+            type="datetime-local"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">
+            Duração (h)
+          </span>
+          <input
+            type="number"
+            step="0.5"
+            min="0.5"
+            value={durationHours}
+            onChange={(e) => setDurationHours(e.target.value)}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <label className="flex flex-col gap-1 sm:col-span-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">
+            Observações
+          </span>
+          <input
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Opcional"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-xs font-medium text-[var(--p-text-muted)]">
+            Presença ({presentCount}/{(members || []).length})
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setAll(true)}
+              className="rounded-md px-2 py-1 text-xs text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+            >
+              Marcar todos
+            </button>
+            <button
+              type="button"
+              onClick={() => setAll(false)}
+              className="rounded-md px-2 py-1 text-xs text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+            >
+              Desmarcar todos
+            </button>
+          </div>
+        </div>
+        {(members || []).length === 0 ? (
+          <div className="text-xs text-[var(--p-text-muted)]">
+            A turma ainda não tem alunos vinculados.
+          </div>
+        ) : (
+          <ul className="flex flex-col divide-y divide-[var(--p-border)]">
+            {members.map((m) => {
+              const present = !!presence[m.id];
+              return (
+                <li
+                  key={m.id}
+                  className="flex items-center justify-between gap-3 py-2"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
+                      style={{ background: colorFor(m.name) }}
+                    >
+                      {String(m.name || "?").slice(0, 1).toUpperCase()}
+                    </div>
+                    <span className="truncate text-sm">{m.name}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPresence((p) => ({ ...p, [m.id]: true }))
+                      }
+                      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                        present
+                          ? "bg-[var(--p-success-50)] text-[var(--p-success)]"
+                          : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                      }`}
+                    >
+                      <Check className="h-3 w-3" /> Presente
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPresence((p) => ({ ...p, [m.id]: false }))
+                      }
+                      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                        !present
+                          ? "bg-[var(--p-danger-50)] text-[var(--p-danger)]"
+                          : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                      }`}
+                    >
+                      Falta
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      <ModalActions
+        onCancel={onCancel}
+        submitting={saving}
+        submitLabel="Cadastrar aula"
+      />
+    </form>
+  );
 }
