@@ -1,30 +1,95 @@
 "use client";
 
-import { useEffect, useMemo, useState, useRef } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
-import Modal from "@/components/Modal";
-import Link from "next/link";
+import {
+  Search,
+  Plus,
+  CheckCircle2,
+  Clock,
+  AlertCircle,
+  Trash2,
+  Pencil,
+  XCircle,
+  RotateCcw,
+  Calendar,
+  Repeat,
+  Sparkles,
+  Loader2,
+} from "lucide-react";
+import AppModal, {
+  FormError,
+  ModalActions,
+  ConfirmDeleteModal,
+} from "@/components/AppModal";
 
-
-// Tradução de status
-const statusLabels = {
+// ─── Helpers ──────────────────────────────────────────────────────
+const STATUS_LABELS = {
   pending: "Pendente",
   paid: "Pago",
   canceled: "Cancelado",
 };
 
 const fmtBRL = (n) =>
-  (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-const fmtBR = (s) => (s ? new Date(s + "T00:00:00").toLocaleDateString("pt-BR") : "-");
+  (Number(n) || 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
 
+const fmtBR = (s) => {
+  if (!s) return "-";
+  const [y, m, d] = String(s).slice(0, 10).split("-");
+  if (!y || !m || !d) return "-";
+  return `${d}/${m}/${y}`;
+};
+
+const ymLabel = (ym) => {
+  const [y, m] = String(ym || "").split("-");
+  const names = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  const idx = Math.max(1, Math.min(12, Number(m || 0))) - 1;
+  return `${names[idx]} de ${y}`;
+};
+
+function statusChip(row) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (row.status === "paid")
+    return { cls: "p-chip-success", icon: CheckCircle2, label: "Pago" };
+  if (row.status === "canceled")
+    return { cls: "p-chip-neutral", icon: Clock, label: "Cancelado" };
+  if (row.status === "pending" && row.due_date && row.due_date < today) {
+    return {
+      cls: "p-chip-danger",
+      icon: AlertCircle,
+      label: `Atraso ${row.days_overdue || 0}d`,
+    };
+  }
+  return { cls: "p-chip-warning", icon: Clock, label: "Pendente" };
+}
+
+// Helpers para detecção de duplicatas
+const normalizeTitle = (s) =>
+  String(s || "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+const clampDay = (n) => Math.min(Math.max(Number(n || 5), 1), 28);
+
+const shapeKey = (freq, day, month, cc) =>
+  `${cc || "PJ"}|${String(freq || "monthly")}|${clampDay(day)}|${
+    String(freq) === "annual" ? Number(month || 0) : 0
+  }`;
+
+// ─── Página ───────────────────────────────────────────────────────
 export default function GastosPage() {
-  // ---------- Sessão (somente para reagir a troca de usuário) ----------
   const sess = useSession();
-  const ready = sess?.ready ?? true; // se não houver "ready" no contexto, segue true
+  const ready = sess?.ready ?? true;
 
-  // ---------- Permissões via DB (fonte da verdade) ----------
+  // Permissões (DB é fonte da verdade)
   const [permChecked, setPermChecked] = useState(false);
   const [canReadDB, setCanReadDB] = useState(false);
   const [canWriteDB, setCanWriteDB] = useState(false);
@@ -37,20 +102,17 @@ export default function GastosPage() {
         const { supabase } = await import("@/lib/supabaseClient");
         const { data: tenantId, error: tErr } = await supabase.rpc("current_tenant_id");
         if (tErr) throw tErr;
-
         const [rRead, rWrite] = await Promise.all([
           supabase.rpc("is_admin_or_finance_read", { p_tenant: tenantId }),
           supabase.rpc("is_admin_or_finance_write", { p_tenant: tenantId }),
         ]);
         if (!alive) return;
-
         if (rRead.error) throw rRead.error;
         if (rWrite.error) throw rWrite.error;
-
         setCanReadDB(!!rRead.data);
         setCanWriteDB(!!rWrite.data);
       } catch (e) {
-        console.warn("perm check (gastos) failed:", e);
+        console.warn("perm check failed:", e);
         setCanReadDB(false);
         setCanWriteDB(false);
       } finally {
@@ -62,146 +124,60 @@ export default function GastosPage() {
     };
   }, [ready, sess?.user?.id]);
 
-  // ---------- Estado ----------
+  // Estado
   const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
-  const [status, setStatus] = useState("all"); // all | pending | paid | canceled
-  const [costCenter, setCostCenter] = useState("all"); // all | PJ | PF
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [costCenter, setCostCenter] = useState("all");
+  const [q, setQ] = useState("");
   const [updatingId, setUpdatingId] = useState(null);
-  const [showAdvFilters, setShowAdvFilters] = useState(false); // toggle filtros avançados (mobile)
 
   const [rows, setRows] = useState([]);
   const [kpis, setKpis] = useState({ total: 0, paid: 0, pending: 0, overdue: 0 });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // Recorrentes
   const [templates, setTemplates] = useState([]);
   const [tplSearch, setTplSearch] = useState("");
   const [categories, setCategories] = useState([]);
-  const [openEditTpl, setOpenEditTpl] = useState(false);
-  const [savingTpl, setSavingTpl] = useState(false);
-  const [tplId, setTplId] = useState(null);
-  const [formTpl, setFormTpl] = useState({
-    title: "",
-    category: "",
-    amount: "",
-    frequency: "monthly", // monthly | annual
-    due_day: "5",
-    due_month: "1",
-    active: true,
-    cost_center: "PJ", // PJ | PF
-    // Novos (recorrência)
-    recurrence_mode: "indefinite", // 'indefinite' | 'installments' | 'until_month'
-    start_month: "", // YYYY-MM
-    installments: "",
-    end_month: "", // YYYY-MM
-  });
 
-  // ---------- Duplicatas (helpers locais) ----------
-  const normalizeTitle = (s) =>
-    String(s || "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .trim();
-  const clampDay = (n) => Math.min(Math.max(Number(n || 5), 1), 28);
-  const shapeKey = (freq, day, month, cc) =>
-    `${cc || "PJ"}|${String(freq || "monthly")}|${clampDay(day)}|${String(freq) === "annual" ? Number(month || 0) : 0}`;
+  // Modais
+  const [tplFormTarget, setTplFormTarget] = useState(undefined); // null = novo, obj = edit, undefined = fechado
+  const [avulsoOpen, setAvulsoOpen] = useState(false);
+  const [previewModal, setPreviewModal] = useState(null); // { items, generating }
+  const [toDeleteEntry, setToDeleteEntry] = useState(null);
+  const [toDeleteTpl, setToDeleteTpl] = useState(null);
+  const [cancelTarget, setCancelTarget] = useState(null);
 
-  const currentShapeKey = useMemo(
-    () => shapeKey(formTpl.frequency, formTpl.due_day, formTpl.due_month, formTpl.cost_center),
-    [formTpl.frequency, formTpl.due_day, formTpl.due_month, formTpl.cost_center]
-  );
-
-  const exactDuplicate = useMemo(() => {
-    if (!formTpl.title) return null;
-    const norm = normalizeTitle(formTpl.title);
-    const amt = Number(formTpl.amount || 0);
-    return (
-      templates.find(
-        (t) =>
-          (!tplId || t.id !== tplId) &&
-          !!t.active &&
-          shapeKey(t.frequency, t.due_day, t.due_month, t.cost_center) === currentShapeKey &&
-          normalizeTitle(t.title) === norm &&
-          Math.abs(Number(t.amount || 0) - amt) < 0.01
-      ) || null
-    );
-  }, [templates, formTpl.title, formTpl.amount, currentShapeKey, tplId]);
-
-  // Similaridade simples por tokens (soft suggestion)
-  const tokenSet = (s) => new Set(normalizeTitle(s).split(" ").filter(Boolean));
-  const tokenJaccard = (a, b) => {
-    const A = tokenSet(a);
-    const B = tokenSet(b);
-    if (!A.size || !B.size) return 0;
-    let inter = 0;
-    for (const w of A) if (B.has(w)) inter++;
-    return inter / (A.size + B.size - inter);
-  };
-
-  const softSuggestions = useMemo(() => {
-    if (!formTpl.title) return [];
-    const norm = normalizeTitle(formTpl.title);
-    const augmented = (templates || [])
-      .filter((t) => !(tplId && t.id === tplId))
-      .map((t) => {
-        const tNorm = normalizeTitle(t.title);
-        const starts = tNorm.startsWith(norm) ? 1 : 0;
-        const includes = !starts && tNorm.includes(norm) ? 1 : 0;
-        const sim = tokenJaccard(tNorm, norm);
-        // Prioriza prefixo, depois substring, depois similaridade
-        const score = starts * 3 + includes * 2 + sim;
-        return { t, tNorm, score, starts, includes, sim };
-      })
-      .filter((r) => r.starts || r.includes || r.sim >= 0.4)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 10)
-      .map((r) => r.t);
-    return augmented;
-  }, [templates, formTpl.title, tplId]);
-
-  // Filtro dos recorrentes (busca por título, categoria e centro)
-  const filteredTemplates = useMemo(() => {
-    const q = normalizeTitle(tplSearch);
-    if (!q) return templates;
-    return (templates || []).filter((t) => {
-      const hay = [t.title, t.category, t.cost_center].map((v) => normalizeTitle(v || ""));
-      return hay.some((h) => h.includes(q));
-    });
-  }, [templates, tplSearch]);
-
-  // Avulso
-  const [openAvulso, setOpenAvulso] = useState(false);
-  const [savingAvulso, setSavingAvulso] = useState(false);
-  const [formAvulso, setFormAvulso] = useState({
-    date: "",
-    title: "",
-    category: "",
-    amount: "",
-    cost_center: "PJ", // PJ | PF
-  });
-
-  // ---------- Carregar dados do mês (somente com READ do banco) ----------
+  // Carregar lançamentos
   async function load() {
-    setLoading(true);
-    const { rows, kpis } = await financeGateway.listExpenseEntries({
-      ym,
-      status: status === "all" ? null : status,
-      cost_center: costCenter === "all" ? null : costCenter,
-    });
-    setRows(rows);
-    setKpis(kpis);
-    setLoading(false);
+    try {
+      setError(null);
+      const { rows: rs, kpis: k } = await financeGateway.listExpenseEntries({
+        ym,
+        status: statusFilter === "all" ? null : statusFilter,
+        cost_center: costCenter === "all" ? null : costCenter,
+      });
+      setRows(rs);
+      setKpis(k);
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
   }
 
   useEffect(() => {
     if (!permChecked || !canReadDB) return;
-    load();
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [permChecked, canReadDB, ym, status, costCenter]);
+  }, [permChecked, canReadDB, ym, statusFilter, costCenter]);
 
-  // ---------- Recorrentes (somente com WRITE do banco) ----------
   async function loadTemplates() {
     const list = await financeGateway.listExpenseTemplates();
     setTemplates(list);
@@ -210,9 +186,8 @@ export default function GastosPage() {
   useEffect(() => {
     if (!permChecked || !canWriteDB) return;
     loadTemplates();
-  }, [permChecked, canWriteDB, ym]);
+  }, [permChecked, canWriteDB]);
 
-  // Carregar categorias (read suficiente)
   useEffect(() => {
     if (!permChecked || !canReadDB) return;
     (async () => {
@@ -225,1057 +200,1291 @@ export default function GastosPage() {
     })();
   }, [permChecked, canReadDB]);
 
-  // Se perder permissão de write, limpa UI
+  // Limpa UI se perder write
   useEffect(() => {
     if (!canWriteDB) {
       setTemplates([]);
-      setOpenEditTpl(false);
-      setOpenAvulso(false);
+      setTplFormTarget(undefined);
+      setAvulsoOpen(false);
     }
   }, [canWriteDB]);
 
-  // ---------- Gates ----------
-  if (!permChecked) {
-    return <main className="p-6">Carregando…</main>;
-  }
-  if (!canReadDB) {
-    return (
-      <main className="p-6">
-        <h1 className="text-xl font-semibold mb-2">Acesso negado</h1>
-        <p className="text-sm opacity-75">
-          Você não tem permissão para visualizar o Financeiro desta escola.
-        </p>
-      </main>
-    );
-  }
-
-  // ---------- Ações do mês ----------
-  async function onPreview() {
-    if (!canWriteDB) {
-      alert("Você não tem permissão para gerar despesas.");
-      return;
-    }
-    const prev = await financeGateway.previewGenerateExpenses({ ym });
-    if (!prev.length) {
-      alert("Nada a gerar para este mês.");
-      return;
-    }
-    const txt =
-      "Prévia de geração:\n\n" +
-      prev
-        .map((p) => `• ${p.title_snapshot} — ${fmtBRL(p.amount)} (venc. ${fmtBR(p.due_date)})`)
-        .join("\n") +
-      "\n\nDeseja GERAR esses lançamentos?";
-    if (confirm(txt)) {
-      await financeGateway.generateExpenses({ ym });
-      await load();
-    }
-  }
-
-  // ---------- Ações por item ----------
-  const markPaid = async (id) => {
-    if (!canWriteDB) {
-      alert("Você não tem permissão para marcar como pago.");
-      return;
-    }
-    try {
-      setUpdatingId(id);
-      if (financeGateway.updateExpenseEntry) {
-        await financeGateway.updateExpenseEntry(id, {
-          status: "paid",
-          paid_at: new Date().toISOString(),
-        });
-      } else {
-        const { supabase } = await import("@/lib/supabaseClient");
-        const { error } = await supabase
-          .from("expense_entries")
-          .update({ status: "paid", paid_at: new Date().toISOString() })
-          .eq("id", id);
-        if (error) throw error;
-      }
-      await load();
-    } finally {
-      setUpdatingId(null);
-    }
-  };
-
-  const reopen = async (id) => {
-    if (!canWriteDB) {
-      alert("Você não tem permissão para reabrir.");
-      return;
-    }
-    try {
-      setUpdatingId(id);
-      if (financeGateway.updateExpenseEntry) {
-        await financeGateway.updateExpenseEntry(id, { status: "pending", paid_at: null });
-      } else {
-        const { supabase } = await import("@/lib/supabaseClient");
-        const { error } = await supabase
-          .from("expense_entries")
-          .update({ status: "pending", paid_at: null })
-          .eq("id", id);
-        if (error) throw error;
-      }
-      await load();
-    } finally {
-      setUpdatingId(null);
-    }
-  };
-
-  const cancel = async (id) => {
-    if (!canWriteDB) {
-      alert("Você não tem permissão para cancelar.");
-      return;
-    }
-    try {
-      setUpdatingId(id);
-      const note = prompt("Motivo do cancelamento (opcional):") || "";
-      if (financeGateway.updateExpenseEntry) {
-        await financeGateway.updateExpenseEntry(id, { status: "canceled", paid_at: null });
-      } else {
-        const { supabase } = await import("@/lib/supabaseClient");
-        const { error } = await supabase
-          .from("expense_entries")
-          .update({ status: "canceled", paid_at: null /*, cancel_reason: note */ })
-          .eq("id", id);
-        if (error) throw error;
-      }
-      await load();
-    } finally {
-      setUpdatingId(null);
-    }
-  };
-
-  const delEntry = async (id) => {
-    if (!canWriteDB) {
-      alert("Você não tem permissão para excluir lançamentos.");
-      return;
-    }
-    if (!confirm("Excluir lançamento?")) return;
-    await financeGateway.deleteExpenseEntry
-      ? financeGateway.deleteExpenseEntry(id)
-      : (await import("@/lib/supabaseClient")).supabase.from("expense_entries").delete().eq("id", id);
-    await load();
-  };
-
-  // ---------- Templates (CRUD somente com canWriteDB) ----------
-  function openCreateTpl() {
-    if (!canWriteDB) {
-      alert("Você não tem permissão para criar recorrentes.");
-      return;
-    }
-    setTplId(null);
-    setFormTpl({
-      title: "",
-      category: "",
-      amount: "",
-      frequency: "monthly",
-      due_day: "5",
-      due_month: "1",
-      active: true,
-      cost_center: "PJ",
-      recurrence_mode: "indefinite",
-      start_month: "",
-      installments: "",
-      end_month: "",
+  // Filtragem cliente (busca)
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    if (!term) return rows;
+    return rows.filter((r) => {
+      const s =
+        String(r.title_snapshot || "").toLowerCase() +
+        " " +
+        String(r.category || "").toLowerCase();
+      return s.includes(term);
     });
-    setOpenEditTpl(true);
-  }
+  }, [rows, q]);
 
-  function openEditTplModal(t) {
-    if (!canWriteDB) {
-      alert("Você não tem permissão para editar recorrentes.");
-      return;
-    }
-    setTplId(t.id);
-    setFormTpl({
-      title: t.title || "",
-      category: t.category || "",
-      amount: String(t.amount ?? ""),
-      frequency: t.frequency || "monthly",
-      due_day: String(t.due_day ?? "5"),
-      due_month: String(t.due_month ?? "1"),
-      active: !!t.active,
-      cost_center: t.cost_center || "PJ",
-      recurrence_mode: t.recurrence_mode || "indefinite",
-      start_month: (t.start_month ? String(t.start_month).slice(0,7) : ""),
-      installments: t.installments != null ? String(t.installments) : "",
-      end_month: (t.end_month ? String(t.end_month).slice(0,7) : ""),
+  const filteredTemplates = useMemo(() => {
+    const t = normalizeTitle(tplSearch);
+    if (!t) return templates;
+    return (templates || []).filter((x) => {
+      const hay = [x.title, x.category, x.cost_center].map((v) =>
+        normalizeTitle(v || "")
+      );
+      return hay.some((h) => h.includes(t));
     });
-    setOpenEditTpl(true);
+  }, [templates, tplSearch]);
+
+  // Ações
+  async function markPaid(id) {
+    if (!canWriteDB) return;
+    try {
+      setUpdatingId(id);
+      await financeGateway.updateExpenseEntry(id, {
+        status: "paid",
+        paid_at: new Date().toISOString(),
+      });
+      await load();
+    } finally {
+      setUpdatingId(null);
+    }
   }
 
-  async function onSubmitTpl(e) {
-    e?.preventDefault?.();
-    if (!canWriteDB) {
-      alert("Você não tem permissão para salvar recorrentes.");
-      return;
-    }
+  async function reopen(id) {
+    if (!canWriteDB) return;
     try {
-      setSavingTpl(true);
-      // Bloqueio de duplicata exata (no cliente)
-      if (!tplId && exactDuplicate) {
-        throw new Error(
-          `Já existe uma recorrente idêntica: "${exactDuplicate.title}" (${fmtBRL(exactDuplicate.amount)}). ` +
-            `Ajuste o título/valor ou edite a existente.`
-        );
-      }
-      const payload = {
-        title: formTpl.title.trim(),
-        category: formTpl.category.trim() || null,
-        amount: Number(formTpl.amount || 0),
-        frequency: formTpl.frequency,
-        due_day: Number(formTpl.due_day || 5),
-        due_month: Number(formTpl.due_month || 1),
-        active: !!formTpl.active,
-        cost_center: formTpl.cost_center,
-        // Novos (recorrência)
-        recurrence_mode: formTpl.recurrence_mode,
-        start_month: formTpl.start_month ? `${formTpl.start_month}-01` : null,
-        installments: formTpl.recurrence_mode === 'installments' ? Number(formTpl.installments || 0) : null,
-        end_month: formTpl.recurrence_mode === 'until_month' && formTpl.end_month ? `${formTpl.end_month}-01` : null,
-      };
-      if (!payload.title) throw new Error("Título é obrigatório");
-      // Validações de recorrência no front (para mensagens melhores)
-      if (payload.recurrence_mode === 'installments') {
-        if (!payload.installments || payload.installments < 1) {
-          throw new Error("Informe o número de parcelas (>= 1)");
-        }
-      }
-      if (payload.recurrence_mode === 'until_month') {
-        if (!payload.end_month) throw new Error("Informe o mês final");
-        if (payload.start_month && payload.end_month < payload.start_month) {
-          throw new Error("Mês final deve ser maior ou igual ao mês inicial");
-        }
-      }
+      setUpdatingId(id);
+      await financeGateway.updateExpenseEntry(id, {
+        status: "pending",
+        paid_at: null,
+      });
+      await load();
+    } finally {
+      setUpdatingId(null);
+    }
+  }
 
-      if (tplId) await financeGateway.updateExpenseTemplate(tplId, payload);
-      else await financeGateway.createExpenseTemplate(payload);
+  async function doCancel(id) {
+    try {
+      setUpdatingId(id);
+      await financeGateway.updateExpenseEntry(id, {
+        status: "canceled",
+        paid_at: null,
+      });
+      await load();
+    } finally {
+      setUpdatingId(null);
+    }
+  }
 
-      setOpenEditTpl(false);
-      await loadTemplates();
+  async function onPreviewGenerate() {
+    if (!canWriteDB) return;
+    try {
+      const items = await financeGateway.previewGenerateExpenses({ ym });
+      if (!items || items.length === 0) {
+        alert("Nada a gerar para este mês.");
+        return;
+      }
+      setPreviewModal({ items, generating: false });
     } catch (e) {
-      alert(e.message || String(e));
-    } finally {
-      setSavingTpl(false);
+      alert(e?.message || String(e));
     }
   }
 
-  async function onDeleteTpl(t) {
-    if (!canWriteDB) {
-      alert("Você não tem permissão para excluir recorrentes.");
-      return;
+  async function confirmGenerate() {
+    if (!previewModal || !canWriteDB) return;
+    try {
+      setPreviewModal((p) => ({ ...p, generating: true }));
+      await financeGateway.generateExpenses({ ym });
+      setPreviewModal(null);
+      await load();
+    } catch (e) {
+      alert(e?.message || String(e));
+      setPreviewModal((p) => p && { ...p, generating: false });
     }
-    if (!confirm(`Excluir recorrente "${t.title}"?`)) return;
+  }
+
+  async function deleteTemplate(t) {
     await financeGateway.deleteExpenseTemplate(t.id);
     await loadTemplates();
   }
 
-  function openAvulsoModal() {
-    if (!canWriteDB) {
-      alert("Você não tem permissão para criar lançamentos avulsos.");
-      return;
-    }
-    setFormAvulso({
-      date: "",
-      title: "",
-      category: "",
-      amount: "",
-      cost_center: "PJ",
-    });
-    setOpenAvulso(true);
+  // Gates
+  if (!permChecked) {
+    return (
+      <div className="flex items-center gap-2 p-6 text-sm text-[var(--p-text-muted)]">
+        <Loader2 className="h-4 w-4 animate-spin" /> Carregando…
+      </div>
+    );
+  }
+  if (!canReadDB) {
+    return (
+      <div className="space-y-3 p-6">
+        <h1 className="text-xl font-semibold">Acesso negado</h1>
+        <p className="text-sm text-[var(--p-text-muted)]">
+          Você não tem permissão para visualizar o Financeiro desta escola.
+        </p>
+      </div>
+    );
   }
 
-  async function onSubmitAvulso(e) {
-    e?.preventDefault?.();
-    if (!canWriteDB) {
-      alert("Você não tem permissão para salvar lançamentos avulsos.");
-      return;
-    }
-    try {
-      setSavingAvulso(true);
-      const payload = {
-        // O gateway espera 'date' e faz o mapeamento para 'due_date'
-        date: formAvulso.date,
-        title: formAvulso.title.trim(),
-        category: formAvulso.category.trim() || null,
-        amount: Number(formAvulso.amount || 0),
-        cost_center: formAvulso.cost_center,
-      };
-      if (!payload.date) throw new Error("Data é obrigatória");
-      if (!payload.title) throw new Error("Título é obrigatório");
-      await financeGateway.createOneOffExpense(payload);
-      setOpenAvulso(false);
-      await load();
-    } catch (e) {
-      alert(e.message || String(e));
-    } finally {
-      setSavingAvulso(false);
-    }
-  }
+  const totalPending = kpis.total - kpis.paid - kpis.overdue;
 
-  // ---------- Render ----------
   return (
-    <main className="p-6 space-y-8">
-      {/* Barra de filtros (sticky) */}
-      <div className="sticky top-0 z-30 -mx-6 px-6 py-3 bg-white/95 backdrop-blur border-b flex flex-wrap items-end gap-3">
-        <h1 className="text-2xl font-bold mr-2">Gastos</h1>
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="block text-[11px] uppercase tracking-wide text-slate-600 mb-1">Mês</label>
-            <input
-              type="month"
-              value={ym}
-              onChange={(e) => setYm(e.target.value.slice(0, 7))}
-              className="border rounded px-2 py-1 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] uppercase tracking-wide text-slate-600 mb-1">Status</label>
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              className="border rounded px-2 py-1 text-sm"
-            >
-              <option value="all">Todos</option>
-              <option value="pending">Pendentes</option>
-              <option value="paid">Pagos</option>
-              <option value="canceled">Cancelados</option>
-            </select>
-          </div>
-          {/* Centro só em desktop */}
-          <div className="hidden sm:block">
-            <label className="block text-[11px] uppercase tracking-wide text-slate-600 mb-1">Centro</label>
-            <select
-              value={costCenter}
-              onChange={(e) => setCostCenter(e.target.value)}
-              className="border rounded px-2 py-1 text-sm"
-            >
-              <option value="all">Todos os centros</option>
-              <option value="PJ">PJ (Empresa)</option>
-              <option value="PF">PF (Pessoal)</option>
-            </select>
-          </div>
-          {/* Toggle filtros avançados mobile */}
-          <button
-            type="button"
-            onClick={() => setShowAdvFilters((v) => !v)}
-            className="sm:hidden inline-flex items-center gap-1 px-2 py-1 text-sm border rounded"
-          >
-            Filtros
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-4 h-4 transition-transform ${showAdvFilters ? 'rotate-180' : ''}`}>
-              <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
-            </svg>
-          </button>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
+            Gastos
+          </h1>
+          <p className="mt-1 text-sm text-[var(--p-text-muted)]">
+            {loading
+              ? "Carregando…"
+              : `${ymLabel(ym)} · ${rows.length} lançamentos`}
+          </p>
         </div>
         {canWriteDB && (
-          <div className="ml-auto flex items-center gap-2 flex-wrap sm:flex-nowrap">
+          <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={onPreview}
-              title="Mostra a prévia e permite gerar os lançamentos recorrentes deste mês"
-              className="border rounded px-3 py-2 text-sm hover:bg-slate-50"
+              onClick={onPreviewGenerate}
+              className="p-btn p-btn-ghost"
+              title="Mostra a prévia e gera os lançamentos recorrentes do mês"
             >
-              Prévia e gerar recorrentes
+              <Sparkles className="h-4 w-4" />
+              <span className="hidden sm:inline">Prévia & gerar</span>
             </button>
-            <button onClick={openAvulsoModal} className="border rounded px-3 py-2 text-sm bg-slate-900 text-white hover:bg-black">
-              + Avulso
+            <button onClick={() => setAvulsoOpen(true)} className="p-btn p-btn-ghost">
+              <Plus className="h-4 w-4" />
+              <span>Avulso</span>
             </button>
-            <button onClick={openCreateTpl} className="border rounded px-3 py-2 text-sm bg-slate-900 text-white hover:bg-black">
-              + Nova recorrente
+            <button onClick={() => setTplFormTarget(null)} className="p-btn p-btn-primary">
+              <Repeat className="h-4 w-4" />
+              <span className="hidden sm:inline">Nova recorrente</span>
+              <span className="sm:hidden">Recorrente</span>
             </button>
-          </div>
-        )}
-        {showAdvFilters && (
-          <div className="w-full sm:hidden mt-3">
-            <label className="block text-[11px] uppercase tracking-wide text-slate-600 mb-1">Centro</label>
-            <select
-              value={costCenter}
-              onChange={(e) => setCostCenter(e.target.value)}
-              className="border rounded px-2 py-1 text-sm w-full"
-            >
-              <option value="all">Todos os centros</option>
-              <option value="PJ">PJ (Empresa)</option>
-              <option value="PF">PF (Pessoal)</option>
-            </select>
           </div>
         )}
       </div>
 
       {/* KPIs */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard title="Total do mês" value={fmtBRL(kpis.total)} tone="neutral" />
-        <KpiCard title="Pagos" value={fmtBRL(kpis.paid)} tone="success" />
-        <KpiCard title="Pendentes" value={fmtBRL(kpis.pending)} tone="warning" />
-        <KpiCard title="Em atraso" value={fmtBRL(kpis.overdue)} tone="danger" />
-      </section>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
+        <SumCard label="Total do mês" value={fmtBRL(kpis.total)} />
+        <SumCard label="Pagos" value={fmtBRL(kpis.paid)} tone="success" />
+        <SumCard label="Pendentes" value={fmtBRL(totalPending)} tone="warning" />
+        <SumCard label="Em atraso" value={fmtBRL(kpis.overdue)} tone="danger" />
+      </div>
 
-      {/* Lançamentos do mês */}
-      <section className="border rounded-xl shadow-sm">
-        <div className="px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 font-semibold drop-shadow-sm">Lançamentos do mês</div>
+      {/* Filtros: busca + mês + cost center + status */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--p-text-faint)]" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar descrição ou categoria…"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] py-2.5 pl-9 pr-3 text-sm placeholder:text-[var(--p-text-faint)] focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </div>
+        <div className="inline-flex items-center gap-2 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm">
+          <Calendar className="h-4 w-4 text-[var(--p-text-muted)]" />
+          <input
+            type="month"
+            value={ym}
+            onChange={(e) => setYm(e.target.value.slice(0, 7))}
+            className="bg-transparent text-sm focus:outline-none"
+          />
+        </div>
+      </div>
+
+      <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Filter status pills */}
+          <div className="flex gap-1 min-w-max">
+            {[
+              { key: "all", label: "Todos" },
+              { key: "pending", label: "Pendentes" },
+              { key: "paid", label: "Pagos" },
+              { key: "canceled", label: "Cancelados" },
+            ].map((f) => {
+              const active = statusFilter === f.key;
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => setStatusFilter(f.key)}
+                  className={[
+                    "rounded-lg px-3 py-1.5 text-sm transition-colors",
+                    active
+                      ? "bg-[var(--p-primary)] text-white"
+                      : "bg-[var(--p-surface)] border border-[var(--p-border)] text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]",
+                  ].join(" ")}
+                >
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+          <div className="h-6 w-px bg-[var(--p-border)] hidden sm:block" />
+          {/* Cost center pills (PF/PJ) — diferencial Fix */}
+          <div className="flex gap-1 min-w-max">
+            {[
+              { key: "all", label: "Todos centros" },
+              { key: "PJ", label: "PJ" },
+              { key: "PF", label: "PF" },
+            ].map((f) => {
+              const active = costCenter === f.key;
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => setCostCenter(f.key)}
+                  className={[
+                    "rounded-lg px-3 py-1.5 text-xs transition-colors",
+                    active
+                      ? "bg-[var(--p-text)] text-white"
+                      : "bg-[var(--p-surface)] border border-[var(--p-border)] text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]",
+                  ].join(" ")}
+                  title={
+                    f.key === "PJ"
+                      ? "Pessoa Jurídica (escola)"
+                      : f.key === "PF"
+                      ? "Pessoa Física (pessoal)"
+                      : "Todos os centros"
+                  }
+                >
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-4 py-3 text-sm text-[var(--p-danger)]">
+          Erro: {error}
+        </div>
+      )}
+
+      {/* Lançamentos */}
+      <div className="p-card overflow-hidden">
         {loading ? (
-          <div className="p-4">Carregando…</div>
-        ) : rows.length === 0 ? (
-          <div className="p-4">Sem lançamentos para este filtro.</div>
+          <div className="flex items-center justify-center gap-2 px-5 py-12 text-sm text-[var(--p-text-muted)]">
+            <Loader2 className="h-4 w-4 animate-spin" /> Carregando…
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="px-5 py-12 text-center text-sm text-[var(--p-text-muted)]">
+            Nenhum gasto neste filtro.
+          </div>
         ) : (
-          <div className="w-full">
-            {/* Tabela (>= sm) */}
-            <div className="hidden sm:block overflow-x-auto">
-            <table className="min-w-[900px] w-full text-xs sm:text-sm">
-              <thead className="sticky top-0 z-10 bg-white/90 border-b">
-                <tr>
-                  <Th>Venc.</Th>
-                  <Th>Título</Th>
-                  <Th className="hidden sm:table-cell">Categoria</Th>
-                  <Th className="hidden sm:table-cell">Centro</Th>
-                  <Th className="text-right">Valor</Th>
-                  <Th className="hidden sm:table-cell">Status</Th>
-                  <Th>Ações</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
-                    <Td className="whitespace-nowrap">{fmtBR(r.due_date)}</Td>
-                    <Td className="truncate max-w-[240px] sm:max-w-none">{r.title_snapshot}</Td>
-                    <Td className="hidden sm:table-cell">{r.category || "-"}</Td>
-                    <Td className="hidden sm:table-cell">{r.cost_center || "-"}</Td>
-                    <Td className="text-right tabular-nums font-mono whitespace-nowrap">{fmtBRL(r.amount)}</Td>
-                    <Td className="hidden sm:table-cell">{statusLabels[r.status] || r.status}</Td>
-                    <Td className="py-2">
-                      {canWriteDB ? (
-                        <RowActions
-                          entry={r}
-                          updatingId={updatingId}
-                          onPaid={(e) => markPaid(e.id)}
-                          onCancel={(e) => cancel(e.id)}
-                          onReopen={(e) => reopen(e.id)}
-                          onDelete={(e) => delEntry(e.id)}
-                        />
-                      ) : (
-                        <span className="text-xs text-slate-500">—</span>
-                      )}
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-
-            {/* Cards (xs) */}
-            <div className="sm:hidden divide-y">
-              {rows.map((r) => (
-                <div key={r.id} className="p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-medium text-slate-900 truncate">{r.title_snapshot}</div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                        <span className="whitespace-nowrap">{fmtBR(r.due_date)}</span>
-                        {r.category && <span className="truncate max-w-[160px]">{r.category}</span>}
-                        {r.cost_center && (
-                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
-                            {r.cost_center}
-                          </span>
-                        )}
-                        <StatusPill status={r.status} />
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-mono tabular-nums font-semibold">{fmtBRL(r.amount)}</div>
-                    </div>
-                  </div>
-                  <div className="mt-2">
-                    {canWriteDB ? (
-                      <RowActions
-                        entry={r}
-                        updatingId={updatingId}
-                        onPaid={(e) => markPaid(e.id)}
-                        onCancel={(e) => cancel(e.id)}
-                        onReopen={(e) => reopen(e.id)}
-                        onDelete={(e) => delEntry(e.id)}
-                      />
-                    ) : (
-                      <span className="text-xs text-slate-500">—</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* Recorrentes (somente se canWriteDB === true) */}
-      {canWriteDB && (
-        <section className="border rounded-xl shadow-sm">
-          <div className="px-3 py-2 border-b border-[color:var(--fix-primary-700)] bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white/95 drop-shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold whitespace-nowrap">Despesas recorrentes</span>
-                  <span className="text-xs opacity-90">{filteredTemplates.length}{templates?.length ? ` / ${templates.length}` : ""}</span>
-                </div>
-              </div>
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
-                <input
-                  value={tplSearch}
-                  onChange={(e) => setTplSearch(e.target.value)}
-                  placeholder="Buscar recorrentes (título, categoria, centro)"
-                  className="w-full sm:w-80 px-3 py-1.5 rounded border border-white/30 bg-white/90 text-slate-900 placeholder-slate-500 focus:outline-none"
-                  aria-label="Buscar recorrentes"
-                />
-              </div>
-            </div>
-          </div>
-          {(templates?.length || 0) === 0 ? (
-            <div className="p-4">Nenhuma recorrente cadastrada.</div>
-          ) : (
-            <div className="max-h-[60vh] w-full overflow-auto">
-              {/* Tabela (>= sm) */}
-              <div className="hidden sm:block overflow-x-auto">
-                <table className="min-w-[800px] w-full text-xs sm:text-sm">
-                <thead className="sticky top-0 z-10 bg-white/90 border-b">
-                  <tr>
-                    <Th>Título</Th>
-                    <Th className="hidden sm:table-cell">Categoria</Th>
-                    <Th className="hidden sm:table-cell">Centro</Th>
-                    <Th>Frequência</Th>
-                    <Th>Vencimento</Th>
-                    <Th className="text-right">Valor</Th>
-                    <Th className="hidden sm:table-cell">Status</Th>
-                    <Th>Ações</Th>
+          <>
+            {/* Tabela desktop */}
+            <div className="hidden md:block">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--p-border)] bg-[var(--p-surface-2)] text-left text-xs font-medium uppercase tracking-wider text-[var(--p-text-muted)]">
+                    <th className="px-5 py-3">Vencimento</th>
+                    <th className="px-5 py-3">Descrição</th>
+                    <th className="px-5 py-3">Categoria</th>
+                    <th className="px-5 py-3">Centro</th>
+                    <th className="px-5 py-3">Status</th>
+                    <th className="px-5 py-3 text-right">Valor</th>
+                    <th className="px-5 py-3"></th>
                   </tr>
                 </thead>
-                <tbody>
-                  {filteredTemplates.map((t) => (
-                    <tr key={t.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
-                      <Td className="truncate max-w-[240px] sm:max-w-none">{t.title}</Td>
-                      <Td className="hidden sm:table-cell">{t.category || "-"}</Td>
-                      <Td className="hidden sm:table-cell">{t.cost_center || "-"}</Td>
-                      <Td>{t.frequency === "annual" ? "Anual" : "Mensal"}</Td>
-                      <Td className="whitespace-nowrap">
-                        {t.frequency === "annual"
-                          ? `Mês ${t.due_month} • Dia ${t.due_day}`
-                          : `Dia ${t.due_day}`}
-                      </Td>
-                      <Td className="text-right tabular-nums font-mono whitespace-nowrap">{fmtBRL(t.amount)}</Td>
-                      <Td className="hidden sm:table-cell">{t.active ? "ativo" : "inativo"}</Td>
-                      <Td className="py-2">
-                        <div className="flex gap-2">
-                          <button onClick={() => openEditTplModal(t)} className="px-2 py-1 border rounded">
-                            Editar
-                          </button>
-                          <button onClick={() => onDeleteTpl(t)} className="px-2 py-1 border rounded">
-                            Excluir
-                          </button>
-                        </div>
-                      </Td>
-                    </tr>
-                  ))}
+                <tbody className="divide-y divide-[var(--p-border)]">
+                  {filtered.map((r) => {
+                    const { cls, icon: Icon, label } = statusChip(r);
+                    return (
+                      <tr key={r.id} className="hover:bg-[var(--p-surface-2)]">
+                        <td className="px-5 py-3 tabular-nums text-[var(--p-text-muted)]">
+                          {fmtBR(r.due_date)}
+                        </td>
+                        <td className="px-5 py-3 font-medium">
+                          {r.title_snapshot || "—"}
+                        </td>
+                        <td className="px-5 py-3">
+                          {r.category ? (
+                            <span className="p-chip p-chip-neutral">
+                              {r.category}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-[var(--p-text-faint)]">
+                              —
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className="text-xs font-medium text-[var(--p-text-muted)]">
+                            {r.cost_center || "—"}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className={`p-chip ${cls}`}>
+                            <Icon className="h-3 w-3" /> {label}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-right font-semibold tabular-nums text-[var(--p-danger)]">
+                          −{fmtBRL(r.amount)}
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          {canWriteDB && (
+                            <RowActions
+                              entry={r}
+                              busy={updatingId === r.id}
+                              onMarkPaid={() => markPaid(r.id)}
+                              onReopen={() => reopen(r.id)}
+                              onCancel={() => setCancelTarget(r)}
+                              onDelete={() => setToDeleteEntry(r)}
+                            />
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
+              </table>
+            </div>
+
+            {/* Lista mobile */}
+            <ul className="divide-y divide-[var(--p-border)] md:hidden">
+              {filtered.map((r) => {
+                const { cls, icon: Icon, label } = statusChip(r);
+                return (
+                  <li key={r.id} className="flex flex-col gap-2 px-4 py-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium truncate">
+                          {r.title_snapshot || "—"}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--p-text-muted)]">
+                          <span>{fmtBR(r.due_date)}</span>
+                          {r.category && (
+                            <span className="p-chip p-chip-neutral">
+                              {r.category}
+                            </span>
+                          )}
+                          {r.cost_center && (
+                            <span className="rounded bg-[var(--p-surface-2)] px-1.5 py-0.5 font-medium">
+                              {r.cost_center}
+                            </span>
+                          )}
+                          <span className={`p-chip ${cls}`}>
+                            <Icon className="h-3 w-3" /> {label}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-semibold tabular-nums text-[var(--p-danger)]">
+                          −{fmtBRL(r.amount)}
+                        </div>
+                      </div>
+                    </div>
+                    {canWriteDB && (
+                      <div className="flex">
+                        <RowActions
+                          entry={r}
+                          busy={updatingId === r.id}
+                          onMarkPaid={() => markPaid(r.id)}
+                          onReopen={() => reopen(r.id)}
+                          onCancel={() => setCancelTarget(r)}
+                          onDelete={() => setToDeleteEntry(r)}
+                        />
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+      </div>
+
+      {/* Recorrentes */}
+      {canWriteDB && (
+        <div className="p-card overflow-hidden">
+          <div className="flex flex-col gap-3 border-b border-[var(--p-border)] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2">
+              <Repeat className="h-4 w-4 text-[var(--p-text-muted)]" />
+              <h2 className="text-sm font-semibold">Despesas recorrentes</h2>
+              <span className="text-xs text-[var(--p-text-faint)]">
+                {filteredTemplates.length}
+                {templates?.length ? ` / ${templates.length}` : ""}
+              </span>
+            </div>
+            <input
+              value={tplSearch}
+              onChange={(e) => setTplSearch(e.target.value)}
+              placeholder="Buscar…"
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-1.5 text-sm placeholder:text-[var(--p-text-faint)] focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40 sm:w-72"
+            />
+          </div>
+
+          {(templates?.length || 0) === 0 ? (
+            <div className="px-5 py-8 text-center text-sm text-[var(--p-text-muted)]">
+              Nenhuma recorrente cadastrada.
+            </div>
+          ) : (
+            <>
+              <div className="hidden md:block">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--p-border)] bg-[var(--p-surface-2)] text-left text-xs font-medium uppercase tracking-wider text-[var(--p-text-muted)]">
+                      <th className="px-5 py-3">Título</th>
+                      <th className="px-5 py-3">Categoria</th>
+                      <th className="px-5 py-3">Centro</th>
+                      <th className="px-5 py-3">Frequência</th>
+                      <th className="px-5 py-3">Vencimento</th>
+                      <th className="px-5 py-3 text-right">Valor</th>
+                      <th className="px-5 py-3">Status</th>
+                      <th className="px-5 py-3"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--p-border)]">
+                    {filteredTemplates.map((t) => (
+                      <tr
+                        key={t.id}
+                        className="hover:bg-[var(--p-surface-2)]"
+                      >
+                        <td className="px-5 py-3 font-medium">{t.title}</td>
+                        <td className="px-5 py-3">
+                          {t.category ? (
+                            <span className="p-chip p-chip-neutral">
+                              {t.category}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-[var(--p-text-faint)]">
+                              —
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3 text-xs font-medium text-[var(--p-text-muted)]">
+                          {t.cost_center || "—"}
+                        </td>
+                        <td className="px-5 py-3 text-xs">
+                          {t.frequency === "annual" ? "Anual" : "Mensal"}
+                        </td>
+                        <td className="px-5 py-3 text-xs whitespace-nowrap">
+                          {t.frequency === "annual"
+                            ? `Mês ${t.due_month} · Dia ${t.due_day}`
+                            : `Dia ${t.due_day}`}
+                        </td>
+                        <td className="px-5 py-3 text-right font-semibold tabular-nums">
+                          {fmtBRL(t.amount)}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span
+                            className={`p-chip ${
+                              t.active ? "p-chip-success" : "p-chip-neutral"
+                            }`}
+                          >
+                            {t.active ? "Ativo" : "Inativo"}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          <div className="inline-flex gap-1">
+                            <button
+                              onClick={() => setTplFormTarget(t)}
+                              className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-text)]"
+                              aria-label="Editar"
+                              title="Editar"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => setToDeleteTpl(t)}
+                              className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                              aria-label="Remover"
+                              title="Remover"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               </div>
-              {/* Cards (xs) */}
-              <div className="sm:hidden divide-y">
+
+              <ul className="divide-y divide-[var(--p-border)] md:hidden">
                 {filteredTemplates.map((t) => (
-                  <div key={t.id} className="p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="font-medium text-slate-900 truncate">{t.title}</div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                          {t.category && <span className="truncate max-w-[140px]">{t.category}</span>}
-                          {t.cost_center && (
-                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">{t.cost_center}</span>
+                  <li
+                    key={t.id}
+                    className="flex flex-col gap-2 px-4 py-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium truncate">{t.title}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--p-text-muted)]">
+                          {t.category && (
+                            <span className="p-chip p-chip-neutral">
+                              {t.category}
+                            </span>
                           )}
-                          <span>{t.frequency === "annual" ? "Anual" : "Mensal"}</span>
-                          <span className="whitespace-nowrap">
+                          {t.cost_center && (
+                            <span className="rounded bg-[var(--p-surface-2)] px-1.5 py-0.5 font-medium">
+                              {t.cost_center}
+                            </span>
+                          )}
+                          <span>
                             {t.frequency === "annual"
-                              ? `Mês ${t.due_month} • Dia ${t.due_day}`
-                              : `Dia ${t.due_day}`}
+                              ? `Anual · mês ${t.due_month}`
+                              : `Mensal · dia ${t.due_day}`}
                           </span>
-                          <span className={`px-2 py-0.5 rounded text-xs ${t.active ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'}`}>
-                            {t.active ? 'ativo' : 'inativo'}
+                          <span
+                            className={`p-chip ${
+                              t.active ? "p-chip-success" : "p-chip-neutral"
+                            }`}
+                          >
+                            {t.active ? "Ativo" : "Inativo"}
                           </span>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <div className="text-sm font-mono tabular-nums font-semibold">{fmtBRL(t.amount)}</div>
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-semibold tabular-nums">
+                          {fmtBRL(t.amount)}
+                        </div>
                       </div>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <button onClick={() => openEditTplModal(t)} className="px-2 py-1 border rounded">Editar</button>
-                      <button onClick={() => onDeleteTpl(t)} className="px-2 py-1 border rounded">Excluir</button>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setTplFormTarget(t)}
+                        className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-text)]"
+                        aria-label="Editar"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => setToDeleteTpl(t)}
+                        className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                        aria-label="Remover"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
                     </div>
-                  </div>
+                  </li>
                 ))}
-              </div>
-            </div>
+              </ul>
+            </>
           )}
-        </section>
+        </div>
       )}
 
       {/* Modais */}
-      {canWriteDB && (
-        <Modal
-          open={openEditTpl}
-          onClose={() => setOpenEditTpl(false)}
-          title={tplId ? "Editar recorrente" : "Nova recorrente"}
-          footer={
-            <>
-              <button onClick={() => setOpenEditTpl(false)} className="px-3 py-2 border rounded">
+      {tplFormTarget !== undefined && (
+        <TemplateFormModal
+          initial={tplFormTarget}
+          categories={categories}
+          templates={templates}
+          onClose={() => setTplFormTarget(undefined)}
+          onSaved={async () => {
+            setTplFormTarget(undefined);
+            await loadTemplates();
+          }}
+        />
+      )}
+
+      {avulsoOpen && (
+        <AvulsoModal
+          ym={ym}
+          categories={categories}
+          onClose={() => setAvulsoOpen(false)}
+          onSaved={async () => {
+            setAvulsoOpen(false);
+            await load();
+          }}
+        />
+      )}
+
+      {previewModal && (
+        <AppModal
+          title={`Prévia · ${ymLabel(ym)}`}
+          onClose={previewModal.generating ? () => {} : () => setPreviewModal(null)}
+          maxWidth="lg"
+        >
+          <div className="flex flex-col gap-4 px-5 py-5">
+            <p className="text-sm text-[var(--p-text-muted)]">
+              Os seguintes lançamentos serão gerados a partir das recorrentes
+              ativas:
+            </p>
+            <ul className="max-h-72 overflow-y-auto rounded-lg border border-[var(--p-border)] divide-y divide-[var(--p-border)]">
+              {previewModal.items.map((p, i) => (
+                <li
+                  key={i}
+                  className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium truncate">{p.title_snapshot}</div>
+                    <div className="text-xs text-[var(--p-text-muted)]">
+                      Vence {fmtBR(p.due_date)} · {p.cost_center}
+                    </div>
+                  </div>
+                  <div className="text-sm font-semibold tabular-nums text-[var(--p-danger)]">
+                    −{fmtBRL(p.amount)}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setPreviewModal(null)}
+                disabled={previewModal.generating}
+                className="p-btn p-btn-ghost"
+              >
                 Cancelar
               </button>
               <button
-                onClick={onSubmitTpl}
-                disabled={savingTpl}
-                className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
+                type="button"
+                onClick={confirmGenerate}
+                disabled={previewModal.generating}
+                className="p-btn p-btn-primary"
               >
-                {savingTpl ? "Salvando…" : "Salvar"}
+                {previewModal.generating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" /> Gerando…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4" /> Gerar {previewModal.items.length}
+                  </>
+                )}
               </button>
-            </>
-          }
-        >
-          <form onSubmit={onSubmitTpl} className="grid gap-3 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <label className="block text-sm mb-1">Título*</label>
-              <input
-                value={formTpl.title}
-                onChange={(e) => setFormTpl((f) => ({ ...f, title: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-                required
-              />
-              {!!softSuggestions.length && (
-                <div className="mt-2 text-xs p-2 border rounded bg-amber-50 border-amber-200">
-                  <div className="font-medium mb-1">Possíveis duplicatas (não bloqueia):</div>
-                  <ul className="list-disc pl-4 space-y-1">
-                    {softSuggestions.map((t) => (
-                      <li key={t.id}>
-                        <span className="font-medium">{t.title}</span>
-                        <span className="opacity-70"> — {fmtBRL(t.amount)}</span>
-                        <span className="opacity-70"> · {t.frequency === 'annual' ? `Anual (mês ${t.due_month})` : `Mensal (dia ${t.due_day})`}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
             </div>
-
-            <div>
-              <div className="flex items-center justify-between">
-                <label className="block text-sm mb-1">Categoria</label>
-                <Link href="/financeiro/categorias" className="text-xs text-slate-600 underline underline-offset-2">Gerenciar</Link>
-              </div>
-              {categories.length > 0 ? (
-                <select
-                  value={formTpl.category || ""}
-                  onChange={(e) => setFormTpl((f) => ({ ...f, category: e.target.value }))}
-                  className="border rounded px-3 py-2 w-full"
-                >
-                  <option value="">(sem categoria)</option>
-                  {categories.map((c) => (
-                    <option key={`${c.id ?? c.name}`} value={c.name}>{c.name}</option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  value={formTpl.category}
-                  onChange={(e) => setFormTpl((f) => ({ ...f, category: e.target.value }))}
-                  className="border rounded px-3 py-2 w-full"
-                  placeholder="Digite a categoria"
-                />
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm mb-1">Valor (R$)*</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={formTpl.amount}
-                onChange={(e) => setFormTpl((f) => ({ ...f, amount: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm mb-1">Centro de custos*</label>
-              <select
-                value={formTpl.cost_center}
-                onChange={(e) => setFormTpl((f) => ({ ...f, cost_center: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-              >
-                <option value="PJ">PJ</option>
-                <option value="PF">PF</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm mb-1">Frequência*</label>
-              <select
-                value={formTpl.frequency}
-                onChange={(e) => setFormTpl((f) => ({ ...f, frequency: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-              >
-                <option value="monthly">Mensal</option>
-                <option value="annual">Anual</option>
-              </select>
-            </div>
-
-            {/* Recorrência: duração */}
-            <div>
-              <label className="block text-sm mb-1">Duração</label>
-              <select
-                value={formTpl.recurrence_mode}
-                onChange={(e) => setFormTpl((f) => ({ ...f, recurrence_mode: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-              >
-                <option value="indefinite">Indefinida</option>
-                <option value="installments">Por parcelas</option>
-                <option value="until_month">Até um mês</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm mb-1">Início (mês)</label>
-              <input
-                type="month"
-                value={formTpl.start_month}
-                onChange={(e) => setFormTpl((f) => ({ ...f, start_month: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-              />
-            </div>
-
-            {formTpl.frequency === "annual" ? (
-              <>
-                <div>
-                  <label className="block text-sm mb-1">Mês</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="12"
-                    value={formTpl.due_month}
-                    onChange={(e) => setFormTpl((f) => ({ ...f, due_month: e.target.value }))}
-                    className="border rounded px-3 py-2 w-full"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm mb-1">Dia</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="28"
-                    value={formTpl.due_day}
-                    onChange={(e) => setFormTpl((f) => ({ ...f, due_day: e.target.value }))}
-                    className="border rounded px-3 py-2 w-full"
-                  />
-                </div>
-              </>
-            ) : (
-              <div>
-                <label className="block text-sm mb-1">Dia de vencimento</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="28"
-                  value={formTpl.due_day}
-                  onChange={(e) => setFormTpl((f) => ({ ...f, due_day: e.target.value }))}
-                  className="border rounded px-3 py-2 w-full"
-                />
-              </div>
-            )}
-
-            {formTpl.recurrence_mode === 'installments' && (
-              <div>
-                <label className="block text-sm mb-1">Parcelas</label>
-                <input
-                  type="number"
-                  min="1"
-                  value={formTpl.installments}
-                  onChange={(e) => setFormTpl((f) => ({ ...f, installments: e.target.value }))}
-                  className="border rounded px-3 py-2 w-full"
-                />
-              </div>
-            )}
-
-            {formTpl.recurrence_mode === 'until_month' && (
-              <div>
-                <label className="block text-sm mb-1">Até (mês)</label>
-                <input
-                  type="month"
-                  value={formTpl.end_month}
-                  onChange={(e) => setFormTpl((f) => ({ ...f, end_month: e.target.value }))}
-                  className="border rounded px-3 py-2 w-full"
-                />
-              </div>
-            )}
-
-            <div className="sm:col-span-2">
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={formTpl.active}
-                  onChange={(e) => setFormTpl((f) => ({ ...f, active: e.target.checked }))}
-                />
-                <span>Ativo</span>
-              </label>
-            </div>
-          </form>
-        </Modal>
+          </div>
+        </AppModal>
       )}
 
-      {canWriteDB && (
-        <Modal
-          open={openAvulso}
-          onClose={() => setOpenAvulso(false)}
-          title="Lançamento avulso"
-          footer={
-            <>
-              <button onClick={() => setOpenAvulso(false)} className="px-3 py-2 border rounded">
-                Cancelar
+      {cancelTarget && (
+        <AppModal
+          title="Cancelar lançamento"
+          onClose={() => setCancelTarget(null)}
+          maxWidth="sm"
+        >
+          <div className="flex flex-col gap-4 px-5 py-5">
+            <p className="text-sm">
+              Deseja cancelar o lançamento{" "}
+              <span className="font-medium">
+                {cancelTarget.title_snapshot}
+              </span>
+              ?
+            </p>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setCancelTarget(null)}
+                className="p-btn p-btn-ghost"
+              >
+                Voltar
               </button>
               <button
-                onClick={onSubmitAvulso}
-                disabled={savingAvulso}
-                className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
+                type="button"
+                onClick={async () => {
+                  const id = cancelTarget.id;
+                  setCancelTarget(null);
+                  await doCancel(id);
+                }}
+                className="p-btn p-btn-primary"
               >
-                {savingAvulso ? "Salvando…" : "Salvar"}
+                Cancelar lançamento
               </button>
-            </>
-          }
-        >
-          <form onSubmit={onSubmitAvulso} className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="block text-sm mb-1">Data*</label>
-              <input
-                type="date"
-                value={formAvulso.date}
-                onChange={(e) => setFormAvulso((f) => ({ ...f, date: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-                required
-              />
             </div>
-
-            <div>
-              <label className="block text-sm mb-1">Valor (R$)*</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={formAvulso.amount}
-                onChange={(e) => setFormAvulso((f) => ({ ...f, amount: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-                required
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="block text-sm mb-1">Título*</label>
-              <input
-                value={formAvulso.title}
-                onChange={(e) => setFormAvulso((f) => ({ ...f, title: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-                required
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <div className="flex items-center justify-between">
-                <label className="block text-sm mb-1">Categoria</label>
-                <Link href="/financeiro/categorias" className="text-xs text-slate-600 underline underline-offset-2">Gerenciar</Link>
-              </div>
-              {categories.length > 0 ? (
-                <select
-                  value={formAvulso.category || ""}
-                  onChange={(e) => setFormAvulso((f) => ({ ...f, category: e.target.value }))}
-                  className="border rounded px-3 py-2 w-full"
-                >
-                  <option value="">(sem categoria)</option>
-                  {categories.map((c) => (
-                    <option key={`${c.id ?? c.name}`} value={c.name}>{c.name}</option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  value={formAvulso.category}
-                  onChange={(e) => setFormAvulso((f) => ({ ...f, category: e.target.value }))}
-                  className="border rounded px-3 py-2 w-full"
-                  placeholder="Digite a categoria"
-                />
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm mb-1">Centro de custos*</label>
-              <select
-                value={formAvulso.cost_center}
-                onChange={(e) => setFormAvulso((f) => ({ ...f, cost_center: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-              >
-                <option value="PJ">PJ</option>
-                <option value="PF">PF</option>
-              </select>
-            </div>
-          </form>
-        </Modal>
+          </div>
+        </AppModal>
       )}
-    </main>
-  );
-}
 
-function KpiCard({ title, value, tone = "neutral" }) {
-  const accent = {
-    danger: "bg-rose-600",
-    warning: "bg-amber-500",
-    success: "bg-green-600",
-    neutral: "bg-slate-300",
-  }[tone] || "bg-slate-300";
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white shadow-sm p-4 overflow-hidden">
-      <div className={`h-1 mx-4 ${accent} rounded-full mb-3`}></div>
-      <div className="text-[11px] uppercase tracking-wide text-slate-600">{title}</div>
-      <div className="text-base sm:text-xl font-semibold text-slate-900">{value}</div>
+      {toDeleteEntry && (
+        <ConfirmDeleteModal
+          title="Remover lançamento"
+          itemName={toDeleteEntry.title_snapshot}
+          onCancel={() => setToDeleteEntry(null)}
+          onConfirm={async () => {
+            await financeGateway.deleteExpenseEntry(toDeleteEntry.id);
+            setToDeleteEntry(null);
+            await load();
+          }}
+        />
+      )}
+
+      {toDeleteTpl && (
+        <ConfirmDeleteModal
+          title="Remover recorrente"
+          itemName={toDeleteTpl.title}
+          description="Lançamentos já gerados a partir desta recorrente não serão removidos."
+          onCancel={() => setToDeleteTpl(null)}
+          onConfirm={async () => {
+            await deleteTemplate(toDeleteTpl);
+            setToDeleteTpl(null);
+          }}
+        />
+      )}
     </div>
   );
 }
-function StatusPill({ status }) {
-  const label = statusLabels[status] || status;
-  const cls =
-    status === 'paid' ? 'bg-emerald-100 text-emerald-800'
-    : status === 'pending' ? 'bg-amber-100 text-amber-800'
-    : status === 'canceled' ? 'bg-slate-200 text-slate-700'
-    : 'bg-slate-100 text-slate-700';
-  return <span className={`px-2 py-0.5 rounded text-xs ${cls}`}>{label}</span>;
-}
-function Th({ children, className = "" }) {
-  return <th className={`text-left px-2 py-2 sm:px-3 sm:py-2 font-medium ${className}`}>{children}</th>;
-}
-function Td({ children, className = "" }) {
-  return <td className={`px-2 py-2 sm:px-3 sm:py-2 ${className}`}>{children}</td>;
-}
 
-function RowActions({ entry, updatingId, onPaid, onCancel, onReopen, onDelete }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-  const btnRef = useRef(null);
-  const [coords, setCoords] = useState({ top: 0, left: 0 });
-  const [isDesktop, setIsDesktop] = useState(false);
-  useEffect(() => {
-    function onDocClick(e) {
-      if (!ref.current) return;
-      if (!ref.current.contains(e.target)) setOpen(false);
-    }
-    if (open) document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [open]);
-
-  // Detecta desktop (>= sm)
-  useEffect(() => {
-    const mq = typeof window !== 'undefined' ? window.matchMedia('(min-width: 640px)') : null;
-    const update = () => setIsDesktop(!!mq?.matches);
-    update();
-    mq?.addEventListener?.('change', update);
-    return () => mq?.removeEventListener?.('change', update);
-  }, []);
-
-  // Calcula posição fixa do dropdown no desktop e fecha ao rolar
-  useEffect(() => {
-    if (!open || !isDesktop) return;
-    const recalc = () => {
-      const el = btnRef.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      const width = 144; // w-36
-      const estHeight = 200; // altura aproximada do menu
-      const left = Math.min(Math.max(8, r.right - width), window.innerWidth - width - 8);
-      let top = r.bottom + 4;
-      if (top + estHeight > window.innerHeight - 8) {
-        // inverte para abrir para cima, se não couber para baixo
-        top = Math.max(8, r.top - estHeight - 4);
-      }
-      setCoords({ top, left });
-    };
-    const onScroll = () => setOpen(false);
-    recalc();
-    window.addEventListener('resize', recalc);
-    window.addEventListener('scroll', onScroll, true);
-    return () => {
-      window.removeEventListener('resize', recalc);
-      window.removeEventListener('scroll', onScroll, true);
-    };
-  }, [open, isDesktop]);
-
-  const isPending = entry.status === 'pending';
-  const isBusy = updatingId === entry.id;
-
-  const menu = (
-    <div className="w-36 origin-top-right rounded-md border bg-white shadow-lg z-50">
-      <div className="py-1 text-sm">
-        {isPending ? (
-          <>
-            <button
-              disabled={isBusy}
-              onClick={() => { setOpen(false); onPaid(entry); }}
-              className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
-            >
-              Marcar pago
-            </button>
-            <button
-              disabled={isBusy}
-              onClick={() => { setOpen(false); onCancel(entry); }}
-              className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
-            >
-              Cancelar
-            </button>
-          </>
-        ) : (
-          <button
-            disabled={isBusy}
-            onClick={() => { setOpen(false); onReopen(entry); }}
-            className="w-full text-left px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
-          >
-            Reabrir
-          </button>
-        )}
-        <div className="my-1 border-t" />
-        <button
-          disabled={isBusy}
-          onClick={() => { setOpen(false); onDelete(entry); }}
-          className="w-full text-left px-3 py-1.5 text-red-700 hover:bg-red-50 disabled:opacity-50"
-        >
-          Excluir
-        </button>
+// ─── Componentes auxiliares ──────────────────────────────────────
+function SumCard({ label, value, tone }) {
+  const toneCls =
+    tone === "success"
+      ? "text-[var(--p-success)]"
+      : tone === "danger"
+      ? "text-[var(--p-danger)]"
+      : tone === "warning"
+      ? "text-[var(--p-warning)]"
+      : "text-[var(--p-text)]";
+  return (
+    <div className="p-card p-4">
+      <div className="text-xs uppercase tracking-wider text-[var(--p-text-faint)]">
+        {label}
+      </div>
+      <div className={`p-kpi-value mt-1 text-lg md:text-xl ${toneCls}`}>
+        {value}
       </div>
     </div>
   );
+}
+
+function RowActions({ entry, busy, onMarkPaid, onReopen, onCancel, onDelete }) {
+  const isPending = entry.status === "pending";
+  return (
+    <div className="inline-flex gap-1">
+      {isPending ? (
+        <>
+          <button
+            disabled={busy}
+            onClick={onMarkPaid}
+            className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-success-50)] hover:text-[var(--p-success)] disabled:opacity-50"
+            aria-label="Marcar pago"
+            title="Marcar pago"
+          >
+            <CheckCircle2 className="h-4 w-4" />
+          </button>
+          <button
+            disabled={busy}
+            onClick={onCancel}
+            className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-text)] disabled:opacity-50"
+            aria-label="Cancelar"
+            title="Cancelar"
+          >
+            <XCircle className="h-4 w-4" />
+          </button>
+        </>
+      ) : (
+        <button
+          disabled={busy}
+          onClick={onReopen}
+          className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-text)] disabled:opacity-50"
+          aria-label="Reabrir"
+          title="Reabrir"
+        >
+          <RotateCcw className="h-4 w-4" />
+        </button>
+      )}
+      <button
+        disabled={busy}
+        onClick={onDelete}
+        className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)] disabled:opacity-50"
+        aria-label="Excluir"
+        title="Excluir"
+      >
+        <Trash2 className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+// ─── Modal: Avulso ────────────────────────────────────────────────
+function AvulsoModal({ ym, categories, onClose, onSaved }) {
+  const [form, setForm] = useState(() => {
+    const [y, m] = ym.split("-");
+    return {
+      date: `${y}-${m}-${String(new Date().getDate()).padStart(2, "0")}`,
+      title: "",
+      category: "",
+      amount: "",
+      cost_center: "PJ",
+    };
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    if (!form.date) return setErr("Data é obrigatória");
+    if (!form.title.trim()) return setErr("Título é obrigatório");
+    const amt = Number(form.amount || 0);
+    if (!amt || amt <= 0) return setErr("Valor deve ser maior que zero");
+    try {
+      setSaving(true);
+      await financeGateway.createOneOffExpense({
+        date: form.date,
+        title: form.title.trim(),
+        category: form.category.trim() || null,
+        amount: amt,
+        cost_center: form.cost_center,
+      });
+      await onSaved();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
-    <div className="relative inline-block text-left" ref={ref}>
-      <button
-        type="button"
-        className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-gray-300 hover:bg-gray-50"
-        onClick={() => setOpen((v) => !v)}
-        ref={btnRef}
+    <AppModal
+      title="Lançamento avulso"
+      onClose={saving ? () => {} : onClose}
+      maxWidth="lg"
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField
+            label="Data *"
+            type="date"
+            value={form.date}
+            onChange={(v) => setForm((f) => ({ ...f, date: v }))}
+          />
+          <FormField
+            label="Valor (R$) *"
+            type="number"
+            min="0"
+            step="0.01"
+            value={form.amount}
+            onChange={(v) => setForm((f) => ({ ...f, amount: v }))}
+            placeholder="0,00"
+          />
+        </div>
+        <FormField
+          label="Título *"
+          value={form.title}
+          onChange={(v) => setForm((f) => ({ ...f, title: v }))}
+          placeholder="Ex.: Aluguel de novembro"
+        />
+        <CategoryField
+          value={form.category}
+          onChange={(v) => setForm((f) => ({ ...f, category: v }))}
+          categories={categories}
+        />
+        <CostCenterField
+          value={form.cost_center}
+          onChange={(v) => setForm((f) => ({ ...f, cost_center: v }))}
+        />
+        <ModalActions
+          onCancel={onClose}
+          submitting={saving}
+          submitLabel="Salvar"
+        />
+      </form>
+    </AppModal>
+  );
+}
+
+// ─── Modal: Template (recorrente) ────────────────────────────────
+function TemplateFormModal({ initial, categories, templates, onClose, onSaved }) {
+  const isEdit = !!initial;
+  const [form, setForm] = useState(() => ({
+    title: initial?.title || "",
+    category: initial?.category || "",
+    amount: String(initial?.amount ?? ""),
+    frequency: initial?.frequency || "monthly",
+    due_day: String(initial?.due_day ?? "5"),
+    due_month: String(initial?.due_month ?? "1"),
+    active: initial?.active ?? true,
+    cost_center: initial?.cost_center || "PJ",
+    recurrence_mode: initial?.recurrence_mode || "indefinite",
+    start_month: initial?.start_month
+      ? String(initial.start_month).slice(0, 7)
+      : "",
+    installments:
+      initial?.installments != null ? String(initial.installments) : "",
+    end_month: initial?.end_month ? String(initial.end_month).slice(0, 7) : "",
+  }));
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  // Detecção de duplicatas
+  const currentShapeKey = useMemo(
+    () =>
+      shapeKey(form.frequency, form.due_day, form.due_month, form.cost_center),
+    [form.frequency, form.due_day, form.due_month, form.cost_center]
+  );
+
+  const exactDuplicate = useMemo(() => {
+    if (!form.title) return null;
+    const norm = normalizeTitle(form.title);
+    const amt = Number(form.amount || 0);
+    return (
+      templates.find(
+        (t) =>
+          (!isEdit || t.id !== initial?.id) &&
+          !!t.active &&
+          shapeKey(t.frequency, t.due_day, t.due_month, t.cost_center) ===
+            currentShapeKey &&
+          normalizeTitle(t.title) === norm &&
+          Math.abs(Number(t.amount || 0) - amt) < 0.01
+      ) || null
+    );
+  }, [templates, form.title, form.amount, currentShapeKey, isEdit, initial?.id]);
+
+  const softSuggestions = useMemo(() => {
+    if (!form.title) return [];
+    const norm = normalizeTitle(form.title);
+    const tokenSet = (s) => new Set(normalizeTitle(s).split(" ").filter(Boolean));
+    const tokenJaccard = (a, b) => {
+      const A = tokenSet(a);
+      const B = tokenSet(b);
+      if (!A.size || !B.size) return 0;
+      let inter = 0;
+      for (const w of A) if (B.has(w)) inter++;
+      return inter / (A.size + B.size - inter);
+    };
+    return (templates || [])
+      .filter((t) => !(isEdit && initial && t.id === initial.id))
+      .map((t) => {
+        const tNorm = normalizeTitle(t.title);
+        const starts = tNorm.startsWith(norm) ? 1 : 0;
+        const includes = !starts && tNorm.includes(norm) ? 1 : 0;
+        const sim = tokenJaccard(tNorm, norm);
+        const score = starts * 3 + includes * 2 + sim;
+        return { t, score, starts, includes, sim };
+      })
+      .filter((r) => r.starts || r.includes || r.sim >= 0.4)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5)
+      .map((r) => r.t);
+  }, [templates, form.title, isEdit, initial]);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    if (!form.title.trim()) return setErr("Título é obrigatório");
+    if (!isEdit && exactDuplicate) {
+      return setErr(
+        `Já existe uma recorrente idêntica: "${exactDuplicate.title}" (${fmtBRL(
+          exactDuplicate.amount
+        )}). Ajuste o título ou edite a existente.`
+      );
+    }
+    if (form.recurrence_mode === "installments") {
+      if (!form.installments || Number(form.installments) < 1)
+        return setErr("Informe o número de parcelas (>= 1)");
+    }
+    if (form.recurrence_mode === "until_month") {
+      if (!form.end_month) return setErr("Informe o mês final");
+      if (form.start_month && form.end_month < form.start_month)
+        return setErr("Mês final deve ser maior ou igual ao mês inicial");
+    }
+    try {
+      setSaving(true);
+      const payload = {
+        title: form.title.trim(),
+        category: form.category.trim() || null,
+        amount: Number(form.amount || 0),
+        frequency: form.frequency,
+        due_day: Number(form.due_day || 5),
+        due_month: Number(form.due_month || 1),
+        active: !!form.active,
+        cost_center: form.cost_center,
+        recurrence_mode: form.recurrence_mode,
+        start_month: form.start_month ? `${form.start_month}-01` : null,
+        installments:
+          form.recurrence_mode === "installments"
+            ? Number(form.installments || 0)
+            : null,
+        end_month:
+          form.recurrence_mode === "until_month" && form.end_month
+            ? `${form.end_month}-01`
+            : null,
+      };
+      if (isEdit) {
+        await financeGateway.updateExpenseTemplate(initial.id, payload);
+      } else {
+        await financeGateway.createExpenseTemplate(payload);
+      }
+      await onSaved();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AppModal
+      title={isEdit ? "Editar recorrente" : "Nova recorrente"}
+      onClose={saving ? () => {} : onClose}
+      maxWidth="2xl"
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+
+        <FormField
+          label="Título *"
+          value={form.title}
+          onChange={(v) => setForm((f) => ({ ...f, title: v }))}
+          autoFocus
+          placeholder="Ex.: Aluguel"
+        />
+
+        {!!softSuggestions.length && (
+          <div className="rounded-lg border border-[var(--p-warning)]/30 bg-[var(--p-warning-50)] px-3 py-2 text-xs text-[var(--p-warning)]">
+            <div className="font-medium mb-1">Possíveis duplicatas:</div>
+            <ul className="space-y-0.5">
+              {softSuggestions.map((t) => (
+                <li key={t.id}>
+                  <span className="font-medium">{t.title}</span>{" "}
+                  <span className="opacity-70">— {fmtBRL(t.amount)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <CategoryField
+            value={form.category}
+            onChange={(v) => setForm((f) => ({ ...f, category: v }))}
+            categories={categories}
+          />
+          <FormField
+            label="Valor (R$) *"
+            type="number"
+            min="0"
+            step="0.01"
+            value={form.amount}
+            onChange={(v) => setForm((f) => ({ ...f, amount: v }))}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <CostCenterField
+            value={form.cost_center}
+            onChange={(v) => setForm((f) => ({ ...f, cost_center: v }))}
+          />
+          <SelectField
+            label="Frequência *"
+            value={form.frequency}
+            onChange={(v) => setForm((f) => ({ ...f, frequency: v }))}
+            options={[
+              { value: "monthly", label: "Mensal" },
+              { value: "annual", label: "Anual" },
+            ]}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <SelectField
+            label="Duração"
+            value={form.recurrence_mode}
+            onChange={(v) => setForm((f) => ({ ...f, recurrence_mode: v }))}
+            options={[
+              { value: "indefinite", label: "Indefinida" },
+              { value: "installments", label: "Por parcelas" },
+              { value: "until_month", label: "Até um mês" },
+            ]}
+          />
+          <FormField
+            label="Início (mês)"
+            type="month"
+            value={form.start_month}
+            onChange={(v) => setForm((f) => ({ ...f, start_month: v }))}
+          />
+        </div>
+
+        {form.frequency === "annual" ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <FormField
+              label="Mês"
+              type="number"
+              min="1"
+              max="12"
+              value={form.due_month}
+              onChange={(v) => setForm((f) => ({ ...f, due_month: v }))}
+            />
+            <FormField
+              label="Dia"
+              type="number"
+              min="1"
+              max="28"
+              value={form.due_day}
+              onChange={(v) => setForm((f) => ({ ...f, due_day: v }))}
+            />
+          </div>
+        ) : (
+          <FormField
+            label="Dia de vencimento"
+            type="number"
+            min="1"
+            max="28"
+            value={form.due_day}
+            onChange={(v) => setForm((f) => ({ ...f, due_day: v }))}
+          />
+        )}
+
+        {form.recurrence_mode === "installments" && (
+          <FormField
+            label="Parcelas"
+            type="number"
+            min="1"
+            value={form.installments}
+            onChange={(v) => setForm((f) => ({ ...f, installments: v }))}
+          />
+        )}
+
+        {form.recurrence_mode === "until_month" && (
+          <FormField
+            label="Até (mês)"
+            type="month"
+            value={form.end_month}
+            onChange={(v) => setForm((f) => ({ ...f, end_month: v }))}
+          />
+        )}
+
+        <label className="inline-flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={form.active}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, active: e.target.checked }))
+            }
+          />
+          Ativo (gera lançamentos no mês)
+        </label>
+
+        <ModalActions
+          onCancel={onClose}
+          submitting={saving}
+          submitLabel={isEdit ? "Salvar" : "Cadastrar"}
+        />
+      </form>
+    </AppModal>
+  );
+}
+
+// ─── Helpers de form ─────────────────────────────────────────────
+function FormField({
+  label,
+  value,
+  type = "text",
+  onChange,
+  placeholder,
+  autoFocus,
+  min,
+  max,
+  step,
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-[var(--p-text-muted)]">
+        {label}
+      </span>
+      <input
+        type={type}
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        min={min}
+        max={max}
+        step={step}
+        className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+      />
+    </label>
+  );
+}
+
+function SelectField({ label, value, onChange, options }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-[var(--p-text-muted)]">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
       >
-        ⋯ Ações
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`}>
-          <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
-        </svg>
-      </button>
-      {open && (
-        isDesktop
-          ? createPortal(
-              <div style={{ position: 'fixed', top: coords.top, left: coords.left, zIndex: 9999 }}>
-                {menu}
-              </div>,
-              document.body
-            )
-          : (
-              <div className="absolute right-0 mt-1 z-50">
-                {menu}
-              </div>
-            )
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function CategoryField({ value, onChange, categories }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-[var(--p-text-muted)]">
+          Categoria
+        </span>
+        <Link
+          href="/financeiro/categorias"
+          className="text-[11px] text-[var(--p-text-muted)] underline"
+        >
+          Gerenciar
+        </Link>
+      </div>
+      {categories?.length > 0 ? (
+        <select
+          value={value || ""}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+        >
+          <option value="">(sem categoria)</option>
+          {categories.map((c) => (
+            <option key={c.id ?? c.name} value={c.name}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Digite a categoria"
+          className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+        />
       )}
-    </div>
+    </label>
+  );
+}
+
+function CostCenterField({ value, onChange }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-[var(--p-text-muted)]">
+        Centro de custos *
+      </span>
+      <div className="flex gap-1">
+        {[
+          { v: "PJ", label: "PJ", desc: "Empresa" },
+          { v: "PF", label: "PF", desc: "Pessoal" },
+        ].map((opt) => {
+          const active = value === opt.v;
+          return (
+            <button
+              key={opt.v}
+              type="button"
+              onClick={() => onChange(opt.v)}
+              title={opt.desc}
+              className={[
+                "flex-1 rounded-lg border px-3 py-2 text-sm transition-colors",
+                active
+                  ? "border-[var(--p-primary)] bg-[var(--p-primary-50)] text-[var(--p-primary)] font-medium"
+                  : "border-[var(--p-border)] bg-[var(--p-surface)] text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]",
+              ].join(" ")}
+            >
+              <div>{opt.label}</div>
+              <div className="text-[10px] opacity-70">{opt.desc}</div>
+            </button>
+          );
+        })}
+      </div>
+    </label>
   );
 }
