@@ -1,56 +1,104 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState, useRef } from "react";
-import { createPortal } from "react-dom";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { financeGateway } from "@/lib/financeGateway";
-import Modal from "@/components/Modal";
+import {
+  Search,
+  Plus,
+  Trash2,
+  Pencil,
+  CheckCircle2,
+  XCircle,
+  RotateCcw,
+  MoreHorizontal,
+  Calendar,
+  Download,
+  Sparkles,
+  Loader2,
+} from "lucide-react";
+import AppModal, {
+  FormError,
+  ModalActions,
+  ConfirmDeleteModal,
+} from "@/components/AppModal";
 
-// ---------- utils ----------
+// ─── Helpers ──────────────────────────────────────────────────────
 const ymNow = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
+
 const fmtBRL = (n) =>
-  Number(n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  Number(n || 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+
+const fmtBRDate = (v) => {
+  if (!v) return "—";
+  const s = String(v).slice(0, 10);
+  const [Y, M, D] = s.split("-");
+  return Y && M && D ? `${D}/${M}/${Y}` : s;
+};
+
+function ymLabel(ym) {
+  const [y, m] = String(ym || "").split("-");
+  const names = [
+    "jan", "fev", "mar", "abr", "mai", "jun",
+    "jul", "ago", "set", "out", "nov", "dez",
+  ];
+  const idx = Math.max(1, Math.min(12, Number(m || 0))) - 1;
+  return `${names[idx]} de ${y}`;
+}
+
+function getParcelInfo(row) {
+  const idx = Number(row?.installment_index || 0);
+  const tot = Number(row?.installments_total || 0);
+  if (idx > 0 && tot > 0) return { index: idx, total: tot };
+  const m = String(row?.title || "").match(/\((\d+)\s*\/\s*(\d+)\)\s*$/);
+  if (m) {
+    const i = Number(m[1]);
+    const t = Number(m[2]);
+    if (i > 0 && t > 0) return { index: i, total: t };
+  }
+  return { index: 0, total: 0 };
+}
+
+function isSeries(row) {
+  const p = getParcelInfo(row);
+  return p.total > 1;
+}
+
 const csvCell = (v) => {
   const s = (v ?? "").toString();
   return /[",;\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
-const fmtBRDate = (v) => {
-  if (!v) return "—";
-  const s = String(v).slice(0, 10); // garante "YYYY-MM-DD"
-  const [Y, M, D] = s.split("-");
-  return Y && M && D ? `${D}/${M}/${Y}` : s;
-};
+
 function exportCSV(rows, ym, status, costCenter) {
   const header = [
-    "Título",
-    "Categoria",
-    "Centro de Custo",
-    "Competência",
-    "Vencimento",
-    "Valor",
-    "Status",
+    "Título", "Categoria", "Centro de Custo",
+    "Competência", "Vencimento", "Valor", "Status",
   ].join(",");
   const lines = [header];
   for (const r of rows) {
-    lines.push(
-      [
-        csvCell(r.title),
-        csvCell(r.category || ""),
-        csvCell(r.cost_center || ""),
-        csvCell(r.competence_month),
-        csvCell(r.due_date),
-        Number(r.amount || 0).toLocaleString("pt-BR", {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        }),
-        csvCell(r.status),
-      ].join(",")
-    );
+    lines.push([
+      csvCell(r.title),
+      csvCell(r.category || ""),
+      csvCell(r.cost_center || ""),
+      csvCell(r.competence_month),
+      csvCell(r.due_date),
+      Number(r.amount || 0).toLocaleString("pt-BR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }),
+      csvCell(r.status),
+    ].join(","));
   }
-  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const bom = "﻿";
+  const blob = new Blob([bom + lines.join("\n")], {
+    type: "text/csv;charset=utf-8",
+  });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   const tag = [
@@ -66,91 +114,104 @@ function exportCSV(rows, ym, status, costCenter) {
   URL.revokeObjectURL(url);
 }
 
-// ---------- wrapper com Suspense (evita erro do Next no build) ----------
+function statusBadge(row) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (row.status === "paid") return { cls: "p-chip-success", label: "Pago" };
+  if (row.status === "canceled") return { cls: "p-chip-neutral", label: "Cancelado" };
+  if (
+    row.status === "pending" &&
+    row.due_date &&
+    String(row.due_date).slice(0, 10) < today
+  ) {
+    return {
+      cls: "p-chip-danger",
+      label: `Atraso ${row.days_overdue || 0}d`,
+    };
+  }
+  return { cls: "p-chip-warning", label: "Pendente" };
+}
+
+// ─── Wrapper Suspense ────────────────────────────────────────────
 export default function Page() {
   return (
-    <Suspense fallback={<div className="p-6">Carregando…</div>}>
-      <OtherRevenuesPage />
+    <Suspense
+      fallback={
+        <div className="flex items-center gap-2 p-6 text-sm text-[var(--p-text-muted)]">
+          <Loader2 className="h-4 w-4 animate-spin" /> Carregando…
+        </div>
+      }
+    >
+      <OutrasReceitasPage />
     </Suspense>
   );
 }
 
-function OtherRevenuesPage() {
+function OutrasReceitasPage() {
   const search = useSearchParams();
   const router = useRouter();
 
-  // filtros pela URL
+  // Filtros (URL-synced)
   const [ym, setYm] = useState(search.get("ym") || ymNow());
   const [status, setStatus] = useState(search.get("status") || "all");
   const [costCenter, setCostCenter] = useState(search.get("cc") || "all");
+  const [q, setQ] = useState("");
 
-  // dados
+  // Dados
   const [rows, setRows] = useState([]);
-  const [kpis, setKpis] = useState({ total: 0, paid: 0, pending: 0, overdue: 0 });
-  const [loading, setLoading] = useState(true);
+  const [kpis, setKpis] = useState({
+    total: 0, paid: 0, pending: 0, overdue: 0,
+  });
   const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busyId, setBusyId] = useState(null);
 
-  const [submitting, setSubmitting] = useState(false);
-  const [canFinanceWrite] = useState(true); // plugue seu checker quando tiver
+  // Modais
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [cancelTarget, setCancelTarget] = useState(null); // pode ser série
+  const [toDelete, setToDelete] = useState(null); // {row, scope: 'one'|'series'}
 
-  // modal de confirmação de cancelamento (parcela/série)
-  const [cancelOpen, setCancelOpen] = useState(false);
-  const [cancelRow, setCancelRow] = useState(null);
-
-  // modal de criação
-  const [openNew, setOpenNew] = useState(false);
-  const [newPayload, setNewPayload] = useState({
-    title: "",
-    amount: "",
-    category: "",
-    cost_center: "extra",
-    frequency: "monthly", // monthly | yearly
-    as_template: false,    // quando monthly: criar template recorrente indefinido
-    parcelas: "1",
-    due_day: "5",
-    due_month: String(new Date().getMonth() + 1).padStart(2, "0"), // usado quando yearly
-  });
-
-  // --- modal de edição ---
-  const [editOpen, setEditOpen] = useState(false);
-  const [editRow, setEditRow] = useState(null);
-  const [editPayload, setEditPayload] = useState({
-    title: "",
-    amount: "",
-    due_date: "",
-    category: "",
-    cost_center: "extra",
-  });
-
-  // sincroniza querystring e recarrega
+  // Sync URL
   useEffect(() => {
     const params = new URLSearchParams();
     if (ym) params.set("ym", ym);
     if (status && status !== "all") params.set("status", status);
     if (costCenter && costCenter !== "all") params.set("cc", costCenter);
     router.replace(`/financeiro/outras-receitas?${params.toString()}`);
-    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ym, status, costCenter]);
 
-  // Ouve evento para abrir o modal de cancelamento (série/parcela)
-  useEffect(() => {
-    const handler = (ev) => {
-      const row = ev?.detail;
-      if (row) {
-        setCancelRow(row);
-        setCancelOpen(true);
-      }
-    };
-    window.addEventListener("open-cancel-modal", handler);
-    const reloader = () => {
-      load();
-    };
-    window.addEventListener("reload-other-revenues", reloader);
-    return () => window.removeEventListener("open-cancel-modal", handler);
-  }, []);
+  async function load() {
+    try {
+      setError(null);
+      const res = await financeGateway.listOtherRevenues({
+        ym,
+        status,
+        cost_center: costCenter === "all" ? null : costCenter,
+      });
+      setRows(Array.isArray(res?.rows) ? res.rows : Array.isArray(res) ? res : []);
+      setKpis(res?.kpis || { total: 0, paid: 0, pending: 0, overdue: 0 });
+    } catch (e) {
+      setError(e?.message || String(e));
+      setRows([]);
+    }
+  }
 
-  // carrega categorias para popular o select (com fallback para input)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      await load();
+      if (!cancelled) setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ym, status, costCenter]);
+
+  // Categorias
   useEffect(() => {
     (async () => {
       try {
@@ -162,914 +223,1079 @@ function OtherRevenuesPage() {
     })();
   }, []);
 
-  async function load() {
-    setLoading(true);
-    try {
-      const res = await financeGateway.listOtherRevenues({
-        ym,
-        status,
-        cost_center: costCenter === "all" ? null : costCenter,
-      });
-      setRows(res.rows || []);
-      setKpis(res.kpis || { total: 0, paid: 0, pending: 0, overdue: 0 });
-    } finally {
-      setLoading(false);
-    }
-  }
+  // Filtragem cliente (busca)
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    const sorted = [...rows].sort((a, b) =>
+      String(a.due_date).localeCompare(String(b.due_date))
+    );
+    if (!term) return sorted;
+    return sorted.filter((r) => {
+      const s =
+        String(r.title || "").toLowerCase() +
+        " " +
+        String(r.category || "").toLowerCase();
+      return s.includes(term);
+    });
+  }, [rows, q]);
 
-  // ações de linha
+  // Ações
   async function onMarkPaid(id) {
-    await financeGateway.markOtherRevenuePaid(id);
-    await load();
-  }
-  async function onCancel(id) {
-    const note = prompt("Motivo do cancelamento (opcional):") || null;
-    await financeGateway.cancelOtherRevenue(id, note);
-    await load();
-  }
-  async function onCancelSeries(row) {
-    const total = Number(row.installments_total || 0);
-    const idx = Number(row.installment_index || 0);
-    const futureCount = total && idx ? total - idx + 1 : 0;
-    const confirmTxt = `Cancelar esta parcela e as próximas pendentes?\n` +
-      (futureCount > 0 ? `Total afetado (pendentes a partir desta): ${futureCount}. ` : ``) +
-      `Pagas anteriores permanecem.`;
-    if (!confirm(confirmTxt)) return;
-    const note = prompt("Motivo do cancelamento da série (opcional):") || null;
-    await financeGateway.cancelOtherRevenueSeriesFrom(row.id, note);
-    await load();
+    try {
+      setBusyId(id);
+      await financeGateway.markOtherRevenuePaid(id);
+      await load();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusyId(null);
+    }
   }
   async function onReopen(id) {
-    await financeGateway.reopenOtherRevenue(id);
-    await load();
-  }
-
-  // Helpers de série/parcelas
-  function getParcelInfo(row) {
-    const idx = Number(row?.installment_index || 0);
-    const tot = Number(row?.installments_total || 0);
-    if (idx > 0 && tot > 0) return { index: idx, total: tot };
-    const m = String(row?.title || "").match(/\((\d+)\s*\/\s*(\d+)\)\s*$/);
-    if (m) {
-      const i = Number(m[1]);
-      const t = Number(m[2]);
-      if (i > 0 && t > 0) return { index: i, total: t };
-    }
-    return { index: 0, total: 0 };
-  }
-
-  async function onCancelSeries(row) {
-    const p = getParcelInfo(row);
-    const futureCount = p.total && p.index ? p.total - p.index + 1 : 0;
-    const confirmTxt = `Cancelar esta parcela e as próximas pendentes?\n` +
-      (futureCount > 0 ? `Total afetado (pendentes a partir desta): ${futureCount}. ` : ``) +
-      `Pagas anteriores permanecem.`;
-    if (!confirm(confirmTxt)) return;
-    const note = prompt("Motivo do cancelamento da série (opcional):") || null;
-    await financeGateway.cancelOtherRevenueSeriesFrom(row.id, note);
-    await load();
-  }
-  function openCancelModal(row) {
-    setCancelRow(row);
-    setCancelOpen(true);
-  }
-  function closeCancelModal() {
-    setCancelOpen(false);
-    setCancelRow(null);
-  }
-
-  // criar nova receita
-  async function onCreateNew(e) {
-    e.preventDefault();
-    if (submitting) return;
-    setSubmitting(true);
     try {
-      if (newPayload.frequency === "yearly") {
-        // Criação anual (uma única receita no ano com o mês/dia escolhidos)
-        const year = String(ym).slice(0, 4);
-        const mm = String(newPayload.due_month || "01").padStart(2, "0");
-        const dd = String(Math.min(Math.max(Number(newPayload.due_day || 5), 1), 28)).padStart(2, "0");
-        const due_date = `${year}-${mm}-${dd}`;
-        await financeGateway.createOtherRevenue({
-          ym,
-          title: newPayload.title,
-          amount: Number(newPayload.amount || 0),
-          due_date,
-          category: newPayload.category || null,
-          cost_center: newPayload.cost_center || "extra",
-          // metadados (se colunas existirem)
-          recurrence_kind: "indefinite",
-          frequency: "yearly",
-          start_month: `${ym}-01`,
-        });
-      } else if (newPayload.as_template === true) {
-        // Template mensal indefinido: cria template e já gera o mês atual
-        await financeGateway.createOtherRevenueTemplate({
-          title: newPayload.title,
-          amount: Number(newPayload.amount || 0),
-          frequency: "monthly",
-          recurrence_type: "indefinite",
-          due_day: Number(newPayload.due_day || 5),
-          start_month: `${ym}-01`,
-          end_month: null,
-          active: true,
-          category: newPayload.category || null,
-          cost_center: newPayload.cost_center || "extra",
-        });
-        // Gera o mês atual imediatamente para o usuário ver
-        try { await financeGateway.ensureOtherRevenuesForMonth(ym); } catch {}
-      } else {
-        // Mensal: série de parcelas (se 1, vira 1/1)
-        const totalParcelas = Math.max(1, Number(newPayload.parcelas || 1));
-        await financeGateway.createOtherRevenueInstallments({
-          ym,
-          title: newPayload.title,
-          amount: Number(newPayload.amount || 0),
-          total_installments: totalParcelas,
-          due_day: Number(newPayload.due_day || 5),
-          category: newPayload.category || null,
-          cost_center: newPayload.cost_center || "extra",
-        });
-      }
-      setOpenNew(false);
-      setNewPayload({
-        title: "",
-        amount: "",
-        category: "",
-        cost_center: "extra",
-        frequency: "monthly",
-        as_template: false,
-        parcelas: "1",
-        due_day: "5",
-        due_month: String(new Date().getMonth() + 1).padStart(2, "0"),
-      });
+      setBusyId(id);
+      await financeGateway.reopenOtherRevenue(id);
       await load();
+    } catch (e) {
+      setError(e?.message || String(e));
     } finally {
-      setSubmitting(false);
+      setBusyId(null);
+    }
+  }
+  async function doCancel(id, note) {
+    try {
+      setBusyId(id);
+      await financeGateway.cancelOtherRevenue(id, note);
+      await load();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function doCancelSeries(row, note) {
+    try {
+      setBusyId(row.id);
+      await financeGateway.cancelOtherRevenueSeriesFrom(row.id, note);
+      await load();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function doDelete(row, scope) {
+    try {
+      setBusyId(row.id);
+      if (scope === "series") {
+        await financeGateway.deleteOtherRevenueSeriesFrom(row.id);
+      } else {
+        await financeGateway.deleteOtherRevenue(row.id);
+      }
+      await load();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusyId(null);
     }
   }
 
-  const sorted = useMemo(() => {
-    return [...rows].sort((a, b) => String(a.due_date).localeCompare(String(b.due_date)));
-  }, [rows]);
-
-  // editar
-  function openEditModal(row) {
-    setEditRow(row);
-    setEditPayload({
-      title: row.title || "",
-      amount: String(row.amount ?? ""),
-      due_date: (row.due_date || "").slice(0, 10),
-      category: row.category || "",
-      cost_center: row.cost_center || "extra",
-    });
-    setEditOpen(true);
+  async function onGenerateMonth() {
+    if (!confirm("Gerar receitas recorrentes (templates) para este mês?"))
+      return;
+    try {
+      await financeGateway.ensureOtherRevenuesForMonth(ym);
+      await load();
+    } catch (e) {
+      alert(e?.message || String(e));
+    }
   }
 
-  async function onSaveEdit(e) {
-    e.preventDefault();
-    if (!editRow) return;
-    await financeGateway.updateOtherRevenue(editRow.id, {
-      title: editPayload.title,
-      amount: Number(editPayload.amount || 0),
-      due_date: editPayload.due_date ? editPayload.due_date.slice(0, 10) : null,
-      category: editPayload.category || null,
-      cost_center: editPayload.cost_center || "extra",
-    });
-    setEditOpen(false);
-    setEditRow(null);
-    await load();
-  }
-
-  // ---------- render ----------
   return (
-    <main className="p-6 space-y-6">
-      {/* Toolbar de filtros e ações */}
-      <div className="flex flex-wrap gap-3 items-center">
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <label className="block text-xs mb-1 text-slate-600">Competência</label>
-          <div className="flex gap-2 items-center">
-            <button
-              type="button"
-              onClick={() => {
-                const [Y,M] = ym.split('-').map(Number); const d=new Date(Y,M-1,1); d.setMonth(d.getMonth()-1); const newYm=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; setYm(newYm);
-              }}
-              className="border rounded px-2 py-1 text-xs"
-              title="Mês anterior"
-            >◄</button>
-            <input
-              type="month"
-              value={ym}
-              onChange={(e) => setYm(e.target.value)}
-              className="border rounded px-3 py-2"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                const [Y,M] = ym.split('-').map(Number); const d=new Date(Y,M-1,1); d.setMonth(d.getMonth()+1); const newYm=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; setYm(newYm);
-              }}
-              className="border rounded px-2 py-1 text-xs"
-              title="Próximo mês"
-            >►</button>
-          </div>
+          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
+            Outras receitas
+          </h1>
+          <p className="mt-1 text-sm text-[var(--p-text-muted)]">
+            {loading
+              ? "Carregando…"
+              : `${ymLabel(ym)} · ${rows.length} lançamentos`}
+          </p>
         </div>
-        <div>
-          <label className="block text-xs mb-1 text-slate-600">Status</label>
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="border rounded px-3 py-2"
-          >
-            <option value="all">Todos</option>
-            <option value="pending">Pendentes</option>
-            <option value="canceled">Cancelados</option>
-            <option value="paid">Pagos</option>
-            <option value="overdue">Atrasados</option>
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs mb-1 text-slate-600">Centro de custo</label>
-          <select
-            value={costCenter}
-            onChange={(e) => setCostCenter(e.target.value)}
-            className="border rounded px-3 py-2"
-          >
-            <option value="all">Todos</option>
-            <option value="extra">Extra</option>
-            <option value="PJ">PJ</option>
-            <option value="PF">PF</option>
-          </select>
-        </div>
-        <div className="flex-1" />
-        <div className="ml-auto flex items-center gap-2 flex-wrap sm:flex-nowrap">
+        <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => exportCSV(sorted, ym, status, costCenter)}
-            className="border rounded px-3 py-2 text-sm hover:bg-slate-50"
+            onClick={onGenerateMonth}
+            className="p-btn p-btn-ghost"
+            title="Gerar receitas recorrentes (templates) para este mês"
           >
-            Exportar CSV
+            <Sparkles className="h-4 w-4" />
+            <span className="hidden sm:inline">Gerar mês</span>
           </button>
           <button
-            onClick={() => setOpenNew(true)}
-            className="border rounded px-3 py-2 text-sm bg-slate-900 text-white hover:bg-black"
+            onClick={() => exportCSV(filtered, ym, status, costCenter)}
+            disabled={filtered.length === 0}
+            className="p-btn p-btn-ghost"
           >
-            Nova receita
+            <Download className="h-4 w-4" />
+            <span className="hidden sm:inline">Exportar</span>
           </button>
           <button
-            onClick={async () => {
-              const confirmGen = confirm("Gerar automaticamente receitas recorrentes (templates) para este mês?");
-              if (!confirmGen) return;
-              try {
-                await financeGateway.ensureOtherRevenuesForMonth(ym);
-                await load();
-                alert("Geração automática concluída.");
-              } catch (e) {
-                alert(e.message);
-              }
-            }}
-            className="border rounded px-3 py-2 text-sm hover:bg-slate-50"
+            onClick={() => setCreateOpen(true)}
+            className="p-btn p-btn-primary"
           >
-            Gerar mês (templates)
+            <Plus className="h-4 w-4" />
+            <span>Nova receita</span>
           </button>
         </div>
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Kpi title="Total" value={fmtBRL(kpis.total)} tone="neutral" />
-        <Kpi title="Pagas" value={fmtBRL(kpis.paid)} tone="success" />
-        <Kpi title="Pendentes" value={fmtBRL(kpis.pending)} tone="warning" />
-        <Kpi title="Atrasadas" value={fmtBRL(kpis.overdue)} tone="danger" />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
+        <SumCard label="Total" value={fmtBRL(kpis.total)} />
+        <SumCard label="Pagas" value={fmtBRL(kpis.paid)} tone="success" />
+        <SumCard label="Pendentes" value={fmtBRL(kpis.pending)} tone="warning" />
+        <SumCard label="Atrasadas" value={fmtBRL(kpis.overdue)} tone="danger" />
       </div>
 
-      {/* Tabela + Cards (como Gastos) */}
-      {loading ? (
-        <div className="p-4">Carregando…</div>
-      ) : sorted.length === 0 ? (
-        <div className="p-4 border rounded">Sem receitas para este filtro.</div>
-      ) : (
-        <div className="w-full">
-          {/* Tabela (>= sm) */}
-          <div className="hidden sm:block overflow-x-auto border rounded">
-            <table className="min-w-[900px] w-full text-xs sm:text-sm">
-              <thead className="sticky top-0 z-10 bg-white/90 border-b">
-                <tr>
-                  <Th>Título</Th>
-                  <Th>Categoria</Th>
-                  <Th>Centro</Th>
-                  <Th>Competência</Th>
-                  <Th>Vencimento</Th>
-                  <Th>Parcela</Th>
-                  <Th className="text-right">Valor</Th>
-                  <Th>Status</Th>
-                  <Th>Ações</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((r) => (
-                  <tr key={r.id} className="border-t odd:bg-slate-50/40 hover:bg-slate-50">
-                    <Td className="max-w-[260px] truncate" title={r.title}>
-                      {r.title}
-                      {(() => { const p = getParcelInfo(r); return p.total > 1; })() && (
-                        <span
-                          className="ml-2 align-middle text-[10px] px-1.5 py-0.5 rounded border bg-slate-50 text-slate-600"
-                          title={(function(){ const p=getParcelInfo(r); return `Série de ${p.total} parcelas — esta é a ${p.index}`; })()}
-                        >
-                          Série
-                        </span>
-                      )}
-                    </Td>
-                    <Td>{r.category || "—"}</Td>
-                    <Td>{r.cost_center || "—"}</Td>
-                    <Td>{fmtBRDate(r.competence_month)}</Td>
-                    <Td>{fmtBRDate(r.due_date)}</Td>
-                    <Td className="whitespace-nowrap">
-                      {(() => { const p = getParcelInfo(r); return p.total > 0 ? `${p.index}/${p.total}` : "—"; })()}
-                    </Td>
-                    <Td className="text-right">{fmtBRL(r.amount)}</Td>
-                    <Td className="whitespace-nowrap">
-                      <Badge status={r.status} />
-                      {r.status === "pending" && r.days_overdue > 0 && (
-                        <span className="ml-2 text-red-600 text-xs">({r.days_overdue}d)</span>
-                      )}
-                    </Td>
-                    <Td>
-                      <RowActions
-                        row={r}
-                        onPaid={onMarkPaid}
-                        onCancel={onCancel}
-                        onCancelSeries={onCancelSeries}
-                        onReopen={onReopen}
-                        canWrite={canFinanceWrite}
-                        onEdit={() => openEditModal(r)}
-                      />
-                    </Td>
+      {/* Filtros */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--p-text-faint)]" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar descrição ou categoria…"
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] py-2.5 pl-9 pr-3 text-sm placeholder:text-[var(--p-text-faint)] focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </div>
+        <div className="inline-flex items-center gap-2 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm">
+          <Calendar className="h-4 w-4 text-[var(--p-text-muted)]" />
+          <input
+            type="month"
+            value={ym}
+            onChange={(e) => setYm(e.target.value.slice(0, 7))}
+            className="bg-transparent text-sm focus:outline-none"
+          />
+        </div>
+      </div>
+
+      <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex gap-1 min-w-max">
+            {[
+              { key: "all", label: "Todos" },
+              { key: "pending", label: "Pendentes" },
+              { key: "paid", label: "Pagos" },
+              { key: "overdue", label: "Atrasados" },
+              { key: "canceled", label: "Cancelados" },
+            ].map((f) => {
+              const active = status === f.key;
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => setStatus(f.key)}
+                  className={[
+                    "rounded-lg px-3 py-1.5 text-sm transition-colors",
+                    active
+                      ? "bg-[var(--p-primary)] text-white"
+                      : "bg-[var(--p-surface)] border border-[var(--p-border)] text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]",
+                  ].join(" ")}
+                >
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+          <div className="h-6 w-px bg-[var(--p-border)] hidden sm:block" />
+          <div className="flex gap-1 min-w-max">
+            {[
+              { key: "all", label: "Todos centros" },
+              { key: "extra", label: "Extra" },
+              { key: "PJ", label: "PJ" },
+              { key: "PF", label: "PF" },
+            ].map((f) => {
+              const active = costCenter === f.key;
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => setCostCenter(f.key)}
+                  className={[
+                    "rounded-lg px-3 py-1.5 text-xs transition-colors",
+                    active
+                      ? "bg-[var(--p-text)] text-white"
+                      : "bg-[var(--p-surface)] border border-[var(--p-border)] text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]",
+                  ].join(" ")}
+                >
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-4 py-3 text-sm text-[var(--p-danger)]">
+          Erro: {error}
+        </div>
+      )}
+
+      {/* Lista */}
+      <div className="p-card overflow-hidden">
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 px-5 py-12 text-sm text-[var(--p-text-muted)]">
+            <Loader2 className="h-4 w-4 animate-spin" /> Carregando…
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="px-5 py-12 text-center text-sm text-[var(--p-text-muted)]">
+            Sem receitas para este filtro.
+          </div>
+        ) : (
+          <>
+            {/* Tabela desktop */}
+            <div className="hidden md:block">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--p-border)] bg-[var(--p-surface-2)] text-left text-xs font-medium uppercase tracking-wider text-[var(--p-text-muted)]">
+                    <th className="px-5 py-3">Vencimento</th>
+                    <th className="px-5 py-3">Descrição</th>
+                    <th className="px-5 py-3">Categoria</th>
+                    <th className="px-5 py-3">Centro</th>
+                    <th className="px-5 py-3">Parcela</th>
+                    <th className="px-5 py-3">Status</th>
+                    <th className="px-5 py-3 text-right">Valor</th>
+                    <th className="px-5 py-3"></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-[var(--p-border)]">
+                  {filtered.map((r) => {
+                    const sb = statusBadge(r);
+                    const p = getParcelInfo(r);
+                    return (
+                      <tr
+                        key={r.id}
+                        className="hover:bg-[var(--p-surface-2)]"
+                      >
+                        <td className="px-5 py-3 tabular-nums text-[var(--p-text-muted)]">
+                          {fmtBRDate(r.due_date)}
+                        </td>
+                        <td className="px-5 py-3 font-medium">
+                          <span className="truncate">{r.title || "—"}</span>
+                          {p.total > 1 && (
+                            <span
+                              className="ml-2 align-middle text-[10px] uppercase tracking-wider text-[var(--p-text-faint)]"
+                              title={`Série de ${p.total} parcelas — esta é a ${p.index}`}
+                            >
+                              série
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3">
+                          {r.category ? (
+                            <span className="p-chip p-chip-neutral">
+                              {r.category}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-[var(--p-text-faint)]">
+                              —
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3 text-xs font-medium text-[var(--p-text-muted)]">
+                          {r.cost_center || "—"}
+                        </td>
+                        <td className="px-5 py-3 text-xs tabular-nums text-[var(--p-text-muted)]">
+                          {p.total > 0 ? `${p.index}/${p.total}` : "—"}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className={`p-chip ${sb.cls}`}>{sb.label}</span>
+                        </td>
+                        <td className="px-5 py-3 text-right font-semibold tabular-nums text-[var(--p-success)]">
+                          +{fmtBRL(r.amount)}
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          <RowActions
+                            row={r}
+                            busy={busyId === r.id}
+                            onMarkPaid={() => onMarkPaid(r.id)}
+                            onReopen={() => onReopen(r.id)}
+                            onCancel={() => setCancelTarget(r)}
+                            onEdit={() => setEditTarget(r)}
+                            onDelete={() =>
+                              setToDelete({
+                                row: r,
+                                scope: isSeries(r) ? "series" : "one",
+                              })
+                            }
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
 
-          {/* Cards (xs) */}
-          <div className="sm:hidden divide-y border rounded">
-            {sorted.map((r) => (
-              <div key={r.id} className="p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="font-medium text-slate-900 truncate" title={r.title}>{r.title}</div>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                      <span className="whitespace-nowrap">{fmtBRDate(r.due_date)}</span>
-                      {r.category && <span className="truncate max-w-[140px]">{r.category}</span>}
-                      {r.cost_center && (
-                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">{r.cost_center}</span>
-                      )}
-                      {(() => { const p = getParcelInfo(r); return p.total > 0 ? (
-                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 whitespace-nowrap">{`${p.index}/${p.total}`}</span>
-                      ) : null; })()}
-                      <Badge status={r.status} />
+            {/* Lista mobile */}
+            <ul className="divide-y divide-[var(--p-border)] md:hidden">
+              {filtered.map((r) => {
+                const sb = statusBadge(r);
+                const p = getParcelInfo(r);
+                return (
+                  <li
+                    key={r.id}
+                    className="flex flex-col gap-2 px-4 py-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium truncate">
+                          {r.title || "—"}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--p-text-muted)]">
+                          <span>{fmtBRDate(r.due_date)}</span>
+                          {r.category && (
+                            <span className="p-chip p-chip-neutral">
+                              {r.category}
+                            </span>
+                          )}
+                          {r.cost_center && (
+                            <span className="rounded bg-[var(--p-surface-2)] px-1.5 py-0.5 font-medium">
+                              {r.cost_center}
+                            </span>
+                          )}
+                          {p.total > 0 && (
+                            <span className="rounded bg-[var(--p-surface-2)] px-1.5 py-0.5 font-medium">
+                              {p.index}/{p.total}
+                            </span>
+                          )}
+                          <span className={`p-chip ${sb.cls}`}>{sb.label}</span>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-semibold tabular-nums text-[var(--p-success)]">
+                          +{fmtBRL(r.amount)}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs font-mono tabular-nums font-semibold">{fmtBRL(r.amount)}</div>
-                  </div>
-                </div>
-                <div className="mt-2">
-                  <RowActions
-                    row={r}
-                    onPaid={onMarkPaid}
-                    onCancel={onCancel}
-                    onCancelSeries={onCancelSeries}
-                    onReopen={onReopen}
-                    canWrite={canFinanceWrite}
-                    onEdit={() => openEditModal(r)}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
+                    <RowActions
+                      row={r}
+                      busy={busyId === r.id}
+                      onMarkPaid={() => onMarkPaid(r.id)}
+                      onReopen={() => onReopen(r.id)}
+                      onCancel={() => setCancelTarget(r)}
+                      onEdit={() => setEditTarget(r)}
+                      onDelete={() =>
+                        setToDelete({
+                          row: r,
+                          scope: isSeries(r) ? "series" : "one",
+                        })
+                      }
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+      </div>
+
+      {!loading && filtered.length > 0 && (
+        <div className="flex items-center justify-end gap-2 text-sm">
+          <span className="text-[var(--p-text-muted)]">
+            Total do filtro:
+          </span>
+          <span className="p-kpi-value text-base text-[var(--p-success)]">
+            +{fmtBRL(filtered.reduce((a, r) => a + Number(r.amount || 0), 0))}
+          </span>
         </div>
       )}
 
-      {/* Modal Nova receita */}
-      {openNew && (
-        <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center px-4">
-          <form onSubmit={onCreateNew} className="w-full max-w-lg rounded-lg bg-white p-5 shadow">
-            <h2 className="text-lg font-semibold mb-4">Nova receita</h2>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="md:col-span-2">
-                <label className="block text-xs mb-1">Título *</label>
-                <input
-                  className="w-full border rounded px-3 py-2"
-                  value={newPayload.title}
-                  onChange={(e) => setNewPayload((p) => ({ ...p, title: e.target.value }))}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs mb-1">Valor *</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  className="w-full border rounded px-3 py-2"
-                  value={newPayload.amount}
-                  onChange={(e) => setNewPayload((p) => ({ ...p, amount: e.target.value }))}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs mb-1">Frequência *</label>
-                <select
-                  className="w-full border rounded px-3 py-2"
-                  value={newPayload.frequency}
-                  onChange={(e) => setNewPayload((p) => ({ ...p, frequency: e.target.value, as_template: false }))}
-                  required
-                >
-                  <option value="monthly">Mensal</option>
-                  <option value="yearly">Anual</option>
-                </select>
-              </div>
-
-              {newPayload.frequency === "monthly" && !newPayload.as_template && (
-                <div>
-                  <label className="block text-xs mb-1">Nº parcelas *</label>
-                  <input
-                    type="number"
-                    min="1"
-                    className="w-full border rounded px-3 py-2"
-                    value={newPayload.parcelas}
-                    onChange={(e) => setNewPayload((p) => ({ ...p, parcelas: e.target.value }))}
-                    required
-                  />
-                </div>
-              )}
-
-              {newPayload.frequency === "monthly" && (
-                <div className="md:col-span-2 flex items-center gap-2 border rounded px-3 py-2">
-                  <input
-                    id="as_template"
-                    type="checkbox"
-                    className="accent-black"
-                    checked={!!newPayload.as_template}
-                    onChange={(e) => setNewPayload((p) => ({ ...p, as_template: e.target.checked }))}
-                  />
-                  <label htmlFor="as_template" className="text-sm">
-                    Gerar automaticamente todo mês (recorrente indefinido)
-                  </label>
-                </div>
-              )}
-
-              {newPayload.frequency === "yearly" && (
-                <div>
-                  <label className="block text-xs mb-1">Mês do vencimento *</label>
-                  <select
-                    className="w-full border rounded px-3 py-2"
-                    value={newPayload.due_month}
-                    onChange={(e) => setNewPayload((p) => ({ ...p, due_month: e.target.value }))}
-                    required
-                  >
-                    {Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, "0")).map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs mb-1">Dia vencimento *</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="28"
-                  className="w-full border rounded px-3 py-2"
-                  value={newPayload.due_day}
-                  onChange={(e) => setNewPayload((p) => ({ ...p, due_day: e.target.value }))}
-                  required
-                />
-              </div>
-
-              <div className="md:col-span-2 text-xs text-slate-500">
-                {newPayload.frequency === "yearly" ? (
-                  <>Gera 1 receita anual com vencimento em {String(newPayload.due_day).padStart(2, "0")}/{newPayload.due_month}/{String(ym).slice(0,4)}.</>
-                ) : newPayload.as_template ? (
-                  <>Gerará automaticamente 1 receita por mês (dia {String(newPayload.due_day).padStart(2, "0")}) a partir de {ym}, até desativar.</>
-                ) : (
-                  <>Gera {newPayload.parcelas || 1} receita(s) mensal(is) iniciando em {ym}.</>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs mb-1">Categoria</label>
-                {Array.isArray(categories) && categories.length > 0 ? (
-                  <select
-                    className="w-full border rounded px-3 py-2"
-                    value={newPayload.category}
-                    onChange={(e) => setNewPayload((p) => ({ ...p, category: e.target.value }))}
-                  >
-                    <option value="">—</option>
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.name}>{c.name}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    className="w-full border rounded px-3 py-2"
-                    value={newPayload.category}
-                    onChange={(e) => setNewPayload((p) => ({ ...p, category: e.target.value }))}
-                    placeholder="ex.: evento, material…"
-                  />
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs mb-1">Centro de custo</label>
-                <select
-                  className="w-full border rounded px-3 py-2"
-                  value={newPayload.cost_center}
-                  onChange={(e) => setNewPayload((p) => ({ ...p, cost_center: e.target.value }))}
-                >
-                  <option value="extra">Extra</option>
-                  <option value="PJ">PJ</option>
-                  <option value="PF">PF</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="mt-5 flex gap-3 justify-end">
-              <button
-                type="button"
-                onClick={() => setOpenNew(false)}
-                className="border rounded px-4 py-2"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                disabled={submitting}
-                className="rounded bg-black text-white px-4 py-2 disabled:opacity-60"
-              >
-                Criar
-              </button>
-            </div>
-          </form>
-        </div>
+      {/* Modais */}
+      {createOpen && (
+        <CreateRevenueModal
+          ym={ym}
+          categories={categories}
+          onClose={() => setCreateOpen(false)}
+          onSaved={async () => {
+            setCreateOpen(false);
+            await load();
+          }}
+        />
       )}
 
-      {/* Modal: Cancelar — série/parcela */}
-      {cancelOpen && (
-        <Modal
-          open={cancelOpen}
-          onClose={closeCancelModal}
-          title="Cancelar receita"
-          footer={(
-            <>
-              <button
-                className="border rounded px-3 py-1"
-                onClick={closeCancelModal}
-              >
-                Fechar
-              </button>
-              {cancelRow && (
-                <>
-                  <button
-                    className="border rounded px-3 py-1"
-                    onClick={async () => {
-                      await onCancel(cancelRow.id);
-                      closeCancelModal();
-                    }}
-                  >
-                    Cancelar somente esta
-                  </button>
-                  <button
-                    className="rounded bg-black text-white px-3 py-1"
-                    onClick={async () => {
-                      await onCancelSeries(cancelRow);
-                      closeCancelModal();
-                    }}
-                  >
-                    Cancelar série
-                  </button>
-                </>
-              )}
-            </>
-          )}
-        >
-          {cancelRow ? (
-            <CancelSeriesBody row={cancelRow} getParcelInfo={getParcelInfo} />
-          ) : null}
-        </Modal>
+      {editTarget && (
+        <EditRevenueModal
+          row={editTarget}
+          categories={categories}
+          onClose={() => setEditTarget(null)}
+          onSaved={async () => {
+            setEditTarget(null);
+            await load();
+          }}
+        />
       )}
 
-      {/* Modal Editar receita */}
-      {editOpen && (
-        <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center px-4">
-          <form onSubmit={onSaveEdit} className="w-full max-w-lg rounded-lg bg-white p-5 shadow">
-            <h2 className="text-lg font-semibold mb-4">Editar receita</h2>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="md:col-span-2">
-                <label className="block text-xs mb-1">Título *</label>
-                <input
-                  className="w-full border rounded px-3 py-2"
-                  value={editPayload.title}
-                  onChange={(e) => setEditPayload((p) => ({ ...p, title: e.target.value }))}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs mb-1">Valor *</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  className="w-full border rounded px-3 py-2"
-                  value={editPayload.amount}
-                  onChange={(e) => setEditPayload((p) => ({ ...p, amount: e.target.value }))}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs mb-1">Vencimento</label>
-                <input
-                  type="date"
-                  className="w-full border rounded px-3 py-2"
-                  value={editPayload.due_date}
-                  onChange={(e) => setEditPayload((p) => ({ ...p, due_date: e.target.value }))}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs mb-1">Categoria</label>
-                {Array.isArray(categories) && categories.length > 0 ? (
-                  <select
-                    className="w-full border rounded px-3 py-2"
-                    value={editPayload.category}
-                    onChange={(e) => setEditPayload((p) => ({ ...p, category: e.target.value }))}
-                  >
-                    <option value="">—</option>
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.name}>{c.name}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    className="w-full border rounded px-3 py-2"
-                    value={editPayload.category}
-                    onChange={(e) => setEditPayload((p) => ({ ...p, category: e.target.value }))}
-                    placeholder="ex.: evento, material…"
-                  />
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs mb-1">Centro de custo</label>
-                <select
-                  className="w-full border rounded px-3 py-2"
-                  value={editPayload.cost_center}
-                  onChange={(e) => setEditPayload((p) => ({ ...p, cost_center: e.target.value }))}
-                >
-                  <option value="extra">Extra</option>
-                  <option value="PJ">PJ</option>
-                  <option value="PF">PF</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="mt-5 flex gap-3 justify-end">
-              <button
-                type="button"
-                onClick={() => {
-                  setEditOpen(false);
-                  setEditRow(null);
-                }}
-                className="border rounded px-4 py-2"
-              >
-                Cancelar
-              </button>
-              <button type="submit" className="rounded bg-black text-white px-4 py-2">
-                Salvar
-              </button>
-            </div>
-          </form>
-        </div>
+      {cancelTarget && (
+        <CancelRevenueModal
+          row={cancelTarget}
+          onClose={() => setCancelTarget(null)}
+          onCancelOne={async (note) => {
+            const id = cancelTarget.id;
+            setCancelTarget(null);
+            await doCancel(id, note);
+          }}
+          onCancelSeries={async (note) => {
+            const r = cancelTarget;
+            setCancelTarget(null);
+            await doCancelSeries(r, note);
+          }}
+        />
       )}
-    </main>
-  );
-}
 
-// ---------- subcomponentes ----------
-function Kpi({ title, value, tone = "neutral" }) {
-  const accent = {
-    danger: "bg-rose-600",
-    warning: "bg-amber-500",
-    success: "bg-green-600",
-    neutral: "bg-slate-300",
-  }[tone] || "bg-slate-300";
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white shadow-sm p-4 overflow-hidden">
-      <div className={`h-1 mx-4 ${accent} rounded-full mb-3`}></div>
-      <div className="text-[11px] uppercase tracking-wide text-slate-600">{title}</div>
-      <div className="text-base sm:text-xl font-semibold text-slate-900">{value}</div>
+      {toDelete && (
+        <ConfirmDeleteModal
+          title={
+            toDelete.scope === "series"
+              ? "Excluir série"
+              : "Excluir receita"
+          }
+          itemName={toDelete.row.title}
+          description={
+            toDelete.scope === "series"
+              ? "As FUTURAS parcelas pendentes serão excluídas. Pagas anteriores permanecem."
+              : "Esta ação não pode ser desfeita."
+          }
+          onCancel={() => setToDelete(null)}
+          onConfirm={async () => {
+            const t = toDelete;
+            setToDelete(null);
+            await doDelete(t.row, t.scope);
+          }}
+        />
+      )}
     </div>
   );
 }
-function Th({ children, className = "" }) {
-  return <th className={`text-left px-3 py-2 font-medium ${className}`}>{children}</th>;
-}
-function Td({ children, className = "" }) {
-  return <td className={`px-3 py-2 ${className}`}>{children}</td>;
-}
-function Badge({ status }) {
-  const map = {
-    paid: {
-      label: "Pago",
-      cls: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    },
-    pending: {
-      label: "A vencer",
-      cls: "bg-amber-50 text-amber-700 border-amber-200",
-    },
-    canceled: {
-      label: "Cancelado",
-      cls: "bg-rose-50 text-rose-700 border-rose-200",
-    },
-    overdue: {
-      label: "Atrasado",
-      cls: "bg-red-50 text-red-700 border-red-200",
-    },
-  };
 
-  const item = map[status] || { label: status || "—", cls: "" };
-
+// ─── Componentes auxiliares ──────────────────────────────────────
+function SumCard({ label, value, tone }) {
+  const toneCls =
+    tone === "success"
+      ? "text-[var(--p-success)]"
+      : tone === "danger"
+      ? "text-[var(--p-danger)]"
+      : tone === "warning"
+      ? "text-[var(--p-warning)]"
+      : "text-[var(--p-text)]";
   return (
-    <span
-      className={`inline-block text-xs px-2 py-1 rounded border ${item.cls}`}
-    >
-      {item.label}
-    </span>
+    <div className="p-card p-4">
+      <div className="text-xs uppercase tracking-wider text-[var(--p-text-faint)]">
+        {label}
+      </div>
+      <div className={`p-kpi-value mt-1 text-lg md:text-xl ${toneCls}`}>
+        {value}
+      </div>
+    </div>
   );
 }
-function RowActions({ row, onPaid, onCancel, onReopen, onEdit, canWrite = true }) {
+
+function RowActions({ row, busy, onMarkPaid, onReopen, onCancel, onEdit, onDelete }) {
   const [open, setOpen] = useState(false);
-  const btnRef = useRef(null);
-  const menuRef = useRef(null);
-  const [pos, setPos] = useState(null);
+  const ref = useRef(null);
 
   useEffect(() => {
-    function onDocClick(e) {
-      const target = e.target;
-      if (btnRef.current && btnRef.current.contains(target)) return;
-      if (menuRef.current && menuRef.current.contains(target)) return;
-      setOpen(false);
+    if (!open) return;
+    function handler(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     }
-    function onEsc(e) { if (e.key === 'Escape') setOpen(false); }
-    function update() {
-      if (!btnRef.current) return;
-      const rect = btnRef.current.getBoundingClientRect();
-      const estWidth = 180; // approximate menu width
-      const padding = 8;
-      const left = Math.min(Math.max(padding, rect.right - estWidth), window.innerWidth - estWidth - padding);
-      const top = rect.bottom + 4;
-      setPos({ top, left });
-    }
-    if (open) {
-      update();
-      document.addEventListener('mousedown', onDocClick);
-      window.addEventListener('resize', update);
-      window.addEventListener('scroll', update, true);
-      document.addEventListener('keydown', onEsc);
-      return () => {
-        document.removeEventListener('mousedown', onDocClick);
-        window.removeEventListener('resize', update);
-        window.removeEventListener('scroll', update, true);
-        document.removeEventListener('keydown', onEsc);
-      };
-    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  function isSeries(r) {
-    const idx = Number(r?.installment_index || 0);
-    const tot = Number(r?.installments_total || 0);
-    if (idx > 0 && tot > 1) return true;
-    const m = String(r?.title || "").match(/\((\d+)\s*\/\s*(\d+)\)\s*$/);
-    return !!(m && Number(m[2]) > 1);
+  const canMarkPaid =
+    row.status !== "paid" && row.status !== "canceled";
+  const canCancelAct = row.status !== "canceled";
+  const canReopenAct = row.status !== "pending";
+
+  function run(fn) {
+    setOpen(false);
+    fn();
   }
 
-  if (!canWrite) return <span className="text-xs text-slate-500">—</span>;
-
   return (
-    <div className="inline-block text-left">
+    <div ref={ref} className="relative inline-block">
       <button
         type="button"
-        className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-gray-300 hover:bg-gray-50"
+        disabled={busy}
         onClick={() => setOpen((v) => !v)}
-        ref={btnRef}
+        className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] disabled:opacity-50"
+        aria-label="Ações"
       >
-        ⋯ Ações
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`}>
-          <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd" />
-        </svg>
+        {busy ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <MoreHorizontal className="h-4 w-4" />
+        )}
       </button>
-      {open && pos && createPortal(
-        <div ref={menuRef} style={{ position: 'fixed', top: pos.top, left: pos.left }} className="w-40 origin-top-right rounded-md border bg-white shadow-lg z-50">
-          <div className="py-1 text-sm">
-            {row.status !== 'paid' && row.status !== 'canceled' && (
-              <button
-                onClick={() => { setOpen(false); onPaid(row.id); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
-              >
-                Marcar pago
-              </button>
-            )}
-
-            {row.status !== 'canceled' && (
-              <button
-                onClick={() => {
-                  setOpen(false);
-                  if (isSeries(row)) {
-                    const ev = new CustomEvent('open-cancel-modal', { detail: row });
-                    window.dispatchEvent(ev);
-                  } else {
-                    onCancel(row.id);
-                  }
-                }}
-                className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
-              >
-                Cancelar
-              </button>
-            )}
-
-            {row.status !== 'pending' && (
-              <button
-                onClick={() => { setOpen(false); onReopen(row.id); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
-              >
-                Reabrir
-              </button>
-            )}
-
-            <div className="my-1 border-t" />
-
+      {open && (
+        <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] shadow-lg">
+          {canMarkPaid && (
             <button
-              onClick={async () => {
-                setOpen(false);
-                try {
-                  if (isSeries(row)) {
-                    const confirmSeries = confirm('Excluir FUTURAS parcelas pendentes desta série? Pagas anteriores permanecem.');
-                    if (!confirmSeries) return;
-                    await financeGateway.deleteOtherRevenueSeriesFrom(row.id);
-                  } else {
-                    const confirmOne = confirm('Excluir definitivamente esta receita?');
-                    if (!confirmOne) return;
-                    await financeGateway.deleteOtherRevenue(row.id);
-                  }
-                  window.dispatchEvent(new Event('reload-other-revenues'));
-                } catch (e) {
-                  alert(e.message);
-                }
-              }}
-              className="w-full text-left px-3 py-1.5 text-red-700 hover:bg-red-50"
+              type="button"
+              onClick={() => run(onMarkPaid)}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--p-surface-2)]"
             >
-              Excluir
+              <CheckCircle2 className="h-4 w-4 text-[var(--p-success)]" />{" "}
+              Marcar como pago
             </button>
-
+          )}
+          {canReopenAct && (
             <button
-              onClick={() => { setOpen(false); onEdit(); }}
-              className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
+              type="button"
+              onClick={() => run(onReopen)}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--p-surface-2)]"
             >
-              Editar
+              <RotateCcw className="h-4 w-4 text-[var(--p-text-muted)]" />{" "}
+              Reabrir
             </button>
-          </div>
-        </div>, document.body)
-      }
+          )}
+          {canCancelAct && (
+            <button
+              type="button"
+              onClick={() => run(onCancel)}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--p-surface-2)]"
+            >
+              <XCircle className="h-4 w-4 text-[var(--p-text-muted)]" />{" "}
+              Cancelar
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => run(onEdit)}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--p-surface-2)]"
+          >
+            <Pencil className="h-4 w-4 text-[var(--p-text-muted)]" /> Editar
+          </button>
+          <div className="my-1 h-px bg-[var(--p-border)]" />
+          <button
+            type="button"
+            onClick={() => run(onDelete)}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--p-danger)] hover:bg-[var(--p-danger-50)]"
+          >
+            <Trash2 className="h-4 w-4" /> Excluir
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-// Corpo do modal de cancelamento (informativo)
-function CancelSeriesBody({ row, getParcelInfo }) {
+// ─── Modal: Cancelar (com opção de série) ────────────────────────
+function CancelRevenueModal({ row, onClose, onCancelOne, onCancelSeries }) {
   const p = getParcelInfo(row);
+  const isSer = p.total > 1;
   const future = p.total && p.index ? p.total - p.index + 1 : 0;
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(null); // 'one' | 'series'
+
   return (
-    <div className="space-y-2 text-sm">
-      <p>
-        Título: <strong>{row.title}</strong>
-      </p>
-      {p.total > 0 && (
-        <p>
-          Parcela: <strong>{p.index}/{p.total}</strong>
+    <AppModal
+      title="Cancelar receita"
+      onClose={busy ? () => {} : onClose}
+      maxWidth="md"
+    >
+      <div className="flex flex-col gap-4 px-5 py-5">
+        <div className="text-sm text-[var(--p-text-muted)]">
+          <div>
+            Receita:{" "}
+            <span className="font-medium text-[var(--p-text)]">
+              {row.title}
+            </span>
+          </div>
+          {p.total > 0 && (
+            <div className="mt-1 text-xs">
+              Parcela{" "}
+              <span className="font-medium text-[var(--p-text)]">
+                {p.index}/{p.total}
+              </span>
+            </div>
+          )}
+          {isSer && (
+            <p className="mt-2 text-xs">
+              Se cancelar a série, as <b>{future} parcela(s) pendente(s)</b>{" "}
+              a partir desta serão canceladas. Pagas anteriores permanecem.
+            </p>
+          )}
+        </div>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">
+            Motivo (opcional)
+          </span>
+          <textarea
+            rows={2}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={!!busy}
+            className="p-btn p-btn-ghost"
+          >
+            Voltar
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              setBusy("one");
+              await onCancelOne(note);
+            }}
+            disabled={!!busy}
+            className="p-btn p-btn-ghost"
+          >
+            {busy === "one" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <XCircle className="h-4 w-4" />
+            )}
+            Cancelar somente esta
+          </button>
+          {isSer && (
+            <button
+              type="button"
+              onClick={async () => {
+                setBusy("series");
+                await onCancelSeries(note);
+              }}
+              disabled={!!busy}
+              className="p-btn p-btn-primary"
+            >
+              {busy === "series" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <XCircle className="h-4 w-4" />
+              )}
+              Cancelar série
+            </button>
+          )}
+        </div>
+      </div>
+    </AppModal>
+  );
+}
+
+// ─── Modal: Criar receita ────────────────────────────────────────
+function CreateRevenueModal({ ym, categories, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    title: "",
+    amount: "",
+    category: "",
+    cost_center: "extra",
+    frequency: "monthly", // monthly | yearly
+    as_template: false,
+    parcelas: "1",
+    due_day: "5",
+    due_month: String(new Date().getMonth() + 1).padStart(2, "0"),
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  function update(k, v) {
+    setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    if (!form.title.trim()) return setErr("Título é obrigatório");
+    const amt = Number(form.amount || 0);
+    if (!amt || amt <= 0) return setErr("Valor deve ser maior que zero");
+    try {
+      setSaving(true);
+      if (form.frequency === "yearly") {
+        const year = String(ym).slice(0, 4);
+        const mm = String(form.due_month || "01").padStart(2, "0");
+        const dd = String(
+          Math.min(Math.max(Number(form.due_day || 5), 1), 28)
+        ).padStart(2, "0");
+        await financeGateway.createOtherRevenue({
+          ym,
+          title: form.title.trim(),
+          amount: amt,
+          due_date: `${year}-${mm}-${dd}`,
+          category: form.category || null,
+          cost_center: form.cost_center || "extra",
+          recurrence_kind: "indefinite",
+          frequency: "yearly",
+          start_month: `${ym}-01`,
+        });
+      } else if (form.as_template) {
+        await financeGateway.createOtherRevenueTemplate({
+          title: form.title.trim(),
+          amount: amt,
+          frequency: "monthly",
+          recurrence_type: "indefinite",
+          due_day: Number(form.due_day || 5),
+          start_month: `${ym}-01`,
+          end_month: null,
+          active: true,
+          category: form.category || null,
+          cost_center: form.cost_center || "extra",
+        });
+        try {
+          await financeGateway.ensureOtherRevenuesForMonth(ym);
+        } catch {
+          /* ignore */
+        }
+      } else {
+        const total = Math.max(1, Number(form.parcelas || 1));
+        await financeGateway.createOtherRevenueInstallments({
+          ym,
+          title: form.title.trim(),
+          amount: amt,
+          total_installments: total,
+          due_day: Number(form.due_day || 5),
+          category: form.category || null,
+          cost_center: form.cost_center || "extra",
+        });
+      }
+      await onSaved();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AppModal
+      title="Nova receita"
+      onClose={saving ? () => {} : onClose}
+      maxWidth="2xl"
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+
+        <FormField
+          label="Descrição *"
+          value={form.title}
+          onChange={(v) => update("title", v)}
+          autoFocus
+          placeholder="Ex.: Aula particular"
+        />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField
+            label="Valor (R$) *"
+            type="number"
+            min="0"
+            step="0.01"
+            value={form.amount}
+            onChange={(v) => update("amount", v)}
+          />
+          <SelectField
+            label="Frequência *"
+            value={form.frequency}
+            onChange={(v) => update("frequency", v)}
+            options={[
+              { value: "monthly", label: "Mensal" },
+              { value: "yearly", label: "Anual" },
+            ]}
+          />
+        </div>
+
+        {form.frequency === "monthly" && (
+          <>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.as_template}
+                onChange={(e) => update("as_template", e.target.checked)}
+              />
+              Gerar automaticamente todo mês (recorrente indefinido)
+            </label>
+            {!form.as_template && (
+              <FormField
+                label="Nº parcelas *"
+                type="number"
+                min="1"
+                value={form.parcelas}
+                onChange={(v) => update("parcelas", v)}
+              />
+            )}
+          </>
+        )}
+
+        {form.frequency === "yearly" && (
+          <SelectField
+            label="Mês do vencimento *"
+            value={form.due_month}
+            onChange={(v) => update("due_month", v)}
+            options={Array.from({ length: 12 }, (_, i) => {
+              const v = String(i + 1).padStart(2, "0");
+              return { value: v, label: v };
+            })}
+          />
+        )}
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField
+            label="Dia de vencimento *"
+            type="number"
+            min="1"
+            max="28"
+            value={form.due_day}
+            onChange={(v) => update("due_day", v)}
+          />
+          <CostCenterField
+            value={form.cost_center}
+            onChange={(v) => update("cost_center", v)}
+          />
+        </div>
+
+        <CategoryField
+          value={form.category}
+          onChange={(v) => update("category", v)}
+          categories={categories}
+        />
+
+        <p className="text-xs text-[var(--p-text-faint)]">
+          {form.frequency === "yearly" ? (
+            <>
+              Gera 1 receita anual com vencimento em{" "}
+              {String(form.due_day).padStart(2, "0")}/{form.due_month}/
+              {String(ym).slice(0, 4)}.
+            </>
+          ) : form.as_template ? (
+            <>
+              Gerará automaticamente 1 receita por mês (dia{" "}
+              {String(form.due_day).padStart(2, "0")}) a partir de {ym}.
+            </>
+          ) : (
+            <>
+              Gera {form.parcelas || 1} receita(s) mensal(is) a partir de{" "}
+              {ym}.
+            </>
+          )}
         </p>
+
+        <ModalActions
+          onCancel={onClose}
+          submitting={saving}
+          submitLabel="Cadastrar"
+        />
+      </form>
+    </AppModal>
+  );
+}
+
+// ─── Modal: Editar receita ───────────────────────────────────────
+function EditRevenueModal({ row, categories, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    title: row.title || "",
+    amount: String(row.amount ?? ""),
+    due_date: (row.due_date || "").slice(0, 10),
+    category: row.category || "",
+    cost_center: row.cost_center || "extra",
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  function update(k, v) {
+    setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    if (!form.title.trim()) return setErr("Título é obrigatório");
+    try {
+      setSaving(true);
+      await financeGateway.updateOtherRevenue(row.id, {
+        title: form.title.trim(),
+        amount: Number(form.amount || 0),
+        due_date: form.due_date ? form.due_date.slice(0, 10) : null,
+        category: form.category || null,
+        cost_center: form.cost_center || "extra",
+      });
+      await onSaved();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AppModal
+      title="Editar receita"
+      onClose={saving ? () => {} : onClose}
+      maxWidth="lg"
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <FormField
+          label="Descrição *"
+          value={form.title}
+          onChange={(v) => update("title", v)}
+          autoFocus
+        />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField
+            label="Valor (R$) *"
+            type="number"
+            min="0"
+            step="0.01"
+            value={form.amount}
+            onChange={(v) => update("amount", v)}
+          />
+          <FormField
+            label="Vencimento"
+            type="date"
+            value={form.due_date}
+            onChange={(v) => update("due_date", v)}
+          />
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <CategoryField
+            value={form.category}
+            onChange={(v) => update("category", v)}
+            categories={categories}
+          />
+          <CostCenterField
+            value={form.cost_center}
+            onChange={(v) => update("cost_center", v)}
+          />
+        </div>
+        <ModalActions
+          onCancel={onClose}
+          submitting={saving}
+          submitLabel="Salvar"
+        />
+      </form>
+    </AppModal>
+  );
+}
+
+// ─── Helpers de form ─────────────────────────────────────────────
+function FormField({
+  label,
+  value,
+  type = "text",
+  onChange,
+  placeholder,
+  autoFocus,
+  min,
+  max,
+  step,
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-[var(--p-text-muted)]">
+        {label}
+      </span>
+      <input
+        type={type}
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        min={min}
+        max={max}
+        step={step}
+        className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+      />
+    </label>
+  );
+}
+
+function SelectField({ label, value, onChange, options }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-[var(--p-text-muted)]">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function CategoryField({ value, onChange, categories }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-[var(--p-text-muted)]">
+        Categoria
+      </span>
+      {categories?.length > 0 ? (
+        <select
+          value={value || ""}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+        >
+          <option value="">(sem categoria)</option>
+          {categories.map((c) => (
+            <option key={c.id ?? c.name} value={c.name}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Ex.: Taxa de matrícula"
+          className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+        />
       )}
-      {p.total > 1 && (
-        <p className="text-slate-600">
-          Se optar por cancelar a série a partir desta, serão afetadas {future} parcela(s) pendentes.
-        </p>
-      )}
-      <p className="text-slate-600">Escolha abaixo a ação desejada.</p>
-    </div>
+    </label>
+  );
+}
+
+function CostCenterField({ value, onChange }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-[var(--p-text-muted)]">
+        Centro de custo
+      </span>
+      <div className="flex gap-1">
+        {[
+          { v: "extra", label: "Extra" },
+          { v: "PJ", label: "PJ" },
+          { v: "PF", label: "PF" },
+        ].map((opt) => {
+          const active = value === opt.v;
+          return (
+            <button
+              key={opt.v}
+              type="button"
+              onClick={() => onChange(opt.v)}
+              className={[
+                "flex-1 rounded-lg border px-3 py-2 text-sm transition-colors",
+                active
+                  ? "border-[var(--p-primary)] bg-[var(--p-primary-50)] text-[var(--p-primary)] font-medium"
+                  : "border-[var(--p-border)] bg-[var(--p-surface)] text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]",
+              ].join(" ")}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+    </label>
   );
 }
