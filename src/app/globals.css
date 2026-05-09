@@ -40,10 +40,10 @@
   background-color: var(--fix-primary-600);
 }
 
-/* === Design tokens do redesign (promovidos do /preview) ===
+/* === Design tokens do app (paleta refinada) ===
    Mantém tons coerentes com a paleta Fix mas com superfícies/bordas
-   mais sofisticadas. Aplicados globalmente para que componentes
-   migrados do /preview continuem funcionando. */
+   mais sofisticadas. Aplicados globalmente; consumidos pelo AppShell
+   e pelas páginas (sidebar, cards, chips, KPIs). */
 :root {
   /* Brand */
   --p-primary:        var(--fix-primary);
@@ -88,7 +88,7 @@
   --p-radius-xl: 20px;
 }
 
-/* Helpers globais (escopo removido — antes eram .preview-root .p-*) */
+/* Helpers globais .p-* (cards, botões, chips, KPI) */
 .p-card {
   background: var(--p-surface);
   border: 1px solid var(--p-border);

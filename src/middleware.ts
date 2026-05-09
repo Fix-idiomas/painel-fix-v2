@@ -12,16 +12,6 @@ import { createMiddlewareClient } from '@supabase/auth-helpers-nextjs';
 // Rotas de debug/dev que não devem ser acessíveis em produção.
 const DEV_ONLY_PREFIXES = ['/debug-jwt', '/debug-payments', '/debug/', '/dev/'];
 
-// Rotas de preview (redesign) — em produção, liberadas apenas para emails da allowlist.
-const PREVIEW_PREFIXES = ['/preview/', '/preview'];
-const PREVIEW_ALLOWED_EMAILS = new Set([
-  'vini.penteado.n@gmail.com',
-  'brunomesmo@hotmail.com',
-  'prafalarcombruno@gmail.com',
-  'bcsmonteiro@unifesp.br',
-  'bruno@fixidiomas.com.br',
-]);
-
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
   const { pathname } = req.nextUrl;
@@ -44,15 +34,6 @@ export async function middleware(req: NextRequest) {
   const {
     data: { session },
   } = await supabase.auth.getSession();
-
-  // /preview/* em produção: só libera para emails da allowlist (valida via sessão).
-  const isPreviewPath = PREVIEW_PREFIXES.some((p) => pathname === p || pathname.startsWith(p));
-  if (process.env.NODE_ENV === 'production' && isPreviewPath) {
-    const email = session?.user?.email?.toLowerCase() || '';
-    if (!email || !PREVIEW_ALLOWED_EMAILS.has(email)) {
-      return new NextResponse(null, { status: 404 });
-    }
-  }
 
   // Público (acesso livre)
   const isPublic =
