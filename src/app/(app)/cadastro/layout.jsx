@@ -17,12 +17,12 @@ export default function CadastroLayout({ children }) {
         // return !!canReg || !!isOwner;
       }}
       fallback={
-        <main className="p-6">
-          <h1 className="text-2xl font-semibold text-slate-900 mb-2">Acesso negado</h1>
-          <p className="text-sm text-slate-600">
+        <div className="space-y-2 p-6">
+          <h1 className="text-xl font-semibold">Acesso negado</h1>
+          <p className="text-sm text-[var(--p-text-muted)]">
             Você não tem permissão para visualizar <b>Cadastros</b> desta escola.
           </p>
-        </main>
+        </div>
       }
     >
       {children}
