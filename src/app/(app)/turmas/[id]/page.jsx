@@ -1,18 +1,33 @@
 "use client";
 
-import { useEffect, useMemo, useState, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import Modal from "@/components/Modal";
-import { financeGateway } from "@/lib/financeGateway";
-// ⚠️ Ajuste esta importação conforme seu SessionContext exporta:
-// Se você tiver um hook `useSession()`, use assim. Se exporta o próprio contexto,
-// troque para useContext(SessionContext).
 import { useSession } from "@/contexts/SessionContext";
-import { useSearchParams } from "next/navigation";
+import { financeGateway } from "@/lib/financeGateway";
+import AppModal, {
+  FormError,
+  ModalActions,
+  ConfirmDeleteModal,
+} from "@/components/AppModal";
+import {
+  ArrowLeft,
+  Users,
+  UsersRound,
+  BookOpen,
+  Calendar,
+  Clock,
+  Pencil,
+  Plus,
+  Trash2,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  BarChart3,
+  TrendingUp,
+} from "lucide-react";
 
-
-
+// ─── Helpers ──────────────────────────────────────────────────────
 const WEEKDAYS = [
   { value: "1", label: "Segunda" },
   { value: "2", label: "Terça" },
@@ -22,43 +37,67 @@ const WEEKDAYS = [
   { value: "6", label: "Sábado" },
   { value: "0", label: "Domingo" },
 ];
-const labelWeekday = (n) => {
-  const found = WEEKDAYS.find((w) => Number(w.value) === Number(n));
-  return found ? found.label : "—";
-};
+const WEEKDAY_ABBR = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 
-const fmtBR = (s) => {
-  if (!s) return "-";
+const AVATAR_PALETTE = [
+  "#8B1C2C", "#E94F37", "#0F766E", "#D97706", "#1E40AF",
+  "#7C3AED", "#BE123C", "#0891B2", "#15803D", "#9333EA", "#DC2626", "#059669",
+];
+function colorFor(name) {
+  const s = String(name || "");
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
+}
+
+function fmtBR(s) {
+  if (!s) return "—";
   const str = String(s);
-  const input = str.length <= 10 ? `${str}T00:00:00` : str; // só adiciona hora se vier só a data
+  const input = str.length <= 10 ? `${str}T00:00:00` : str;
   const d = new Date(input);
-  return Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString("pt-BR");
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("pt-BR");
+}
+function fmtBR_long(s) {
+  if (!s) return "—";
+  const str = String(s);
+  const input = str.length <= 10 ? `${str}T00:00:00` : str;
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("pt-BR", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+function fmtNum(n) {
+  return (Number(n) || 0).toLocaleString("pt-BR", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 2,
+  });
+}
+
+const formatScheduleLine = (rule) => {
+  if (!rule) return null;
+  const wd = Number.isInteger(rule.weekday)
+    ? WEEKDAY_ABBR[rule.weekday]
+    : "?";
+  const t = String(rule.time || "").slice(0, 5) || "—";
+  const dur = Number(rule.duration_hours || 0);
+  const mins = dur > 0 ? ` · ${Math.round(dur * 60)}min` : "";
+  return `${wd} ${t}${mins}`;
 };
-const fmtNum = (n) =>
-  (Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
-// mês atual no formato yyyy-mm para o link do relatório
-const ym = new Date().toISOString().slice(0, 7);
 
-const fmtDuration = (h) =>
-  Number(h || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-
-const describeRule = (r) => {
-  const w = r.weekday === 0 || r.weekday ? labelWeekday(r.weekday) : "—";
-  const hhmm = r.time ? `às ${r.time}` : "";
-  const dur = r.duration_hours ? ` • ${fmtDuration(r.duration_hours)}h` : "";
-  return `${w} ${hhmm}${dur}`.trim();
-};
-
-// Helpers RBAC
 const norm = (v) => (v === undefined || v === null ? "" : String(v));
+const ymCurrent = new Date().toISOString().slice(0, 7);
 
+// ─── Página ──────────────────────────────────────────────────────
 export default function TurmaDetailPage() {
-const router = useRouter();
-const search = useSearchParams();
-const params = useParams();
-const turmaId = Array.isArray(params?.id) ? params.id[0] : params?.id;
+  const router = useRouter();
+  const search = useSearchParams();
+  const params = useParams();
+  const turmaId = Array.isArray(params?.id) ? params.id[0] : params?.id;
 
-  // --- Sessão / RBAC ---
   const sessionCtx = useSession?.() ?? {};
   const session = sessionCtx.session ?? sessionCtx;
   const ready = sessionCtx.ready ?? true;
@@ -72,39 +111,30 @@ const turmaId = Array.isArray(params?.id) ? params.id[0] : params?.id;
   const [allStudents, setAllStudents] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // ---- turma (somente admin/financeiro)
-  const [openEdit, setOpenEdit] = useState(false);
-  const [savingEdit, setSavingEdit] = useState(false);
-  const [formTurma, setFormTurma] = useState({
-    name: "",
-    teacher_id: "",
-    capacity: 20,
-    meeting_rules: [],
-  });
+  // Modais
+  const [editTurmaOpen, setEditTurmaOpen] = useState(false);
+  const [sessionTarget, setSessionTarget] = useState(undefined); // null=novo, obj=edit, undefined=fechado
+  const [sessionPrefill, setSessionPrefill] = useState(null); // prefill via query
+  const [removeMemberTarget, setRemoveMemberTarget] = useState(null);
+  const [deleteSessionTarget, setDeleteSessionTarget] = useState(null);
 
-  // ---- sessão (professor pode criar/editar)
-  const [openSess, setOpenSess] = useState(false);
-  const [savingSess, setSavingSess] = useState(false);
-  const [editingSessId, setEditingSessId] = useState(null);
-  const [formSess, setFormSess] = useState({ date: "", notes: "", duration_hours: "0.5" });
-  const [attendanceDraft, setAttendanceDraft] = useState([]); // [{student_id, name, present, note}]
-  const [allPresent, setAllPresent] = useState(false);
-
-
-
-
-  // ---- membros (somente admin/financeiro)
+  // Add member
   const [addStudentId, setAddStudentId] = useState("");
+  const [addingMember, setAddingMember] = useState(false);
 
-  // Tenta obter um teacherId efetivo para professor
+  // Auto-open from agenda redirect (?modal=criar&date=...&duration_hours=...&notes=...)
+  const openOnceRef = useRef(false);
+
+  // Effective teacher id (RBAC professor)
   const effectiveTeacherId = useMemo(() => {
     if (!isProfessor) return null;
     if (teacherId) return norm(teacherId);
-    // inferir por user_id
-    const byUser = teachers.find((t) => norm(t.user_id ?? t.userId) === norm(session?.userId));
+    const byUser = teachers.find(
+      (t) => norm(t.user_id ?? t.userId) === norm(session?.userId)
+    );
     if (byUser?.id) return norm(byUser.id);
-    // fallback por nome
     const byName = teachers.find(
       (t) => (t.name || "").trim() === (session?.name || "").trim()
     );
@@ -112,75 +142,33 @@ const turmaId = Array.isArray(params?.id) ? params.id[0] : params?.id;
     return null;
   }, [isProfessor, teacherId, teachers, session?.userId, session?.name]);
 
-const openOnceRef = useRef(false);
-
-useEffect(() => {
-  const wantsNew = search?.get("modal") === "criar";
-  // Aguarda: query presente + membros carregados + ainda não abriu
-  if (!wantsNew || openOnceRef.current || !Array.isArray(members) || members.length === 0) return;
-
-  const dateQS  = (search.get("date") || "").slice(0, 10);
-  const durQS   = Number(search.get("duration_hours"));
-  const notesQS = search.get("notes") || "";
-
-  const duration_hours =
-    Number.isFinite(durQS) && durQS >= 0.5
-      ? durQS
-      : Number(turma?.meeting_duration_default ?? 0.5);
-
-  // 1) Draft de presença baseado nos membros já carregados
-  //    (cada aluno começa sem presença marcada e sem nota individual)
-  setAttendanceDraft(
-    members.map((m) => ({
-      student_id: m.id,
-      name: m.name,
-      present: false,
-      note: "",
-    }))
-  );
-
-  // 2) Prefill do formulário da sessão
-  setEditingSessId(null);
-  setFormSess({
-    date: dateQS,
-    notes: notesQS,
-    duration_hours: String(duration_hours),
-  });
-
-  // 3) Abre o modal
-  setOpenSess(true);
-  openOnceRef.current = true;
-
-  // 4) Limpa a query para não reabrir em refresh/back
-  const url = new URL(window.location.href);
-  ["modal", "date", "duration_hours", "notes"].forEach((k) => url.searchParams.delete(k));
-  window.history.replaceState({}, "", url);
-}, [search, turma?.meeting_duration_default, members]);
-
   async function loadAll() {
-    setLoading(true);
-
-    const [turmas, ths, mbs, studs, sess] = await Promise.all([
-      financeGateway.listTurmas(),
-      financeGateway.listTeachers(),
-      financeGateway.listTurmaMembers(turmaId),
-      financeGateway.listStudents(),
-      financeGateway.listSessions(turmaId),
-    ]);
-
-    const t = turmas.find((x) => x.id === turmaId);
-    if (!t) {
-      alert("Turma não encontrada.");
-      router.push("/turmas");
-      return;
+    try {
+      setLoading(true);
+      setError(null);
+      const [turmas, ths, mbs, studs, sess] = await Promise.all([
+        financeGateway.listTurmas(),
+        financeGateway.listTeachers(),
+        financeGateway.listTurmaMembers(turmaId),
+        financeGateway.listStudents(),
+        financeGateway.listSessions(turmaId),
+      ]);
+      const t = turmas.find((x) => x.id === turmaId);
+      if (!t) {
+        setError("Turma não encontrada.");
+        setTimeout(() => router.push("/turmas"), 1200);
+        return;
+      }
+      setTurma(t);
+      setTeachers(ths);
+      setMembers(mbs);
+      setAllStudents(studs);
+      setSessions(Array.isArray(sess) ? sess : []);
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setLoading(false);
     }
-
-    setTurma(t);
-    setTeachers(ths);
-    setMembers(mbs);
-    setAllStudents(studs);
-    setSessions(sess);
-    setLoading(false);
   }
 
   useEffect(() => {
@@ -189,18 +177,54 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, turmaId]);
 
-  // Se professor tentar abrir turma que não é dele, bloqueia
+  // RBAC: professor não pode abrir turma alheia
   useEffect(() => {
     if (!ready || !isProfessor || !turma) return;
-    if (!effectiveTeacherId) return; // Mostramos aviso na UI; sem teacherId efetivo, não dá para validar
-    if (norm(turma.teacher_id ?? turma.teacherId) !== effectiveTeacherId) {
+    if (!effectiveTeacherId) return;
+    if (
+      norm(turma.teacher_id ?? turma.teacherId) !== effectiveTeacherId
+    ) {
       alert("Você não tem acesso a esta turma.");
       router.replace("/turmas");
     }
   }, [ready, isProfessor, turma, effectiveTeacherId, router]);
 
+  // Auto-open Nova sessão via query (vindo da Agenda)
+  useEffect(() => {
+    const wantsNew = search?.get("modal") === "criar";
+    if (
+      !wantsNew ||
+      openOnceRef.current ||
+      !Array.isArray(members) ||
+      members.length === 0
+    )
+      return;
+    const dateQS = (search.get("date") || "").slice(0, 10);
+    const durQS = Number(search.get("duration_hours"));
+    const notesQS = search.get("notes") || "";
+    const duration =
+      Number.isFinite(durQS) && durQS >= 0.5
+        ? durQS
+        : Number(turma?.meeting_duration_default ?? 0.5);
+
+    setSessionPrefill({
+      date: dateQS,
+      notes: notesQS,
+      duration_hours: duration,
+    });
+    setSessionTarget(null);
+    openOnceRef.current = true;
+
+    // limpa query
+    const url = new URL(window.location.href);
+    ["modal", "date", "duration_hours", "notes"].forEach((k) =>
+      url.searchParams.delete(k)
+    );
+    window.history.replaceState({}, "", url);
+  }, [search, turma?.meeting_duration_default, members]);
+
   const teacherName = useMemo(() => {
-    if (!turma?.teacher_id) return "—";
+    if (!turma?.teacher_id) return "Sem professor";
     return teachers.find((t) => t.id === turma.teacher_id)?.name || "—";
   }, [teachers, turma]);
 
@@ -208,275 +232,221 @@ useEffect(() => {
     const inTurma = new Set(members.map((m) => m.id));
     return allStudents
       .filter((s) => s.status === "ativo" && !inTurma.has(s.id))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }, [allStudents, members]);
 
-  // turma (somente admin/financeiro)
-  function openEditTurma() {
-    if (isProfessor) return; // RBAC
-    setFormTurma({
-      name: turma?.name || "",
-      teacher_id: turma?.teacher_id || "",
-      capacity: turma?.capacity || 20,
-      meeting_rules: Array.isArray(turma?.meeting_rules)
-        ? turma.meeting_rules.map((r) => ({
-            weekday: r.weekday === 0 || r.weekday ? String(r.weekday) : "",
-            time: r.time || "",
-            duration_hours: String(r.duration_hours ?? "0.5"),
-          }))
-        : [],
-    });
-    setOpenEdit(true);
-  }
-  function closeEditTurma() {
-    if (savingEdit) return;
-    setOpenEdit(false);
-  }
-  async function onSubmitTurma(e) {
-    e?.preventDefault?.();
-    if (isProfessor) return; // RBAC
-    try {
-      setSavingEdit(true);
-      await financeGateway.updateTurma(turma.id, {
-        name: (formTurma.name || "").trim(),
-        teacher_id: formTurma.teacher_id || null,
-        capacity: Number(formTurma.capacity || 20),
-        meeting_rules: (formTurma.meeting_rules || []).map((r) => ({
-          weekday: r.weekday === "" ? null : Number(r.weekday),
-          time: r.time || null,
-          duration_hours: Number(r.duration_hours || 0.5),
-        })),
-      });
-      setOpenEdit(false);
-      await loadAll();
-    } catch (e) {
-      alert(e.message || String(e));
-    } finally {
-      setSavingEdit(false);
-    }
-  }
+  // Stats
+  const stats = useMemo(() => {
+    const monthSessions = sessions.filter((s) =>
+      String(s.date || "").startsWith(ymCurrent)
+    );
+    const withAttendance = sessions.filter((s) => s.has_attendance).length;
+    const attendancePct =
+      sessions.length > 0
+        ? Math.round((withAttendance / sessions.length) * 100)
+        : null;
+    return {
+      total: members.length,
+      capacity: Number(turma?.capacity || 0),
+      sessionsTotal: sessions.length,
+      sessionsThisMonth: monthSessions.length,
+      attendancePct,
+    };
+  }, [members, turma, sessions]);
 
-  // sessão (professor pode criar/editar)
-  function computeAllPresent(arr) {
-    if (!arr || arr.length === 0) return false;
-    return arr.every((r) => !!r.present);
-  }
-  function recomputeAllPresentFromDraft(nextDraft) {
-    setAllPresent(nextDraft.length > 0 && nextDraft.every((r) => !!r.present));
-  }
-  function openCreateSession() {
-  setEditingSessId(null);
-
-  // ↓ Horário padrão da turma (se houver): meeting_time OU primeiro meeting_rules[].time
-  const ruleTime =
-    Array.isArray(turma?.meeting_rules)
-      ? (turma.meeting_rules.find((r) => r && r.time)?.time || "")
-      : "";
-  const defaultTime = (turma?.meeting_time || ruleTime || "").trim(); // "HH:mm" ou ""
-
-  // Monta as notas com o horário (apenas se existir)
-  const baseNotes = "";
-  const notesWithTime = defaultTime
-    ? [baseNotes, `Horário padrão da turma: ${defaultTime}`].filter(Boolean).join("\n")
-    : baseNotes;
-
-  setFormSess({
-    date: "", // input date do modal continua aceitando YYYY-MM-DD
-    notes: notesWithTime,
-    duration_hours: String(turma?.meeting_duration_default ?? "0.5"),
-  });
-
-  // Preserva integralmente o draft de attendance e o fluxo de observações individuais
-  const draft = (members || []).map((m) => ({
-    student_id: m.id,
-    name: m.name,
-    present: false, // por padrão AUSENTE
-    note: "",
-  }));
-  setAttendanceDraft(draft);
-  setAllPresent(computeAllPresent(draft));
-  setOpenSess(true);
-}
-
-  async function openEditSession(s) {
-    setEditingSessId(s.id);
-    setFormSess({
-      date: s.date || "",
-      notes: s.notes || "",
-      duration_hours: String(s.duration_hours ?? "0.5"),
-    });
-    const rows = await financeGateway.listAttendance(s.id);
-    const byStu = new Map(rows.map((r) => [r.student_id, r]));
-    const draft = members.map((m) => ({
-      student_id: m.id,
-      name: m.name,
-      present: byStu.get(m.id)?.present ?? false,
-      note: byStu.get(m.id)?.note ?? "",
-    }));
-    setAttendanceDraft(draft);
-    setAllPresent(computeAllPresent(draft));
-    setOpenSess(true);
-  }
-  function closeSess() {
-    if (savingSess) return;
-    setOpenSess(false);
-  }
-  function setAllPresentValue(value) {
-    const next = !!value;
-    setAllPresent(next);
-    const draft = attendanceDraft.map((r) => ({ ...r, present: next }));
-    setAttendanceDraft(draft);
-  }
-  async function onSubmitSess(e) {
-    e?.preventDefault?.();
-    try {
-      setSavingSess(true);
-      if (!formSess.date) throw new Error("Data é obrigatória.");
-
-      const enrolledNow = members.filter((m) => m.status === "ativo").length;
-
-      const payload = {
-        date: formSess.date,
-        notes: formSess.notes,
-        duration_hours: Number(formSess.duration_hours || 0.5),
-        headcount_snapshot: enrolledNow,
-      };
-
-      let sessionId = editingSessId;
-      if (editingSessId) {
-        await financeGateway.updateSession(editingSessId, payload);
-      } else {
-        const created = await financeGateway.createSession({
-          turma_id: turma.id,
-          ...payload,
-        });
-        sessionId = created?.id;
-      }
-
-      if (!sessionId) throw new Error("Falha ao obter o ID da sessão.");
-      for (const row of attendanceDraft) {
-        await financeGateway.upsertAttendance(sessionId, row.student_id, {
-          present: !!row.present,
-          note: row.note || "",
-        });
-      }
-
-      setOpenSess(false);
-      await loadAll();
-    } catch (e) {
-      alert(e.message || String(e));
-    } finally {
-      setSavingSess(false);
-    }
-  }
-  async function onDeleteSess(s) {
-    if (!confirm(`Excluir sessão de ${fmtBR(s.date)}?`)) return;
-    await financeGateway.deleteSession(s.id);
-    await loadAll();
-  }
-
-  // membros (somente admin/financeiro)
+  // Ações de membros
   async function onAddMember() {
-    if (isProfessor) return; // RBAC
-    if (!addStudentId) return;
-    await financeGateway.addStudentToTurma(turma.id, addStudentId);
-    setAddStudentId("");
-    await loadAll();
-  }
-  async function onRemoveMember(student_id) {
-    if (isProfessor) return; // RBAC
-    if (!confirm("Remover aluno desta turma?")) return;
-    await financeGateway.removeStudentFromTurma(turma.id, student_id);
-    await loadAll();
+    if (!addStudentId || isProfessor) return;
+    try {
+      setAddingMember(true);
+      await financeGateway.addStudentToTurma(turma.id, addStudentId);
+      setAddStudentId("");
+      await loadAll();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setAddingMember(false);
+    }
   }
 
-  useEffect(() => {
-    router.replace(`/turmas/${turmaId}`, { scroll: false });
-  }, [search, router, turmaId]);
-
-  if (!ready) return <main className="p-6">Preparando sessão…</main>;
-  if (loading) return <main className="p-6">Carregando…</main>;
+  // ─── Render ────────────────────────────────────────────────────
+  if (!ready || loading) {
+    return (
+      <div className="flex items-center gap-2 p-6 text-sm text-[var(--p-text-muted)]">
+        <Loader2 className="h-4 w-4 animate-spin" />{" "}
+        {!ready ? "Preparando sessão…" : "Carregando turma…"}
+      </div>
+    );
+  }
+  if (error && !turma) {
+    return (
+      <div className="space-y-3">
+        <Link
+          href="/turmas"
+          className="inline-flex items-center gap-1.5 text-sm text-[var(--p-text-muted)] hover:text-[var(--p-text)]"
+        >
+          <ArrowLeft className="h-4 w-4" /> Voltar para turmas
+        </Link>
+        <div className="rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-4 py-3 text-sm text-[var(--p-danger)]">
+          {error}
+        </div>
+      </div>
+    );
+  }
   if (!turma) return null;
 
   const professorSemVinculo =
     isProfessor && !effectiveTeacherId && (teachers?.length ?? 0) > 0;
 
+  const sortedSessions = [...sessions].sort((a, b) =>
+    String(b.date || "").localeCompare(String(a.date || ""))
+  );
+
   return (
-    <main className="p-4 sm:p-6 space-y-8 overflow-x-hidden sm:overflow-x-visible">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
-        <div>
-          <h1 className="text-2xl font-bold">{turma.name}</h1>
+    <div className="space-y-6">
+      {/* Voltar */}
+      <Link
+        href="/turmas"
+        className="inline-flex items-center gap-1.5 text-sm text-[var(--p-text-muted)] hover:text-[var(--p-text)]"
+      >
+        <ArrowLeft className="h-4 w-4" /> Voltar para turmas
+      </Link>
 
-          {professorSemVinculo && (
-            <div className="mt-2 text-xs px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-200">
-              Professor sem vínculo detectado. Defina <code>session.teacherId</code> ou crie um
-              professor com <code>user_id</code> = <code>{session?.userId || "?"}</code> no mock.
+      {/* Header card */}
+      <div className="p-card overflow-hidden">
+        <div
+          className="h-1.5"
+          style={{ background: colorFor(turma.name) }}
+        />
+        <div className="p-5 md:p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="text-xs font-medium uppercase tracking-wider text-[var(--p-text-faint)]">
+                Turma
+              </div>
+              <h1 className="mt-0.5 text-2xl font-semibold tracking-tight truncate md:text-3xl">
+                {turma.name || "—"}
+              </h1>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span className="p-chip p-chip-neutral">
+                  <UsersRound className="h-3 w-3" /> Prof. {teacherName}
+                </span>
+                {Array.isArray(turma.meeting_rules) &&
+                  turma.meeting_rules.slice(0, 3).map((r, i) => (
+                    <span key={i} className="p-chip p-chip-neutral">
+                      <Clock className="h-3 w-3" /> {formatScheduleLine(r)}
+                    </span>
+                  ))}
+                {Array.isArray(turma.meeting_rules) &&
+                  turma.meeting_rules.length > 3 && (
+                    <span className="text-xs text-[var(--p-text-faint)]">
+                      +{turma.meeting_rules.length - 3} outros
+                    </span>
+                  )}
+              </div>
             </div>
-          )}
-
-          <div className="text-slate-600 mt-2 break-words">
-            Professor: <b>{teacherName}</b> • Capacidade: <b>{turma.capacity}</b> • Alunos:{" "}
-            <b>{members.length}</b>
-            <br className="hidden sm:block" />
-            Encontros:{" "}
-            <b>
-              {Array.isArray(turma.meeting_rules) && turma.meeting_rules.length > 0
-                ? turma.meeting_rules.map(describeRule).join("; ")
-                : "—"}
-            </b>
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href={`/relatorios/assiduidade?turma=${turma.id}&ym=${ymCurrent}`}
+                className="p-btn p-btn-ghost"
+              >
+                <BarChart3 className="h-4 w-4" />
+                <span>Relatório</span>
+              </Link>
+              {!isProfessor && (
+                <button
+                  onClick={() => setEditTurmaOpen(true)}
+                  className="p-btn p-btn-ghost"
+                >
+                  <Pencil className="h-4 w-4" />
+                  <span>Editar turma</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
-
-        <div className="flex gap-2 gap-y-2 flex-wrap sm:flex-nowrap sm:justify-end">
-          <button
-            onClick={() => router.push("/turmas")}
-            className="text-sm px-2 py-1.5 sm:px-3 sm:py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-          >
-            Voltar
-          </button>
-
-          {/* 🔒 Editar turma: apenas não-professor */}
-          {!isProfessor && (
-            <button
-              onClick={openEditTurma}
-              className="text-sm px-2 py-1.5 sm:px-3 sm:py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-            >
-              Editar turma
-            </button>
-          )}
-
-          {/* Relatório liberado para todos (se quiser restringir, mova para !isProfessor) */}
-          <Link
-            href={`/relatorios/assiduidade?turma=${turma.id}&ym=${ym}`}
-            className="text-sm px-2 py-1.5 sm:px-3 sm:py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-          >
-            Relatório
-          </Link>
-        </div>
       </div>
 
-      {/* Subnav sticky (anchors) */}
-      <div className="sticky top-0 z-20 bg-white/90 backdrop-blur border-b">
-        <div className="flex items-center gap-4 py-2 text-sm">
-          <a href="#alunos" className="px-2 py-1 rounded hover:bg-gray-100">Alunos</a>
-          <a href="#sessoes" className="px-2 py-1 rounded hover:bg-gray-100">Sessões</a>
+      {professorSemVinculo && (
+        <div className="rounded-lg border border-[var(--p-warning)]/30 bg-[var(--p-warning-50)] px-4 py-3 text-xs text-[var(--p-warning)]">
+          Sem professor vinculado à sessão. Defina <code>session.teacherId</code>{" "}
+          ou crie um professor com <code>user_id</code> ={" "}
+          <code>{session?.userId || "?"}</code>.
         </div>
-      </div>
+      )}
 
-      {/* Alunos (somente não-professor enxerga controles) */}
-      <section id="alunos" className="border rounded overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:p-4 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
-          <h2 className="font-semibold">Alunos da turma</h2>
+      {error && turma && (
+        <div className="rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-4 py-3 text-sm text-[var(--p-danger)]">
+          {error}
+        </div>
+      )}
 
-          {!isProfessor && (
-            <div className="flex gap-2">
+      {/* KPIs */}
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
+        <StatCard
+          icon={Users}
+          label="Alunos"
+          value={stats.total}
+          sub={
+            stats.capacity > 0 ? `de ${stats.capacity} vagas` : "sem capacidade"
+          }
+          tone="primary"
+        />
+        <StatCard
+          icon={Calendar}
+          label="Aulas registradas"
+          value={stats.sessionsTotal}
+          sub={`${stats.sessionsThisMonth} este mês`}
+          tone="success"
+        />
+        <StatCard
+          icon={TrendingUp}
+          label="Presença marcada"
+          value={
+            stats.attendancePct !== null
+              ? `${stats.attendancePct}%`
+              : "—"
+          }
+          sub={`em ${stats.sessionsTotal} aulas`}
+          tone={
+            stats.attendancePct === null
+              ? "neutral"
+              : stats.attendancePct >= 80
+              ? "success"
+              : stats.attendancePct >= 50
+              ? "warning"
+              : "danger"
+          }
+        />
+        <StatCard
+          icon={BookOpen}
+          label="Encontros/semana"
+          value={
+            Array.isArray(turma.meeting_rules)
+              ? turma.meeting_rules.length
+              : 0
+          }
+          sub="recorrência semanal"
+          tone="neutral"
+        />
+      </section>
+
+      {/* Alunos */}
+      <section id="alunos" className="p-card overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-[var(--p-border)] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-[var(--p-text-muted)]" />
+            <h2 className="text-sm font-semibold">Alunos da turma</h2>
+            <span className="p-chip p-chip-neutral">{members.length}</span>
+          </div>
+          {!isProfessor && candidates.length > 0 && (
+            <div className="flex items-center gap-2">
               <select
                 value={addStudentId}
                 onChange={(e) => setAddStudentId(e.target.value)}
-                className="border border-gray-200 rounded px-3 py-2 min-w-[260px] bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-200"
+                className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40 sm:w-64"
               >
-                <option value="">— adicionar aluno (somente ativos) —</option>
+                <option value="">— selecionar aluno —</option>
                 {candidates.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -485,498 +455,721 @@ useEffect(() => {
               </select>
               <button
                 onClick={onAddMember}
-                className="px-3 py-2 rounded border border-gray-200 bg-white text-gray-800 hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-200 transition-colors shadow-sm"
+                disabled={!addStudentId || addingMember}
+                className="p-btn p-btn-primary"
               >
-                Adicionar
+                {addingMember ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="h-4 w-4" />
+                )}
+                <span className="hidden sm:inline">Adicionar</span>
               </button>
             </div>
           )}
         </div>
 
         {members.length === 0 ? (
-          <div className="p-4">Nenhum aluno nesta turma.</div>
+          <div className="px-5 py-12 text-center text-sm text-[var(--p-text-muted)]">
+            Nenhum aluno nesta turma.
+          </div>
         ) : (
-          <>
-            {/* Mobile cards */}
-            <div className="sm:hidden divide-y">
-              {members.map((m) => (
-                <div key={m.id} className="p-3 flex items-center justify-between gap-3">
-                  <div>
-                    <div className="font-medium">{m.name}</div>
-                    <div className="text-xs text-slate-600">{m.status}</div>
+          <ul className="divide-y divide-[var(--p-border)]">
+            {members.map((m) => (
+              <li
+                key={m.id}
+                className="flex items-center justify-between gap-3 px-5 py-3"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
+                    style={{ background: colorFor(m.name) }}
+                  >
+                    {String(m.name || "?").slice(0, 1).toUpperCase()}
                   </div>
-                  {!isProfessor && (
-                    <button
-                      onClick={() => onRemoveMember(m.id)}
-                      className="px-2 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
-                    >
-                      Remover
-                    </button>
-                  )}
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium truncate">{m.name}</div>
+                    <div className="text-[11px] text-[var(--p-text-muted)]">
+                      {m.status === "ativo" ? "Ativo" : m.status || "—"}
+                    </div>
+                  </div>
                 </div>
-              ))}
-            </div>
-
-            {/* Desktop table */}
-            <div className="hidden sm:block overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="sticky top-0 z-10 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
-                  <tr>
-                    <Th>Aluno</Th>
-                    <Th>Status</Th>
-                    {!isProfessor && <Th>Ações</Th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {members.map((m) => (
-                    <tr key={m.id} className="border-t odd:bg-gray-50">
-                      <Td>{m.name}</Td>
-                      <Td>{m.status}</Td>
-                      {!isProfessor && (
-                        <Td className="py-2">
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => onRemoveMember(m.id)}
-                              className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
-                            >
-                              Remover
-                            </button>
-                          </div>
-                        </Td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
+                {!isProfessor && (
+                  <button
+                    onClick={() => setRemoveMemberTarget(m)}
+                    className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                    aria-label="Remover"
+                    title="Remover da turma"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
         )}
       </section>
 
       {/* Sessões */}
-      <section id="sessoes" className="border rounded overflow-hidden">
-        <div className="flex items-center justify-between p-3 sm:p-4 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
-          <h2 className="font-semibold">Aulas / Sessões</h2>
+      <section id="sessoes" className="p-card overflow-hidden">
+        <div className="flex items-center justify-between border-b border-[var(--p-border)] px-5 py-4">
+          <div className="flex items-center gap-2">
+            <Calendar className="h-4 w-4 text-[var(--p-text-muted)]" />
+            <h2 className="text-sm font-semibold">Aulas / Sessões</h2>
+            <span className="p-chip p-chip-neutral">{sessions.length}</span>
+          </div>
           <button
-            onClick={openCreateSession}
-            className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
+            onClick={() => {
+              setSessionPrefill(null);
+              setSessionTarget(null);
+            }}
+            className="p-btn p-btn-primary"
           >
-            + Criar sessão
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">Nova sessão</span>
+            <span className="sm:hidden">Nova</span>
           </button>
         </div>
 
-        {sessions.length === 0 ? (
-          <div className="p-4">Nenhuma sessão cadastrada.</div>
+        {sortedSessions.length === 0 ? (
+          <div className="px-5 py-12 text-center text-sm text-[var(--p-text-muted)]">
+            Nenhuma sessão cadastrada.
+          </div>
         ) : (
-          <>
-            {/* Mobile cards */}
-            <div className="sm:hidden divide-y">
-              {sessions.map((s) => (
-                <div key={s.id} className="p-3 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <div className="font-medium">{fmtBR(s.date)}</div>
-                    <div className="text-xs text-slate-600">{fmtNum(s.duration_hours)} h</div>
-                  </div>
-                  <div className="text-sm text-slate-700">
-                    {s.notes || "—"}
-                  </div>
-                  <div className="pt-2 flex gap-2">
-                    <button
-                      onClick={() => openEditSession(s)}
-                      className="px-3 py-1.5 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-                    >
-                      Abrir / Editar
-                    </button>
-                    <button
-                      onClick={() => onDeleteSess(s)}
-                      className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
-                    >
-                      Excluir
-                    </button>
-                  </div>
+          <ul className="divide-y divide-[var(--p-border)]">
+            {sortedSessions.map((s) => (
+              <li
+                key={s.id}
+                className="flex items-start gap-3 px-5 py-3 hover:bg-[var(--p-surface-2)]"
+              >
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[var(--p-primary-50)] text-[var(--p-primary)]">
+                  <Calendar className="h-4 w-4" />
                 </div>
-              ))}
-            </div>
-
-            {/* Desktop table */}
-            <div className="hidden sm:block overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="sticky top-0 z-10 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
-                  <tr>
-                    <Th>Data</Th>
-                    <Th>Duração (h)</Th>
-                    <Th>Resumo</Th>
-                    <Th>Ações</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sessions.map((s) => (
-                    <tr key={s.id} className="border-t odd:bg-gray-50">
-                      <Td>{fmtBR(s.date)}</Td>
-                      <Td>{fmtNum(s.duration_hours)}</Td>
-                      <Td>{s.notes || "—"}</Td>
-                      <Td className="py-2">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => openEditSession(s)}
-                            className="px-3 py-1.5 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm"
-                          >
-                            Abrir / Editar
-                          </button>
-                          <button
-                            onClick={() => onDeleteSess(s)}
-                            className="px-3 py-1.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 transition-colors shadow-sm"
-                          >
-                            Excluir
-                          </button>
-                        </div>
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-medium">{fmtBR(s.date)}</div>
+                    <span className="text-xs text-[var(--p-text-muted)]">
+                      · {fmtNum(s.duration_hours)}h
+                    </span>
+                    {s.has_attendance ? (
+                      <span className="p-chip p-chip-success">
+                        <CheckCircle2 className="h-3 w-3" /> Presença
+                      </span>
+                    ) : (
+                      <span className="p-chip p-chip-warning">
+                        Sem presença
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-[var(--p-text-muted)]">
+                    {fmtBR_long(s.date)}
+                  </div>
+                  {s.notes && (
+                    <div className="mt-1 text-xs text-[var(--p-text-muted)] line-clamp-2">
+                      {s.notes}
+                    </div>
+                  )}
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <button
+                    onClick={() => setSessionTarget(s)}
+                    className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)] hover:text-[var(--p-text)]"
+                    aria-label="Editar"
+                    title="Abrir / Editar"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => setDeleteSessionTarget(s)}
+                    className="rounded p-1.5 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                    aria-label="Excluir"
+                    title="Excluir"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
       </section>
 
-      {/* MODAL: Editar Turma (somente não-professor) */}
-      {!isProfessor && (
-        <Modal
-          open={openEdit}
-          onClose={closeEditTurma}
-          title="Editar turma"
-          footer={
-            <>
-              <button
-                onClick={closeEditTurma}
-                className="px-3 py-2 border rounded disabled:opacity-50"
-                disabled={savingEdit}
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={onSubmitTurma}
-                className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
-                disabled={savingEdit}
-              >
-                {savingEdit ? "Salvando…" : "Salvar"}
-              </button>
-            </>
-          }
-        >
-          <form onSubmit={onSubmitTurma} className="grid gap-3 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <label className="block text-sm mb-1">Nome*</label>
-              <input
-                value={formTurma.name}
-                onChange={(e) => setFormTurma((f) => ({ ...f, name: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm mb-1">Professor</label>
-              <select
-                value={formTurma.teacher_id}
-                onChange={(e) => setFormTurma((f) => ({ ...f, teacher_id: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-              >
-                <option value="">— sem professor —</option>
-                {teachers.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm mb-1">Capacidade</label>
-              <input
-                type="number"
-                min="1"
-                value={formTurma.capacity}
-                onChange={(e) => setFormTurma((f) => ({ ...f, capacity: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-              />
-            </div>
-
-            {/* Encontros (vários) */}
-            <div className="sm:col-span-2">
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-sm font-medium">Encontros na semana</label>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setFormTurma((f) => ({
-                      ...f,
-                      meeting_rules: [
-                        ...(f.meeting_rules || []),
-                        { weekday: "", time: "", duration_hours: "0.5" },
-                      ],
-                    }))
-                  }
-                  className="px-2 py-1 border rounded text-sm"
-                >
-                  + Adicionar encontro
-                </button>
-              </div>
-
-              {(formTurma.meeting_rules || []).length === 0 ? (
-                <div className="text-slate-500 text-sm">Nenhum encontro definido.</div>
-              ) : (
-                <div className="space-y-4">
-                  {(formTurma.meeting_rules || []).map((r, idx) => (
-                    <div key={idx} className="grid sm:grid-cols-4 gap-3 items-end border rounded p-3">
-                      {/* Dia */}
-                      <div>
-                        <label className="block text-xs mb-1">Dia da semana</label>
-                        <select
-                          value={r.weekday}
-                          onChange={(e) =>
-                            setFormTurma((f) => {
-                              const next = [...(f.meeting_rules || [])];
-                              next[idx] = { ...next[idx], weekday: e.target.value };
-                              return { ...f, meeting_rules: next };
-                            })
-                          }
-                          className="border rounded px-3 py-2 w-full"
-                        >
-                          <option value="">—</option>
-                          {WEEKDAYS.map((w) => (
-                            <option key={w.value} value={w.value}>
-                              {w.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Hora */}
-                      <div>
-                        <label className="block text-xs mb-1">Hora</label>
-                        <input
-                          type="time"
-                          value={r.time}
-                          onChange={(e) =>
-                            setFormTurma((f) => {
-                              const next = [...(f.meeting_rules || [])];
-                              next[idx] = { ...next[idx], time: e.target.value };
-                              return { ...f, meeting_rules: next };
-                            })
-                          }
-                          className="border rounded px-3 py-2 w-full"
-                        />
-                      </div>
-
-                      {/* Duração */}
-                      <div>
-                        <label className="block text-xs mb-1">Duração (h)</label>
-                        <select
-                          value={r.duration_hours}
-                          onChange={(e) =>
-                            setFormTurma((f) => {
-                              const next = [...(f.meeting_rules || [])];
-                              next[idx] = { ...next[idx], duration_hours: e.target.value };
-                              return { ...f, meeting_rules: next };
-                            })
-                          }
-                          className="border rounded px-3 py-2 w-full"
-                        >
-                          <option value="0.5">0,5</option>
-                          <option value="1">1,0</option>
-                          <option value="1.5">1,5</option>
-                          <option value="2">2,0</option>
-                        </select>
-                      </div>
-
-                      {/* Remover */}
-                      <div className="justify-end">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setFormTurma((f) => {
-                              const next = [...(f.meeting_rules || [])];
-                              next.splice(idx, 1);
-                              return { ...f, meeting_rules: next };
-                            })
-                          }
-                          className="px-3 py-2 border rounded"
-                          title="Remover"
-                        >
-                          Remover
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </form>
-        </Modal>
+      {/* Modais */}
+      {editTurmaOpen && !isProfessor && (
+        <EditTurmaModal
+          turma={turma}
+          teachers={teachers}
+          onClose={() => setEditTurmaOpen(false)}
+          onSaved={async () => {
+            setEditTurmaOpen(false);
+            await loadAll();
+          }}
+        />
       )}
 
-      {/* MODAL: Criar/Editar Sessão (UNIFICADO) */}
-      <Modal
-        open={openSess}
-        onClose={closeSess}
-        title={editingSessId ? "Editar sessão" : "Criar sessão"}
-        footer={
-          <>
-            <button
-              onClick={closeSess}
-              className="px-3 py-2 border rounded disabled:opacity-50"
-              disabled={savingSess}
-            >
-              Cancelar
-            </button>
-            <button
-              onClick={onSubmitSess}
-              className="px-3 py-2 border rounded bg-rose-600 text-white disabled:opacity-50"
-              disabled={savingSess}
-            >
-              {savingSess ? "Salvando…" : "Salvar"}
-            </button>
-          </>
-        }
-      >
-        <form onSubmit={onSubmitSess} className="grid gap-4">
-          {/* Geral */}
-          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-            <div className="sm:col-span-1">
-              <label className="block text-sm mb-1">Data*</label>
-              <input
-                type="date"
-                value={formSess.date}
-                onChange={(e) => setFormSess((f) => ({ ...f, date: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-                required
-              />
-            </div>
-            <div className="sm:col-span-1">
-              <label className="block text-sm mb-1">Duração (h)*</label>
-              <select
-                value={formSess.duration_hours}
-                onChange={(e) => setFormSess((f) => ({ ...f, duration_hours: e.target.value }))}
-                className="border rounded px-3 py-2 w-full"
-                required
-              >
-                <option value="0.5">0,5 h (30 min)</option>
-                <option value="1">1 h</option>
-                <option value="1.5">1,5 h</option>
-                <option value="2">2 h</option>
-              </select>
-            </div>
-            <div className="sm:col-span-2 md:col-span-1 flex flex-wrap items-end gap-2 justify-start md:justify-end">
-              <button
-                type="button"
-                onClick={() => setAllPresentValue(true)}
-                className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm shrink-0 w-44 text-center"
-                title="Marcar todos como presentes"
-              >
-                Todos presentes
-              </button>
-              <button
-                type="button"
-                onClick={() => setAllPresentValue(false)}
-                className="px-3 py-2 rounded border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 hover:border-gray-400 active:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300 transition-colors shadow-sm shrink-0 w-44 text-center"
-                title="Marcar todos como ausentes"
-              >
-                Todos ausentes
-              </button>
-            </div>
-          </div>
+      {sessionTarget !== undefined && (
+        <SessionFormModal
+          turma={turma}
+          members={members}
+          initial={sessionTarget}
+          prefill={sessionPrefill}
+          onClose={() => {
+            setSessionTarget(undefined);
+            setSessionPrefill(null);
+          }}
+          onSaved={async () => {
+            setSessionTarget(undefined);
+            setSessionPrefill(null);
+            await loadAll();
+          }}
+        />
+      )}
 
-          <div>
-            <label className="block text-sm mb-1">Resumo / Observação geral</label>
-            <textarea
-              value={formSess.notes}
-              onChange={(e) => setFormSess((f) => ({ ...f, notes: e.target.value }))}
-              className="border rounded px-3 py-2 w-full"
-              rows={4}
-            />
-          </div>
+      {removeMemberTarget && !isProfessor && (
+        <ConfirmDeleteModal
+          title="Remover aluno da turma"
+          itemName={removeMemberTarget.name}
+          description="O aluno deixa de estar vinculado à turma. Ele continua cadastrado no sistema."
+          onCancel={() => setRemoveMemberTarget(null)}
+          onConfirm={async () => {
+            await financeGateway.removeStudentFromTurma(
+              turma.id,
+              removeMemberTarget.id
+            );
+            setRemoveMemberTarget(null);
+            await loadAll();
+          }}
+        />
+      )}
 
-          {/* Individuais */}
-          {members.length === 0 ? (
-            <div className="p-2 text-slate-600">
-              Adicione alunos à turma para registrar presenças.
-            </div>
-          ) : (
-            <div className="border rounded overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="sticky top-0 z-10 bg-gradient-to-br from-[var(--fix-primary-700)] via-[var(--fix-primary-600)] to-[var(--fix-primary)] text-white">
-                  <tr>
-                    <Th>Aluno</Th>
-                    <Th>Presença</Th>
-                    <Th>Observação individual</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {attendanceDraft.map((row) => (
-                    <tr key={row.student_id} className="border-t">
-                      <Td className="whitespace-nowrap">{row.name}</Td>
-                      <Td>
-                        <div className="flex items-center gap-4">
-                          <label className="inline-flex items-center gap-2">
-                            <input
-                              type="radio"
-                              name={`presenca_${row.student_id}`}
-                              checked={!!row.present}
-                              onChange={() => {
-                                const next = attendanceDraft.map((x) =>
-                                  x.student_id === row.student_id ? { ...x, present: true } : x
-                                );
-                                setAttendanceDraft(next);
-                                recomputeAllPresentFromDraft(next);
-                              }}
-                            />
-                            <span>Presente</span>
-                          </label>
-                          <label className="inline-flex items-center gap-2">
-                            <input
-                              type="radio"
-                              name={`presenca_${row.student_id}`}
-                              checked={!row.present}
-                              onChange={() => {
-                                const next = attendanceDraft.map((x) =>
-                                  x.student_id === row.student_id ? { ...x, present: false } : x
-                                );
-                                setAttendanceDraft(next);
-                                recomputeAllPresentFromDraft(next);
-                              }}
-                            />
-                            <span>Ausente</span>
-                          </label>
-                        </div>
-                      </Td>
-                      <Td>
-                        <input
-                          value={row.note || ""}
-                          onChange={(e) => {
-                            const next = attendanceDraft.map((x) =>
-                              x.student_id === row.student_id ? { ...x, note: e.target.value } : x
-                            );
-                            setAttendanceDraft(next);
-                          }}
-                          className="border rounded px-3 py-2 w-full"
-                          placeholder="Observação pessoal (opcional)"
-                        />
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </form>
-      </Modal>
-    </main>
+      {deleteSessionTarget && (
+        <ConfirmDeleteModal
+          title="Excluir sessão"
+          itemName={fmtBR(deleteSessionTarget.date)}
+          description="As presenças desta sessão também serão removidas."
+          onCancel={() => setDeleteSessionTarget(null)}
+          onConfirm={async () => {
+            await financeGateway.deleteSession(deleteSessionTarget.id);
+            setDeleteSessionTarget(null);
+            await loadAll();
+          }}
+        />
+      )}
+    </div>
   );
 }
 
-function Th({ children }) {
-  return <th className="text-left px-2 sm:px-3 py-2 font-medium">{children}</th>;
+// ─── Stat card ────────────────────────────────────────────────────
+function StatCard({ icon: Icon, label, value, sub, tone }) {
+  const toneCls =
+    tone === "primary"
+      ? "bg-[var(--p-primary-50)] text-[var(--p-primary)]"
+      : tone === "success"
+      ? "bg-[var(--p-success-50)] text-[var(--p-success)]"
+      : tone === "warning"
+      ? "bg-[var(--p-warning-50)] text-[var(--p-warning)]"
+      : tone === "danger"
+      ? "bg-[var(--p-danger-50)] text-[var(--p-danger)]"
+      : "bg-[var(--p-surface-2)] text-[var(--p-text)]";
+  return (
+    <div className="p-card p-card-hover flex flex-col gap-3 p-4 md:p-5">
+      <div className={`grid h-9 w-9 place-items-center rounded-lg ${toneCls}`}>
+        <Icon className="h-4 w-4" />
+      </div>
+      <div>
+        <div className="text-xs text-[var(--p-text-muted)]">{label}</div>
+        <div className="p-kpi-value mt-1 text-2xl md:text-[26px]">{value}</div>
+        {sub && (
+          <div className="mt-0.5 text-xs text-[var(--p-text-faint)]">{sub}</div>
+        )}
+      </div>
+    </div>
+  );
 }
-function Td({ children }) {
-  return <td className="px-2 sm:px-3 py-2">{children}</td>;
+
+// ─── Modal: Editar turma (com meeting_rules) ─────────────────────
+function EditTurmaModal({ turma, teachers, onClose, onSaved }) {
+  const [form, setForm] = useState(() => ({
+    name: turma?.name || "",
+    teacher_id: turma?.teacher_id || "",
+    capacity: String(turma?.capacity || "20"),
+    meeting_rules: Array.isArray(turma?.meeting_rules)
+      ? turma.meeting_rules.map((r) => ({
+          weekday:
+            r.weekday === 0 || r.weekday ? String(r.weekday) : "",
+          time: r.time || "",
+          duration_hours: String(r.duration_hours ?? "0.5"),
+        }))
+      : [],
+  }));
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  function updateRule(idx, key, value) {
+    setForm((f) => {
+      const next = [...(f.meeting_rules || [])];
+      next[idx] = { ...next[idx], [key]: value };
+      return { ...f, meeting_rules: next };
+    });
+  }
+  function addRule() {
+    setForm((f) => ({
+      ...f,
+      meeting_rules: [
+        ...(f.meeting_rules || []),
+        { weekday: "", time: "", duration_hours: "0.5" },
+      ],
+    }));
+  }
+  function removeRule(idx) {
+    setForm((f) => {
+      const next = [...(f.meeting_rules || [])];
+      next.splice(idx, 1);
+      return { ...f, meeting_rules: next };
+    });
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    const name = form.name.trim();
+    if (!name) return setErr("Nome é obrigatório.");
+    if (!form.teacher_id) return setErr("Professor é obrigatório.");
+    try {
+      setSaving(true);
+      await financeGateway.updateTurma(turma.id, {
+        name,
+        teacher_id: form.teacher_id,
+        capacity: Number(form.capacity || 20),
+        meeting_rules: (form.meeting_rules || []).map((r) => ({
+          weekday: r.weekday === "" ? null : Number(r.weekday),
+          time: r.time || null,
+          duration_hours: Number(r.duration_hours || 0.5),
+        })),
+      });
+      await onSaved();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AppModal
+      title="Editar turma"
+      onClose={saving ? () => {} : onClose}
+      maxWidth="2xl"
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">
+            Nome *
+          </span>
+          <input
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            autoFocus
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">
+              Professor *
+            </span>
+            <select
+              value={form.teacher_id}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, teacher_id: e.target.value }))
+              }
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            >
+              <option value="">Selecione um professor</option>
+              {teachers.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">
+              Capacidade
+            </span>
+            <input
+              type="number"
+              min="1"
+              value={form.capacity}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, capacity: e.target.value }))
+              }
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+        </div>
+
+        <div className="border-t border-[var(--p-border)] pt-4">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">
+              Encontros na semana
+            </span>
+            <button
+              type="button"
+              onClick={addRule}
+              className="p-btn p-btn-ghost h-8 px-3 text-xs"
+            >
+              <Plus className="h-3 w-3" /> Adicionar
+            </button>
+          </div>
+          {(form.meeting_rules || []).length === 0 ? (
+            <div className="rounded-lg border border-dashed border-[var(--p-border)] px-4 py-6 text-center text-xs text-[var(--p-text-muted)]">
+              Nenhum encontro definido.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {form.meeting_rules.map((r, idx) => (
+                <div
+                  key={idx}
+                  className="grid grid-cols-12 gap-2 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface-2)] p-3"
+                >
+                  <select
+                    value={r.weekday}
+                    onChange={(e) => updateRule(idx, "weekday", e.target.value)}
+                    className="col-span-12 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm sm:col-span-4"
+                  >
+                    <option value="">Dia da semana</option>
+                    {WEEKDAYS.map((w) => (
+                      <option key={w.value} value={w.value}>
+                        {w.label}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="time"
+                    value={r.time}
+                    onChange={(e) => updateRule(idx, "time", e.target.value)}
+                    className="col-span-6 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm sm:col-span-3"
+                  />
+                  <select
+                    value={r.duration_hours}
+                    onChange={(e) =>
+                      updateRule(idx, "duration_hours", e.target.value)
+                    }
+                    className="col-span-5 rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm sm:col-span-3"
+                  >
+                    <option value="0.5">0,5h (30min)</option>
+                    <option value="1">1h</option>
+                    <option value="1.5">1,5h</option>
+                    <option value="2">2h</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => removeRule(idx)}
+                    className="col-span-1 sm:col-span-2 rounded-lg p-2 text-[var(--p-text-muted)] hover:bg-[var(--p-danger-50)] hover:text-[var(--p-danger)]"
+                    aria-label="Remover encontro"
+                    title="Remover encontro"
+                  >
+                    <Trash2 className="mx-auto h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <ModalActions
+          onCancel={onClose}
+          submitting={saving}
+          submitLabel="Salvar"
+        />
+      </form>
+    </AppModal>
+  );
+}
+
+// ─── Modal: Criar/Editar sessão com presença inline ──────────────
+function SessionFormModal({ turma, members, initial, prefill, onClose, onSaved }) {
+  const isEdit = !!initial;
+
+  // Default date/time/notes
+  const defaultTime = useMemo(() => {
+    if (turma?.meeting_time) return turma.meeting_time;
+    const r = Array.isArray(turma?.meeting_rules)
+      ? turma.meeting_rules.find((rr) => rr?.time)
+      : null;
+    return r?.time || "";
+  }, [turma]);
+
+  const initialNotes =
+    initial?.notes ??
+    prefill?.notes ??
+    (defaultTime ? `Horário padrão: ${defaultTime}` : "");
+
+  const [form, setForm] = useState({
+    date: initial?.date || prefill?.date || "",
+    notes: initialNotes,
+    duration_hours: String(
+      initial?.duration_hours ??
+        prefill?.duration_hours ??
+        turma?.meeting_duration_default ??
+        "0.5"
+    ),
+  });
+  const [attendance, setAttendance] = useState(() =>
+    members.map((m) => ({
+      student_id: m.id,
+      name: m.name,
+      present: false,
+      note: "",
+    }))
+  );
+  const [loadingAtt, setLoadingAtt] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  // Carregar presença existente em modo edit
+  useEffect(() => {
+    if (!isEdit) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoadingAtt(true);
+        const rows = await financeGateway.listAttendance(initial.id);
+        const byStu = new Map(rows.map((r) => [r.student_id, r]));
+        const draft = members.map((m) => ({
+          student_id: m.id,
+          name: m.name,
+          present: byStu.get(m.id)?.present ?? false,
+          note: byStu.get(m.id)?.note ?? "",
+        }));
+        if (!cancelled) setAttendance(draft);
+      } catch (e) {
+        if (!cancelled) setErr(e?.message || String(e));
+      } finally {
+        if (!cancelled) setLoadingAtt(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEdit, initial?.id]);
+
+  const presentCount = attendance.filter((r) => r.present).length;
+
+  function setAll(value) {
+    setAttendance((arr) => arr.map((r) => ({ ...r, present: !!value })));
+  }
+  function togglePresence(studentId, present) {
+    setAttendance((arr) =>
+      arr.map((r) =>
+        r.student_id === studentId ? { ...r, present: !!present } : r
+      )
+    );
+  }
+  function updateNote(studentId, note) {
+    setAttendance((arr) =>
+      arr.map((r) =>
+        r.student_id === studentId ? { ...r, note } : r
+      )
+    );
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr(null);
+    if (!form.date) return setErr("Data é obrigatória.");
+    try {
+      setSaving(true);
+      const enrolledNow = members.filter((m) => m.status === "ativo").length;
+      const payload = {
+        date: form.date,
+        notes: form.notes,
+        duration_hours: Number(form.duration_hours || 0.5),
+        headcount_snapshot: enrolledNow,
+      };
+      let sessionId = initial?.id;
+      if (isEdit) {
+        await financeGateway.updateSession(initial.id, payload);
+      } else {
+        const created = await financeGateway.createSession({
+          turma_id: turma.id,
+          ...payload,
+        });
+        sessionId = created?.id;
+      }
+      if (!sessionId) throw new Error("Falha ao obter ID da sessão.");
+      for (const row of attendance) {
+        await financeGateway.upsertAttendance(sessionId, row.student_id, {
+          present: !!row.present,
+          note: row.note || "",
+        });
+      }
+      await onSaved();
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AppModal
+      title={isEdit ? `Sessão · ${fmtBR(initial.date)}` : "Nova sessão"}
+      onClose={saving ? () => {} : onClose}
+      maxWidth="3xl"
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-5">
+        <FormError message={err} />
+
+        {/* Geral */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">
+              Data *
+            </span>
+            <input
+              type="date"
+              value={form.date}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, date: e.target.value }))
+              }
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--p-text-muted)]">
+              Duração (h) *
+            </span>
+            <select
+              value={form.duration_hours}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, duration_hours: e.target.value }))
+              }
+              className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+            >
+              <option value="0.5">0,5h (30min)</option>
+              <option value="1">1h</option>
+              <option value="1.5">1,5h</option>
+              <option value="2">2h</option>
+            </select>
+          </label>
+        </div>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--p-text-muted)]">
+            Resumo / Observação geral
+          </span>
+          <textarea
+            value={form.notes}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, notes: e.target.value }))
+            }
+            rows={3}
+            placeholder="Tópicos da aula, exercícios, etc."
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          />
+        </label>
+
+        {/* Presença */}
+        <div className="border-t border-[var(--p-border)] pt-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold">Presença</span>
+              <span className="text-xs text-[var(--p-text-muted)] tabular-nums">
+                {presentCount}/{members.length}
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setAll(true)}
+                className="rounded-md px-2 py-1 text-xs text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+              >
+                Marcar todos
+              </button>
+              <button
+                type="button"
+                onClick={() => setAll(false)}
+                className="rounded-md px-2 py-1 text-xs text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+              >
+                Desmarcar
+              </button>
+            </div>
+          </div>
+
+          {loadingAtt ? (
+            <div className="flex items-center gap-2 py-4 text-xs text-[var(--p-text-muted)]">
+              <Loader2 className="h-3 w-3 animate-spin" /> Carregando presença…
+            </div>
+          ) : members.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-[var(--p-border)] px-4 py-6 text-center text-xs text-[var(--p-text-muted)]">
+              A turma ainda não tem alunos vinculados.
+            </div>
+          ) : (
+            <ul className="flex flex-col divide-y divide-[var(--p-border)] rounded-lg border border-[var(--p-border)]">
+              {attendance.map((row) => (
+                <li
+                  key={row.student_id}
+                  className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3"
+                >
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <div
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
+                      style={{ background: colorFor(row.name) }}
+                    >
+                      {String(row.name || "?").slice(0, 1).toUpperCase()}
+                    </div>
+                    <span className="truncate text-sm font-medium">
+                      {row.name}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => togglePresence(row.student_id, true)}
+                      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                        row.present
+                          ? "bg-[var(--p-success-50)] text-[var(--p-success)]"
+                          : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                      }`}
+                    >
+                      <CheckCircle2 className="h-3 w-3" /> Presente
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => togglePresence(row.student_id, false)}
+                      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                        !row.present
+                          ? "bg-[var(--p-danger-50)] text-[var(--p-danger)]"
+                          : "text-[var(--p-text-muted)] hover:bg-[var(--p-surface-2)]"
+                      }`}
+                    >
+                      <XCircle className="h-3 w-3" /> Falta
+                    </button>
+                  </div>
+                  <input
+                    value={row.note || ""}
+                    onChange={(e) =>
+                      updateNote(row.student_id, e.target.value)
+                    }
+                    placeholder="Observação"
+                    className="w-full rounded-md border border-[var(--p-border)] bg-[var(--p-surface)] px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40 sm:max-w-xs"
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <ModalActions
+          onCancel={onClose}
+          submitting={saving}
+          submitLabel={isEdit ? "Salvar" : "Cadastrar"}
+        />
+      </form>
+    </AppModal>
+  );
 }
