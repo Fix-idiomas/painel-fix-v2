@@ -76,7 +76,7 @@ const steps = [
 export const metadata = {
   title: "Fix Idiomas — Feito por professor, pra professor.",
   description:
-    "Plataforma de gestão para professores de idiomas autônomos e micro-escolas. PF e PJ no mesmo painel, sem virar empresa.",
+    "Plataforma de gestão para professores autônomos e micro-escolas. PF e PJ no mesmo painel, sem virar empresa.",
 };
 
 export default function HomePage() {
@@ -152,18 +152,15 @@ export default function HomePage() {
             Para professores e micro-escolas de idiomas
           </span>
 
-          <h1 className="mt-6 text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight leading-[1.1] max-w-4xl mx-auto">
-            Volte a focar no que você ama:{" "}
-            <span style={{ color: "var(--fix-primary)" }}>dar aula.</span>
-            <br className="hidden sm:block" />
-            <span className="sm:hidden"> </span>
-            Nós cuidamos do resto.
+          <h1 className="mt-6 text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight leading-[1.1] max-w-3xl mx-auto">
+            Organize seu negócio sem precisar{" "}
+            <span style={{ color: "var(--fix-primary)" }}>virar uma empresa.</span>
           </h1>
 
           <p className="mt-6 text-lg sm:text-xl text-slate-600 max-w-2xl mx-auto leading-relaxed">
-            Organize seu negócio sem precisar virar uma empresa. Sua vida pessoal
-            e a sua escola estão misturadas — e tá tudo bem. Fix junta alunos,
-            turmas, presenças e finanças num painel feito por professor, pra professor.
+            Sua vida pessoal e a sua escola estão misturadas — e tá tudo bem.
+            Fix junta seus alunos, turmas, presenças e finanças num painel
+            que entende esse dia a dia. Feito por professor, pra professor.
           </p>
 
           <div className="mt-10 flex flex-col sm:flex-row gap-3 justify-center items-center">
@@ -508,10 +505,10 @@ export default function HomePage() {
             />
             <div className="relative">
               <h2 className="text-3xl sm:text-4xl font-bold tracking-tight max-w-2xl mx-auto leading-tight">
-                Sua nova rotina começa aqui.
+                Volte a focar no que você ama: dar aula.
               </h2>
               <p className="mt-4 text-base sm:text-lg text-white/85 max-w-xl mx-auto">
-                Acesse o painel e veja como é simples organizar tudo do seu jeito.
+                A gente cuida do resto — do jeito que faz sentido pra você.
               </p>
               <Link
                 href="/login"
