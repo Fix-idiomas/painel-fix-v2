@@ -6,7 +6,13 @@ import { sendMailgun, type MailgunInput } from "@/lib/mailgun";
 
 export async function POST(req: NextRequest) {
   try {
-    const supabase = createRouteHandlerClient({ cookies });
+    // Next 15: cookies() é async. Aguardamos e passamos como factory sync.
+    // Cast necessário pois @supabase/auth-helpers-nextjs@0.10.x ainda
+    // tipa a factory como retorno síncrono (compat Next 14).
+    const cookieStore = await cookies();
+    const supabase = createRouteHandlerClient({
+      cookies: (() => cookieStore) as unknown as typeof cookies,
+    });
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) {
       return new Response(JSON.stringify({ error: "Não autenticado." }), { status: 401 });

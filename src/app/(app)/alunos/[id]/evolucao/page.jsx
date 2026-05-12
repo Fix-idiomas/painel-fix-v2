@@ -16,6 +16,14 @@ import {
   Users,
   Loader2,
   PauseCircle,
+  Sparkles,
+  RefreshCw,
+  AlertCircle,
+  MessageSquare,
+  GraduationCap,
+  Phone,
+  Heart,
+  Lightbulb,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -254,6 +262,9 @@ export default function AlunoEvolucaoPage() {
         </div>
       </section>
 
+      {/* Recomendações IA */}
+      <InsightsCard studentId={studentId} hasNotes={rows.some((r) => r.note)} />
+
       {/* Filtro por turma (se mais de uma) */}
       {turmas.length > 1 && (
         <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
@@ -447,6 +458,280 @@ export default function AlunoEvolucaoPage() {
           {turmaFilter !== "all" ? ` em "${turmaFilter}"` : ""}.
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Componente: Recomendações IA ────────────────────────────────
+const CATEGORY_META = {
+  engajamento: { icon: Heart, label: "Engajamento" },
+  didatica: { icon: GraduationCap, label: "Didática" },
+  contato: { icon: Phone, label: "Contato" },
+  motivacao: { icon: Lightbulb, label: "Motivação" },
+  outro: { icon: MessageSquare, label: "Outro" },
+};
+
+const PRIORITY_META = {
+  alta: { cls: "p-chip-danger", label: "Alta" },
+  media: { cls: "p-chip-warning", label: "Média" },
+  baixa: { cls: "p-chip-neutral", label: "Baixa" },
+};
+
+function fmtBR_short(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return (
+    d.toLocaleDateString("pt-BR") +
+    " às " +
+    d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+  );
+}
+
+function InsightsCard({ studentId, hasNotes }) {
+  const [state, setState] = useState({
+    loading: false,
+    error: null,
+    output: null,
+    cached: false,
+    skipped: false,
+    createdAt: null,
+    triedOnce: false,
+  });
+
+  async function run({ force = false } = {}) {
+    setState((s) => ({ ...s, loading: true, error: null }));
+    try {
+      const res = await fetch("/api/ai/student-insights", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_id: studentId, force_refresh: force }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Falha na análise.");
+      setState({
+        loading: false,
+        error: null,
+        output: data.output,
+        cached: !!data.cached,
+        skipped: !!data.skipped,
+        createdAt: data.created_at || null,
+        triedOnce: true,
+      });
+    } catch (e) {
+      setState((s) => ({
+        ...s,
+        loading: false,
+        error: e?.message || String(e),
+        triedOnce: true,
+      }));
+    }
+  }
+
+  const { loading, error, output, cached, skipped, createdAt, triedOnce } = state;
+
+  return (
+    <div className="p-card overflow-hidden">
+      <div className="flex flex-col gap-3 border-b border-[var(--p-border)] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--p-primary-50)] text-[var(--p-primary)]">
+            <Sparkles className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold">Recomendações com IA</h2>
+            <p className="text-xs text-[var(--p-text-muted)]">
+              Análise pedagógica baseada nas observações do histórico.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {output && createdAt && (
+            <span className="text-[11px] text-[var(--p-text-faint)] hidden sm:inline">
+              {cached ? "Cacheado" : "Gerado"} em {fmtBR_short(createdAt)}
+            </span>
+          )}
+          {!output ? (
+            <button
+              onClick={() => run()}
+              disabled={loading || !hasNotes}
+              className="p-btn p-btn-primary"
+              title={
+                !hasNotes
+                  ? "Adicione observações nas aulas pra habilitar a análise"
+                  : ""
+              }
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Analisando…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4" /> Gerar análise
+                </>
+              )}
+            </button>
+          ) : (
+            <button
+              onClick={() => run({ force: true })}
+              disabled={loading}
+              className="p-btn p-btn-ghost"
+              title="Gerar nova análise"
+            >
+              {loading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              <span className="hidden sm:inline">Atualizar</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="px-5 py-5">
+        {!triedOnce && !loading && (
+          <p className="text-sm text-[var(--p-text-muted)]">
+            {hasNotes
+              ? "Clique em \"Gerar análise\" pra receber recomendações personalizadas com base nas observações registradas nas aulas."
+              : "Registre observações curtas nas presenças das aulas pra habilitar a análise da IA."}
+          </p>
+        )}
+
+        {error && (
+          <div className="flex flex-col gap-2 rounded-lg border border-[var(--p-danger)]/30 bg-[var(--p-danger-50)] px-4 py-3 text-sm text-[var(--p-danger)]">
+            <div>{error}</div>
+            <button
+              onClick={() => run()}
+              className="self-start text-xs underline"
+            >
+              Tentar novamente
+            </button>
+          </div>
+        )}
+
+        {output && skipped && (
+          <p className="text-sm text-[var(--p-text-muted)]">{output.summary}</p>
+        )}
+
+        {output && !skipped && (
+          <div className="flex flex-col gap-5">
+            {/* Sumário */}
+            {output.summary && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-[var(--p-text-faint)]">
+                  Sumário
+                </div>
+                <p className="mt-1 text-sm leading-relaxed text-[var(--p-text)]">
+                  {output.summary}
+                </p>
+              </div>
+            )}
+
+            {/* Strengths + Concerns */}
+            {(output.strengths?.length > 0 ||
+              output.concerns?.length > 0) && (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {output.strengths?.length > 0 && (
+                  <div>
+                    <div className="mb-2 flex items-center gap-2 text-xs font-medium text-[var(--p-success)]">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> Pontos fortes
+                    </div>
+                    <ul className="space-y-1.5">
+                      {output.strengths.map((s, i) => (
+                        <li
+                          key={i}
+                          className="flex items-start gap-2 text-sm leading-snug"
+                        >
+                          <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-[var(--p-success)]" />
+                          <span>{s}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {output.concerns?.length > 0 && (
+                  <div>
+                    <div className="mb-2 flex items-center gap-2 text-xs font-medium text-[var(--p-warning)]">
+                      <AlertCircle className="h-3.5 w-3.5" /> Preocupações
+                    </div>
+                    <ul className="space-y-1.5">
+                      {output.concerns.map((c, i) => (
+                        <li
+                          key={i}
+                          className="flex items-start gap-2 text-sm leading-snug"
+                        >
+                          <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-[var(--p-warning)]" />
+                          <span>{c}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Recomendações */}
+            {output.recommendations?.length > 0 && (
+              <div>
+                <div className="mb-2 text-[10px] uppercase tracking-wider text-[var(--p-text-faint)]">
+                  Recomendações
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {output.recommendations.map((r, i) => {
+                    const catMeta = CATEGORY_META[r.category] || CATEGORY_META.outro;
+                    const prioMeta = PRIORITY_META[r.priority] || PRIORITY_META.media;
+                    const CatIcon = catMeta.icon;
+                    return (
+                      <div
+                        key={i}
+                        className="rounded-lg border border-[var(--p-border)] bg-[var(--p-surface-2)] p-3"
+                      >
+                        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                          <span className="p-chip p-chip-neutral">
+                            <CatIcon className="h-3 w-3" /> {catMeta.label}
+                          </span>
+                          <span className={`p-chip ${prioMeta.cls}`}>
+                            {prioMeta.label}
+                          </span>
+                        </div>
+                        <div className="text-sm font-medium">{r.title}</div>
+                        {r.action && (
+                          <div className="mt-1 text-xs leading-relaxed text-[var(--p-text-muted)]">
+                            {r.action}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Próximos passos */}
+            {output.next_steps?.length > 0 && (
+              <div>
+                <div className="mb-2 text-[10px] uppercase tracking-wider text-[var(--p-text-faint)]">
+                  Próximos passos
+                </div>
+                <ol className="space-y-1.5 list-decimal pl-5">
+                  {output.next_steps.map((step, i) => (
+                    <li key={i} className="text-sm leading-snug">
+                      {step}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
+            {output && createdAt && (
+              <div className="text-[11px] text-[var(--p-text-faint)] sm:hidden">
+                {cached ? "Cacheado" : "Gerado"} em {fmtBR_short(createdAt)}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
