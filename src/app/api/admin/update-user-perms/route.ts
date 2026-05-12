@@ -1,70 +1,82 @@
-// Server Route: /api/admin/update-user-perms  (Next.js App Router)
-// NOTE: apesar do path, o handler atual contém a lógica antiga de envio de
-// e-mail (Mailgun). Provável código morto/duplicado — manter até validar.
-import type { NextRequest } from "next/server";
+// src/app/api/admin/update-user-perms/route.ts
+//
+// NOTA: Apesar do path, o handler atual envia e-mails arbitrários via Mailgun.
+// Era uma cópia duplicada de /api/send-mail. Refatorado para:
+//   - usar o helper compartilhado sendMailgun (sem duplicar lógica de Mailgun)
+//   - puxar o brand_name do tenant via Bearer token e usar como "from name"
+//     (alias do remetente = nome do tenant)
+//
+// Autenticação: header Authorization: Bearer <supabase access token>.
 
-type SendMailBody = {
-  to: string | string[];
-  subject: string;
-  html?: string;
-  text?: string;
-};
+import type { NextRequest } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+import { sendMailgun, type MailgunInput } from "@/lib/mailgun";
+
+const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const { to, subject, html, text } = (await req.json()) as SendMailBody;
+    // Auth via Bearer token
+    const authHeader =
+      req.headers.get("authorization") || req.headers.get("Authorization");
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : null;
+    if (!token) return json({ error: "Não autenticado." }, 401);
 
-    if (!to || !subject || (!html && !text)) {
-      return new Response(
-        JSON.stringify({ error: "Campos obrigatórios: to, subject e html ou text" }),
-        { status: 400 }
-      );
+    if (!URL || !ANON_KEY) {
+      return json({ error: "Supabase não configurado." }, 500);
     }
 
-    const API_KEY = process.env.MAILGUN_API_KEY;
-    const DOMAIN  = process.env.MAILGUN_DOMAIN;   // ex: "mg.seudominio.com"
-    const FROM    = process.env.MAILGUN_FROM || `Fix Idiomas <no-reply@${DOMAIN}>`;
-
-    if (!API_KEY || !DOMAIN) {
-      return new Response(
-        JSON.stringify({ error: "Config de Mailgun ausente (env vars)" }),
-        { status: 500 }
-      );
-    }
-
-    // aceita string "a@b,c@d" ou array
-    const recipients = Array.isArray(to)
-      ? to
-      : String(to).split(",").map((s) => s.trim()).filter(Boolean);
-
-    const form = new URLSearchParams();
-    form.set("from", FROM);
-    form.set("to", recipients.join(","));
-    form.set("subject", subject);
-    if (html) form.set("html", html);
-    if (text) form.set("text", text);
-
-    const res = await fetch(`https://api.mailgun.net/v3/${DOMAIN}/messages`, {
-      method: "POST",
-      headers: {
-        Authorization: "Basic " + btoa(`api:${API_KEY}`),
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: form.toString(),
+    const pub = createClient(URL, ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    if (!res.ok) {
-      const msg = await res.text();
-      return new Response(
-        JSON.stringify({ error: "Falha Mailgun", detail: msg }),
-        { status: 502 }
+    const { data: userRes, error: uErr } = await pub.auth.getUser();
+    if (uErr || !userRes?.user) {
+      return json({ error: "Sessão inválida." }, 401);
+    }
+
+    // Body
+    const body = (await req.json()) as MailgunInput;
+    if (!body?.to || !body?.subject || (!body?.html && !body?.text)) {
+      return json(
+        { error: "Campos obrigatórios: to, subject e html ou text" },
+        400
       );
     }
 
-    const data = await res.json();
-    return new Response(JSON.stringify({ ok: true, id: data.id }), { status: 200 });
+    // Alias = brand_name do tenant (cai pro default do Mailgun se vazio)
+    let fromName: string | null = null;
+    try {
+      const { data: settings } = await pub.rpc("get_tenant_settings");
+      const name = String(
+        (settings as { brand_name?: string } | null)?.brand_name || ""
+      ).trim();
+      if (name) fromName = name;
+    } catch {
+      /* sem alias específico — usa default do Mailgun */
+    }
+
+    const result = await sendMailgun({ ...body, fromName });
+    if (result.ok) {
+      return json({ ok: true, id: result.id }, 200);
+    }
+    return json(
+      { error: result.error ?? "Erro ao enviar e-mail." },
+      result.status ?? 500
+    );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return new Response(JSON.stringify({ error: msg }), { status: 500 });
+    return json({ error: msg }, 500);
   }
 }
