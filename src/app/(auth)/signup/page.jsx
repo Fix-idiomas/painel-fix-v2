@@ -68,13 +68,50 @@ export default function SignupPage() {
   const pwStrength = passwordStrength(password);
 
   return (
-    <div className="min-h-screen grid lg:grid-cols-2 bg-white">
-      {/* Painel lateral (institucional) */}
-      <aside
-        className="relative hidden lg:flex flex-col justify-between p-12 text-white overflow-hidden"
+    <div className="min-h-screen md:grid md:grid-cols-2 bg-slate-50">
+      {/* Mobile hero strip */}
+      <div
+        className="md:hidden relative px-6 pt-10 pb-12 text-white overflow-hidden"
         style={{
           background:
-            "linear-gradient(135deg, var(--fix-primary) 0%, color-mix(in srgb, var(--fix-primary) 70%, black) 100%)",
+            "linear-gradient(135deg, var(--fix-primary) 0%, #5a121e 100%)",
+        }}
+      >
+        <div
+          aria-hidden
+          className="absolute inset-0 opacity-10"
+          style={{
+            backgroundImage:
+              "radial-gradient(circle at 1px 1px, white 1px, transparent 0)",
+            backgroundSize: "20px 20px",
+          }}
+        />
+        <Link href="/" className="relative inline-flex items-center gap-2">
+          <span
+            className="grid place-items-center h-9 w-9 rounded-lg bg-white/95 text-base font-bold"
+            style={{ color: "var(--fix-primary)" }}
+          >
+            F
+          </span>
+          <span className="font-semibold tracking-tight text-white">
+            Fix <span className="text-white/70 font-light">Idiomas</span>
+          </span>
+        </Link>
+        <div className="relative mt-5 inline-flex items-center gap-2 rounded-full bg-white/15 border border-white/20 px-3 py-1 text-[11px] font-medium backdrop-blur">
+          <Sparkles className="h-3 w-3" />
+          14 dias grátis · sem cartão
+        </div>
+        <h1 className="relative mt-3 text-2xl font-bold tracking-tight">
+          Crie sua escola
+        </h1>
+      </div>
+
+      {/* Painel lateral (desktop/tablet) */}
+      <aside
+        className="relative hidden md:flex flex-col justify-between p-10 lg:p-12 text-white overflow-hidden"
+        style={{
+          background:
+            "linear-gradient(135deg, var(--fix-primary) 0%, #5a121e 100%)",
         }}
       >
         <div
@@ -101,7 +138,7 @@ export default function SignupPage() {
             <Sparkles className="h-3 w-3" />
             Comece grátis · sem cartão
           </div>
-          <h1 className="mt-6 text-4xl font-bold tracking-tight leading-tight max-w-md">
+          <h1 className="mt-6 text-3xl lg:text-4xl font-bold tracking-tight leading-tight max-w-md">
             Volte a focar no que você ama:{" "}
             <span className="text-white/90">dar aula.</span>
           </h1>
@@ -126,28 +163,16 @@ export default function SignupPage() {
       </aside>
 
       {/* Formulário */}
-      <main className="flex items-center justify-center px-6 py-10 sm:px-10 lg:px-16">
-        <div className="w-full max-w-md">
-          <Link href="/" className="lg:hidden mb-8 inline-flex items-center gap-2">
-            <span
-              className="grid place-items-center h-8 w-8 rounded-lg text-white font-bold text-sm"
-              style={{ background: "var(--fix-primary)" }}
-            >
-              F
-            </span>
-            <span className="font-semibold tracking-tight text-slate-900">
-              Fix Idiomas
-            </span>
-          </Link>
-
-          <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight text-slate-900">
+      <main className="flex items-start md:items-center justify-center px-4 sm:px-6 md:px-10 lg:px-16 -mt-8 md:mt-0 pb-10 md:py-10">
+        <div className="w-full max-w-md md:max-w-lg bg-white md:bg-transparent rounded-2xl md:rounded-none shadow-sm md:shadow-none border md:border-0 border-slate-200 p-6 sm:p-8 md:p-0">
+          <h2 className="hidden md:block text-2xl lg:text-3xl font-semibold tracking-tight text-slate-900">
             Crie sua escola
           </h2>
-          <p className="mt-2 text-sm sm:text-base text-slate-600">
+          <p className="hidden md:block mt-2 text-sm lg:text-base text-slate-600">
             14 dias grátis · sem cartão. Cancele quando quiser.
           </p>
 
-          <form onSubmit={handleSignup} className="mt-8 space-y-5">
+          <form onSubmit={handleSignup} className="mt-2 md:mt-8 space-y-5">
             <Field
               label="E-mail"
               type="email"

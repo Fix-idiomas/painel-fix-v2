@@ -122,13 +122,49 @@ function LoginInner() {
   }
 
   return (
-    <div className="min-h-screen grid lg:grid-cols-2 bg-white">
-      {/* Painel lateral */}
-      <aside
-        className="relative hidden lg:flex flex-col justify-between p-12 text-white overflow-hidden"
+    <div className="min-h-screen md:grid md:grid-cols-2 bg-slate-50">
+      {/* Mobile hero strip (escondido em md+) */}
+      <div
+        className="md:hidden relative px-6 pt-10 pb-12 text-white overflow-hidden"
         style={{
           background:
-            "linear-gradient(135deg, var(--fix-primary) 0%, color-mix(in srgb, var(--fix-primary) 70%, black) 100%)",
+            "linear-gradient(135deg, var(--fix-primary) 0%, #5a121e 100%)",
+        }}
+      >
+        <div
+          aria-hidden
+          className="absolute inset-0 opacity-10"
+          style={{
+            backgroundImage:
+              "radial-gradient(circle at 1px 1px, white 1px, transparent 0)",
+            backgroundSize: "20px 20px",
+          }}
+        />
+        <Link href="/" className="relative inline-flex items-center gap-2">
+          <span
+            className="grid place-items-center h-9 w-9 rounded-lg bg-white/95 text-base font-bold"
+            style={{ color: "var(--fix-primary)" }}
+          >
+            F
+          </span>
+          <span className="font-semibold tracking-tight text-white">
+            Fix <span className="text-white/70 font-light">Idiomas</span>
+          </span>
+        </Link>
+        <h1 className="relative mt-6 text-2xl font-bold tracking-tight">
+          Bem-vindo de volta.
+        </h1>
+        <p className="relative mt-1 text-sm text-white/80">
+          Acesse sua escola e continue de onde parou.
+        </p>
+      </div>
+
+      {/* Painel lateral (desktop/tablet) */}
+      <aside
+        className="relative hidden md:flex flex-col justify-between p-10 lg:p-12 text-white overflow-hidden"
+        style={{
+          background:
+            "linear-gradient(135deg, var(--fix-primary) 0%, #5a121e 100%)",
         }}
       >
         <div
@@ -154,7 +190,7 @@ function LoginInner() {
         </Link>
 
         <div className="relative">
-          <h1 className="text-4xl font-bold tracking-tight leading-tight max-w-md">
+          <h1 className="text-3xl lg:text-4xl font-bold tracking-tight leading-tight max-w-md">
             Bem-vindo de volta.
           </h1>
           <p className="mt-4 text-white/80 leading-relaxed max-w-md">
@@ -180,27 +216,12 @@ function LoginInner() {
       </aside>
 
       {/* Formulário */}
-      <main className="flex items-center justify-center px-6 py-10 sm:px-10 lg:px-16">
-        <div className="w-full max-w-md">
-          <Link
-            href="/"
-            className="lg:hidden mb-8 inline-flex items-center gap-2"
-          >
-            <span
-              className="grid place-items-center h-8 w-8 rounded-lg text-white font-bold text-sm"
-              style={{ background: "var(--fix-primary)" }}
-            >
-              F
-            </span>
-            <span className="font-semibold tracking-tight text-slate-900">
-              Fix Idiomas
-            </span>
-          </Link>
-
-          <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight text-slate-900">
+      <main className="flex items-start md:items-center justify-center px-4 sm:px-6 md:px-10 lg:px-16 -mt-8 md:mt-0 pb-10 md:py-10">
+        <div className="w-full max-w-md md:max-w-lg bg-white md:bg-transparent rounded-2xl md:rounded-none shadow-sm md:shadow-none border md:border-0 border-slate-200 p-6 sm:p-8 md:p-0">
+          <h2 className="hidden md:block text-2xl lg:text-3xl font-semibold tracking-tight text-slate-900">
             Entrar no painel
           </h2>
-          <p className="mt-2 text-sm sm:text-base text-slate-600">
+          <p className="hidden md:block mt-2 text-sm lg:text-base text-slate-600">
             Acesse a sua escola e continue de onde parou.
           </p>
 
@@ -210,7 +231,7 @@ function LoginInner() {
             </div>
           )}
 
-          <form onSubmit={handleLogin} className="mt-8 space-y-5">
+          <form onSubmit={handleLogin} className="mt-2 md:mt-8 space-y-5">
             <Field
               label="E-mail"
               type="email"

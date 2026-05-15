@@ -1,9 +1,5 @@
+// Passthrough — cada página de auth (login/signup/reset-password) define
+// seu próprio layout full-screen com hero strip + formulário.
 export default function AuthLayout({ children }) {
-  return (
-    <main className="min-h-screen grid place-items-center p-6">
-      <div className="w-full max-w-sm bg-white border rounded-lg p-6 shadow-sm">
-        {children}
-      </div>
-    </main>
-  );
+  return children;
 }
