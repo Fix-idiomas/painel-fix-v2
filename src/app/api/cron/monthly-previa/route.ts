@@ -13,11 +13,13 @@ export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   const header = req.headers.get("authorization") || req.headers.get("Authorization");
   if (!secret || header !== `Bearer ${secret}`) {
+    console.warn("[cron:monthly-previa] unauthorized", { hasHeader: !!header });
     return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
   }
 
   try {
     const ym = new Date().toISOString().slice(0, 7);
+    console.log("[cron:monthly-previa] start", { ym });
 
     const [mensResult, expensesResult, otherRevenuesResult] = await Promise.allSettled([
       financeGateway.generateMonth({ ym }),
@@ -36,11 +38,18 @@ export async function GET(req: NextRequest) {
       (r) => r.status === "rejected"
     );
 
+    if (anyFailed) {
+      console.error("[cron:monthly-previa] done with failures", summary);
+    } else {
+      console.log("[cron:monthly-previa] done", summary);
+    }
+
     return NextResponse.json(
       { ok: !anyFailed, ...summary },
       { status: anyFailed ? 207 : 200 }
     );
   } catch (err) {
+    console.error("[cron:monthly-previa] error", String(err));
     return NextResponse.json({ ok: false, error: String(err) }, { status: 500 });
   }
 }

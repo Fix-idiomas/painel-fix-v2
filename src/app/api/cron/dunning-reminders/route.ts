@@ -61,6 +61,7 @@ export async function GET(req: NextRequest) {
   const header =
     req.headers.get("authorization") || req.headers.get("Authorization");
   if (!secret || header !== `Bearer ${secret}`) {
+    console.warn("[cron:dunning-reminders] unauthorized", { hasHeader: !!header });
     return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
   }
 
@@ -78,6 +79,7 @@ export async function GET(req: NextRequest) {
 
     const today = new Date().toISOString().slice(0, 10);
     const ym = today.slice(0, 7);
+    console.log("[cron:dunning-reminders] start", { ym, today });
 
     // 1) Buscar todos os payments pendentes vencidos (cross-tenant via service role)
     type PaymentSelect = {
@@ -121,6 +123,7 @@ export async function GET(req: NextRequest) {
       .filter((p) => p.days_overdue > 0);
 
     if (overdue.length === 0) {
+      console.log("[cron:dunning-reminders] done", { ym, sent: 0, reason: "no_overdue" });
       return NextResponse.json({
         ok: true,
         sent: 0,
@@ -180,6 +183,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (groups.size === 0) {
+      console.log("[cron:dunning-reminders] done", { ym, sent: 0, reason: "no_payer_email" });
       return NextResponse.json({
         ok: true,
         sent: 0,
@@ -264,8 +268,28 @@ export async function GET(req: NextRequest) {
     }
 
     const sent = results.filter((r) => r.ok).length;
-    return NextResponse.json({ ok: true, sent, results });
+    const failed = results.length - sent;
+    const logDone = failed > 0 ? console.error : console.log;
+    logDone(
+      `[cron:dunning-reminders] ${failed > 0 ? "done with failures" : "done"}`,
+      { ym, sent, failed, total: results.length }
+    );
+    if (failed > 0) {
+      // Detalhe por falha SEM PII (sem o e-mail 'to').
+      console.error(
+        "[cron:dunning-reminders] failures",
+        results
+          .filter((r) => !r.ok)
+          .map(({ tenant_id, payer_id, status, detail }) => ({ tenant_id, payer_id, status, detail }))
+      );
+    }
+    // Resposta agregada (sem PII): não devolve 'results' com e-mails.
+    return NextResponse.json({ ok: true, sent, failed, total: results.length });
   } catch (err) {
+    console.error(
+      "[cron:dunning-reminders] error",
+      err instanceof Error ? err.message : String(err)
+    );
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : String(err) },
       { status: 500 }

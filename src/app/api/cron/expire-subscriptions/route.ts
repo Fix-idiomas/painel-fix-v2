@@ -30,10 +30,12 @@ export async function GET(req: NextRequest) {
   const header =
     req.headers.get("authorization") || req.headers.get("Authorization");
   if (!secret || !header || !safeEqual(header, `Bearer ${secret}`)) {
+    console.warn("[cron:expire-subscriptions] unauthorized", { hasHeader: !!header });
     return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
   }
 
   if (!SUPABASE_URL || !SERVICE_KEY) {
+    console.error("[cron:expire-subscriptions] misconfigured (service role ausente)");
     return NextResponse.json(
       { error: "Supabase não configurado (service role)." },
       { status: 500 }
@@ -46,6 +48,7 @@ export async function GET(req: NextRequest) {
     });
 
     const nowIso = new Date().toISOString();
+    console.log("[cron:expire-subscriptions] start", { ran_at: nowIso });
 
     // 1) Trials vencidos → expired
     const { data: expiredTrials, error: e1 } = await supabase
@@ -70,14 +73,17 @@ export async function GET(req: NextRequest) {
       .select("id");
     if (e2) throw e2;
 
-    return NextResponse.json({
-      ok: true,
+    const trials_expired = expiredTrials?.length ?? 0;
+    const marked_past_due = pastDue?.length ?? 0;
+    console.log("[cron:expire-subscriptions] done", {
       ran_at: nowIso,
-      trials_expired: expiredTrials?.length ?? 0,
-      marked_past_due: pastDue?.length ?? 0,
+      trials_expired,
+      marked_past_due,
     });
+    return NextResponse.json({ ok: true, ran_at: nowIso, trials_expired, marked_past_due });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    console.error("[cron:expire-subscriptions] error", msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
