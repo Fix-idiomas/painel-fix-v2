@@ -9,12 +9,16 @@ Com a fundação de entitlement pronta (PRD-1), este PRD **conecta a Asaas** par
 
 **Resultado observável:** um owner em trial assina (cartão) e seu tenant vira `active`; quando a Asaas confirma a cobrança mensal, o webhook mantém `active`; em atraso/cancelamento, o webhook move para `past_due`/`canceled` e o paywall do PRD-1 bloqueia.
 
+> **Fecha a lacuna do PRD-1 (achado C1 da revisão):** no PRD-1 o paywall é apenas um gate de **UI** — um tenant sem assinatura ainda alcança os dados via API/PostgREST. Este PRD torna o entitlement uma **fronteira de verdade no banco** (RLS/RPC), para que parar de pagar realmente bloqueie o acesso aos dados.
+
 ## 2. Escopo
 
 **In:**
 - Helper `src/lib/asaas.ts` (cliente HTTP da Asaas).
 - Webhook `src/app/api/webhooks/asaas/route.ts` com idempotência e mapeamento de tenant.
 - Rotas `src/app/api/billing/subscribe` e `src/app/api/billing/cancel`.
+- **Enforcement de entitlement no banco** (achado C1): função SQL + aplicação em RLS/RPC das tabelas sensíveis, para bloquear dados de tenant sem assinatura.
+- **Preenchimento de `current_period_end`** pelo webhook (achado A1), destravando a transição `active→past_due` do cron do PRD-1.
 - Env vars e documentação (`README_INTEGRACOES.md`, `CLAUDE.md`).
 - Testes em **sandbox Asaas**.
 
@@ -39,6 +43,8 @@ Com a fundação de entitlement pronta (PRD-1), este PRD **conecta a Asaas** par
 - **RF-8** — `POST /api/billing/subscribe` (auth por cookie de sessão): verifica sessão, **confere owner/admin via RPC** (não pela sessão), chama `getOrCreateCustomer` + `createCardSubscription`, persiste ids, atualiza status. Retorna dados para a UI disparar `refreshSession()`.
 - **RF-9** — `POST /api/billing/cancel`: owner/admin → `cancelSubscription` + atualiza status.
 - **RF-10** — Toda alteração de status grava um registro em `subscription_events` (auditoria), inclusive ações iniciadas pelas rotas de billing.
+- **RF-11 (C1 — enforcement no banco)** — Criar função `tenant_has_entitlement()` (`SECURITY DEFINER`, lê a `subscriptions` do tenant atual; regra idêntica ao `hasEntitlement` do PRD-1: `billing_exempt` OU `active` OU `trial` não vencido). Aplicá-la como **fronteira de dados**, não só de UI, acrescentando `AND public.tenant_has_entitlement()` às policies RLS das tabelas de negócio (e/ou roteando mutações por RPCs `SECURITY DEFINER` que dão `RAISE EXCEPTION` quando bloqueado). **Escopo = bloqueio total** (alinhado à decisão do [README](README.md)): tanto registro quanto financeiro, em leitura e escrita — exceto uma **allowlist** de tabelas necessárias à tela de pagamento/conta (ver §5.4). O `SubscriptionGuard` (PRD-1) continua como **caminho primário de UX**; o banco é a **rede de segurança**. Contas com `billing_exempt=true` continuam liberadas (a função já cobre).
+- **RF-12 (A1 — período preenchido)** — Em `PAYMENT_CONFIRMED`/`PAYMENT_RECEIVED`, o webhook **deve** preencher `current_period_start` e `current_period_end` com as datas do ciclo retornadas pela Asaas. Sem isso, a transição `active→past_due` do cron `expire-subscriptions` (PRD-1) fica inerte (`NULL < now()` nunca casa). No fluxo normal, cada confirmação **empurra** `current_period_end` para o futuro; o rebaixamento primário em atraso é o evento `PAYMENT_OVERDUE` (RF-7), e o cron é apenas **backstop** para o caso de esse webhook se perder.
 
 ## 4. Requisitos não-funcionais
 
@@ -81,10 +87,47 @@ Padrão service-role do cron ([dunning-reminders](../../src/app/api/cron/dunning
 
 Auth por cookie de sessão, como [student-insights](../../src/app/api/ai/student-insights/route.ts) (`createRouteHandlerClient`). Conferir owner/admin via RPC (mesmo padrão de `is_admin_or_*` / `is_owner` usado no `SessionContext`). Persistência via service role.
 
+### 5.4 Enforcement de entitlement no banco (C1)
+
+Migration nova (ex.: `db/migrations/<data>_entitlement_enforcement.sql`):
+
+```sql
+-- Fonte única de verdade do entitlement, no banco (espelha hasEntitlement do PRD-1).
+create or replace function public.tenant_has_entitlement()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.subscriptions s
+    where s.tenant_id = current_tenant_id()
+      and ( s.billing_exempt
+         or s.status = 'active'
+         or (s.status = 'trial' and (s.trial_end is null or s.trial_end >= now())) )
+  );
+$$;
+```
+
+**Notas de implementação da função:**
+- É `SECURITY DEFINER` e o owner deve **ignorar a RLS de `subscriptions`** (evita recursão de policy ao ser chamada dentro de policies de outras tabelas). Testar explicitamente "ausência de recursão". `grant execute` para `authenticated`.
+- **Performance:** nas policies, usar o padrão `(select public.tenant_has_entitlement())` — o `select` força o Postgres a avaliar **uma vez por statement** (initPlan/cache), em vez de por linha. Importante em tabelas grandes (`payments`).
+
+**Escopo de aplicação (bloqueio total, com allowlist):**
+- **Bloquear** (leitura e escrita) as tabelas de negócio: `payments`, `expense_entries`, `other_revenues`, `students`, `teachers`, `turmas`, `payers`, sessões/agenda, etc.
+- **Allowlist (NÃO bloquear)** — necessárias para o tenant bloqueado conseguir se regularizar e operar a conta: `subscriptions` (leitura, já isolada por tenant), `tenant_settings` e `user_claims` (shell/sessão). As rotas `billing/subscribe|cancel` escrevem via **service role** (bypassam RLS), então o fluxo de pagamento continua funcionando mesmo bloqueado.
+- Definir a lista fechada (tabela por tabela, operação) na implementação.
+
+**Aplicação por tabela:** `AND (select public.tenant_has_entitlement())` nas policies; ou mutações via RPC `SECURITY DEFINER` com `if not (select tenant_has_entitlement()) then raise exception ... end if;`.
+
+> **Rollout seguro (não impactar atuais):** como todas as contas atuais estão `billing_exempt=true` (PRD-1), `tenant_has_entitlement()` retorna `true` para elas — ligar o enforcement **não** bloqueia ninguém hoje; só passa a barrar novos inadimplentes. Ordem: aplicar a função → validar (inclusive anti-deadlock) → acoplar às policies tabela a tabela.
+> **Kill-switch / rollback:** se o enforcement bloquear indevidamente em produção, reverter é `DROP POLICY`/recriar a policy sem o `AND tenant_has_entitlement()` (por tabela). Manter as policies do enforcement isoladas/identificáveis (nome próprio) para reversão rápida. Considerar uma flag global (ex.: setting que faz a função retornar `true`) como interruptor de emergência.
+
 ## 6. Arquivos a criar/alterar
 
-**Criar:** `src/lib/asaas.ts`, `src/app/api/webhooks/asaas/route.ts`, `src/app/api/billing/subscribe/route.ts`, `src/app/api/billing/cancel/route.ts`.
-**Alterar:** `src/app/(app)/assinatura/page.jsx` (ligar ao `subscribe`), [README_INTEGRACOES.md](../../README_INTEGRACOES.md) e [CLAUDE.md](../../CLAUDE.md) (env vars + fluxo). Configurar a URL do webhook no painel da Asaas.
+**Criar:** `src/lib/asaas.ts`, `src/app/api/webhooks/asaas/route.ts`, `src/app/api/billing/subscribe/route.ts`, `src/app/api/billing/cancel/route.ts`, `db/migrations/<data>_entitlement_enforcement.sql` (C1).
+**Alterar:** `src/app/(app)/assinatura/page.jsx` (ligar ao `subscribe`), policies/gateways das tabelas sensíveis (C1), [README_INTEGRACOES.md](../../README_INTEGRACOES.md) e [CLAUDE.md](../../CLAUDE.md) (env vars + fluxo). Configurar a URL do webhook no painel da Asaas.
 
 ## 7. Critérios de aceite (em sandbox Asaas)
 
@@ -96,6 +139,10 @@ Auth por cookie de sessão, como [student-insights](../../src/app/api/ai/student
 - [ ] `cancel` chama `DELETE /subscriptions/{id}` e seta `status='canceled'`.
 - [ ] Nenhum dado de cartão (PAN/CVV) persistido em banco/logs.
 - [ ] `tenant_id` nunca lido do corpo do webhook (revisão de código).
+- [ ] **(C1)** Tenant com `status='expired'`/`canceled` e `billing_exempt=false` **não** consegue ler/escrever dados sensíveis via API direta (ex.: `supabase.from('payments').select/insert` falha) — o bypass do PRD-1 deixa de existir.
+- [ ] **(C1)** Tenant com `billing_exempt=true` ou `active`/`trial` válido continua acessando normalmente (atuais não impactados).
+- [ ] **(C1 anti-deadlock)** Tenant bloqueado (`expired`/`past_due`) ainda abre `/assinatura` e `/conta` e conclui `subscribe`/`cancel` — não fica preso sem conseguir pagar.
+- [ ] **(A1)** Após `PAYMENT_CONFIRMED`, `current_period_end` fica preenchido; o cron `expire-subscriptions` consegue mover `active` vencido → `past_due`.
 
 ## 8. Verificação (manual, sandbox)
 
@@ -104,6 +151,8 @@ Auth por cookie de sessão, como [student-insights](../../src/app/api/ai/student
 3. Conferir no painel Asaas a assinatura e no banco os ids + `status='active'`.
 4. Usar o reenvio de webhook da Asaas para validar idempotência.
 5. Simular `OVERDUE`/cancelamento e conferir bloqueio.
+6. **(C1)** Com uma conta de teste `status='expired'`, `billing_exempt=false`: no console autenticado, tentar `supabase.from('payments').select('*')` e `insert(...)` → devem **falhar** após o enforcement. Repetir com conta isenta/ativa → deve passar.
+7. **(A1)** Após pagamento confirmado, conferir `current_period_end` no banco; forçar a data no passado e rodar o cron → `status` vira `past_due`.
 
 ## 9. Riscos
 
@@ -115,6 +164,11 @@ Auth por cookie de sessão, como [student-insights](../../src/app/api/ai/student
 | **Re-tentativas da Asaas** | Responder 2xx ao registrar o evento; 5xx só quando reprocessar é seguro |
 | **Divergência sandbox/prod** | Env e chaves separadas; checklist de cutover; testar lifecycle completo em sandbox antes do prod |
 | **Falha parcial no `subscribe`** (cria na Asaas mas falha ao persistir) | Reconciliar por `externalReference=tenantId`; `getOrCreateCustomer` idempotente; log + retry |
+| **(C1) Enforcement bloquear quem não devia** | Todas as contas atuais estão `billing_exempt=true` → ligar não bloqueia ninguém; aplicar função antes, validar, depois acoplar às policies; testar com conta não-isenta |
+| **(C1) Custo por query da RLS** | `tenant_has_entitlement()` é `stable`/indexada por `tenant_id`; aplicar primeiro em escrita e leitura sensível; medir; cachear no claim só para UX, nunca para autorização |
+| **(A1) `current_period_end` não vindo da Asaas** | Derivar do `nextDueDate`/ciclo retornado; se ausente, calcular `+1 mês` a partir do pagamento; logar anomalia |
+| **(C1) Deadlock de pagamento** (bloqueado não consegue pagar) | Allowlist (`subscriptions`/`tenant_settings`/`user_claims`) + rotas de billing via service role; critério de aceite anti-deadlock |
+| **(C1) Recursão de policy / função sem bypass** | `tenant_has_entitlement()` é `SECURITY DEFINER` com owner que ignora RLS de `subscriptions`; teste explícito de ausência de recursão |
 
 ## 10. Métricas de sucesso
 
