@@ -8,7 +8,8 @@
 
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useSubscription, hasEntitlement } from "@/lib/subscription";
+import { useSubscription } from "@/lib/subscription";
+import { accessLevel } from "@/lib/entitlement";
 import { isAllowed } from "@/lib/paywallRoutes";
 
 export default function SubscriptionGuard({ children }) {
@@ -16,9 +17,10 @@ export default function SubscriptionGuard({ children }) {
   const pathname = usePathname();
   const { loading, subscription } = useSubscription();
 
-  const entitled = hasEntitlement(subscription);
+  // Tri-estado: 'blocked' cai no paywall; 'readonly' (carência) NAVEGA normalmente
+  // — a escrita é barrada pela RLS no banco (tenant_can_write), não pela UI.
   const allowed = isAllowed(pathname);
-  const blocked = !loading && !entitled && !allowed;
+  const blocked = !loading && accessLevel(subscription) === "blocked" && !allowed;
 
   useEffect(() => {
     if (blocked) router.replace("/assinatura");

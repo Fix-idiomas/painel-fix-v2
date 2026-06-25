@@ -4,6 +4,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
+import { readSubscriptionClaim } from "@/lib/subscription";
+import { accessLevel, trialDaysLeft } from "@/lib/entitlement";
 import {
   User,
   Lock,
@@ -19,6 +21,7 @@ import {
   Pencil,
   Building2,
   ExternalLink,
+  CreditCard,
 } from "lucide-react";
 import AppModal, { FormError, ModalActions } from "@/components/AppModal";
 
@@ -301,6 +304,7 @@ export default function MinhaContaPage() {
   const tabs = [
     { key: "perfil", label: "Perfil", icon: User },
     { key: "seguranca", label: "Segurança", icon: Lock },
+    { key: "cobranca", label: "Plano e cobrança", icon: CreditCard },
     ...(isAdminUI ? [{ key: "equipe", label: "Equipe", icon: Users }] : []),
     { key: "notificacoes", label: "Notificações", icon: Bell },
     { key: "preferencias", label: "Preferências", icon: Globe },
@@ -484,6 +488,10 @@ export default function MinhaContaPage() {
         </div>
       )}
 
+      {tab === "cobranca" && (
+        <BillingTab isAdminUI={isAdminUI} />
+      )}
+
       {tab === "equipe" && isAdminUI && (
         <TeamTab
           tenant={tenant}
@@ -572,6 +580,289 @@ export default function MinhaContaPage() {
         />
       )}
     </div>
+  );
+}
+
+// ─── Sub-componente: aba Plano e cobrança ───────────────────────
+const PLAN_LABEL = { standard: "Plano único" };
+
+function fmtDateBR(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? null : d.toLocaleDateString("pt-BR");
+}
+
+function methodLabel(m) {
+  if (m === "credit_card") return "Cartão de crédito";
+  if (m === "pix") return "Pix";
+  return "—";
+}
+
+function subStatusMeta(status, level) {
+  if (level === "readonly") return { label: "Modo leitura", chip: "p-chip-warning" };
+  switch (status) {
+    case "active": return { label: "Ativa", chip: "p-chip-success" };
+    case "trial": return { label: "Em teste", chip: "p-chip-neutral" };
+    case "past_due": return { label: "Pagamento pendente", chip: "p-chip-danger" };
+    case "canceled": return { label: "Cancelada", chip: "p-chip-danger" };
+    case "expired": return { label: "Expirada", chip: "p-chip-danger" };
+    default: return { label: status || "—", chip: "p-chip-neutral" };
+  }
+}
+
+function BillingTab({ isAdminUI }) {
+  const [loadingSub, setLoadingSub] = useState(true);
+  const [claim, setClaim] = useState(null); // { status, billing_exempt, trial_end, current_period_end }
+  const [detail, setDetail] = useState(null); // { payment_method, ... } via rota service-role
+  const [err, setErr] = useState(null);
+  const [showCancel, setShowCancel] = useState(false);
+  const [canceled, setCanceled] = useState(false);
+
+  async function reload() {
+    setLoadingSub(true);
+    setErr(null);
+    try {
+      const c = await readSubscriptionClaim();
+      setClaim(c);
+      if (isAdminUI) {
+        const res = await fetch("/api/billing/status", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) setDetail(data.subscription ?? null);
+        else setErr(data.error || "Não foi possível carregar os detalhes da cobrança.");
+      }
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setLoadingSub(false);
+    }
+  }
+
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdminUI]);
+
+  // Apenas owner/admin gerencia billing — demais veem estado informativo (não some).
+  if (!isAdminUI) {
+    return (
+      <div className="p-card p-5 md:p-6">
+        <div className="flex items-start gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[var(--p-surface-2)] text-[var(--p-text-muted)]">
+            <CreditCard className="h-5 w-5" />
+          </div>
+          <div className="text-sm">
+            <div className="font-medium">Plano e cobrança</div>
+            <p className="mt-1 text-[var(--p-text-muted)]">
+              Apenas o proprietário ou administrador da escola gerencia a assinatura.
+              Fale com quem administra a conta para alterar o plano ou a forma de pagamento.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadingSub) {
+    return (
+      <div className="flex items-center gap-2 p-card p-5 md:p-6 text-sm text-[var(--p-text-muted)]">
+        <Loader2 className="h-4 w-4 animate-spin" /> Carregando assinatura…
+      </div>
+    );
+  }
+
+  const exempt = !!(claim?.billing_exempt || detail?.billing_exempt);
+
+  // Cortesia — oculta vencimento/cancelar/trocar (estado da maioria no dia 1).
+  if (exempt) {
+    return (
+      <div className="p-card p-5 md:p-6">
+        <div className="flex items-start gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[var(--p-success-50)] text-[var(--p-success)]">
+            <Check className="h-5 w-5" />
+          </div>
+          <div className="text-sm">
+            <div className="font-medium">Acesso de cortesia</div>
+            <p className="mt-1 text-[var(--p-text-muted)]">
+              Sua conta tem acesso liberado, sem cobrança. Nada a pagar por aqui.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Claim e detalhe ausentes — não afirma bloqueio; oferece recarregar.
+  if (!claim && !detail) {
+    return (
+      <div className="p-card p-5 md:p-6 text-sm">
+        <p className="text-[var(--p-text-muted)]">
+          Não conseguimos verificar sua assinatura agora. Recarregue a página; se persistir, saia e entre novamente.
+        </p>
+        {err && <p className="mt-2 text-xs text-[var(--p-danger)]">{err}</p>}
+        <button onClick={reload} className="p-btn p-btn-ghost mt-3 text-xs">Recarregar</button>
+      </div>
+    );
+  }
+
+  const status = (canceled ? "canceled" : null) || claim?.status || detail?.status || "desconhecido";
+  const level = accessLevel(canceled ? { status: "canceled" } : claim);
+  const dias = trialDaysLeft(claim);
+  const meta = subStatusMeta(status, level);
+  const periodEnd = fmtDateBR(claim?.current_period_end || detail?.current_period_end);
+  const trialEnd = fmtDateBR(claim?.trial_end || detail?.trial_end);
+  const plan = PLAN_LABEL[detail?.plan] || "Plano único";
+
+  const isActive = status === "active";
+  const isTrial = status === "trial";
+  const isReadonly = level === "readonly";
+  const isPastDue = status === "past_due";
+  const isCanceled = status === "canceled";
+  const isExpired = status === "expired";
+  const isProblem = isReadonly || isPastDue;
+
+  return (
+    <div className="space-y-5">
+      <div className="p-card p-5 md:p-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className={`grid h-10 w-10 place-items-center rounded-lg ${isProblem || isCanceled ? "bg-[var(--p-danger-50)] text-[var(--p-danger)]" : "bg-[var(--p-primary-50)] text-[var(--p-primary)]"}`}>
+              <CreditCard className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold">{plan}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                <span className={`p-chip ${meta.chip}`}>{meta.label}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <dl className="mt-5 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+          {isTrial && (
+            <Row label="Teste termina em">
+              {trialEnd
+                ? `${trialEnd}${dias != null && dias >= 0 ? ` (${dias} dia${dias === 1 ? "" : "s"})` : ""}`
+                : "—"}
+            </Row>
+          )}
+          {(isActive || isReadonly || isPastDue) && (
+            <Row label={isActive ? "Próxima cobrança" : "Período pago até"}>
+              {periodEnd || "—"}
+            </Row>
+          )}
+          <Row label="Forma de pagamento">
+            {detail?.payment_method ? methodLabel(detail.payment_method) : "Não informada"}
+          </Row>
+        </dl>
+
+        <p className="mt-4 text-xs text-[var(--p-text-muted)]">
+          {isActive && "Sua assinatura renova automaticamente. Você pode cancelar quando quiser."}
+          {isReadonly && "Seu acesso está em modo leitura. Regularize o pagamento para voltar a operar."}
+          {isPastDue && "Não conseguimos confirmar o último pagamento. Regularize para reabrir o acesso."}
+          {isTrial && "Assine para manter o acesso quando o teste terminar."}
+          {isCanceled && "Sua assinatura foi cancelada. Reative quando quiser — seus dados continuam guardados."}
+          {isExpired && "Seu período de teste terminou. Assine para voltar a usar o painel — seus dados continuam guardados."}
+        </p>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {isActive && (
+            <button
+              type="button"
+              onClick={() => setShowCancel(true)}
+              className="p-btn p-btn-danger-soft"
+            >
+              Cancelar assinatura
+            </button>
+          )}
+          {isTrial && (
+            <Link href="/assinatura" className="p-btn p-btn-primary">Assinar agora</Link>
+          )}
+          {(isReadonly || isPastDue) && (
+            <Link href="/assinatura" className="p-btn p-btn-primary">Regularizar pagamento</Link>
+          )}
+          {isCanceled && (
+            <Link href="/assinatura" className="p-btn p-btn-primary">Reativar assinatura</Link>
+          )}
+          {isExpired && (
+            <Link href="/assinatura" className="p-btn p-btn-primary">Assinar agora</Link>
+          )}
+        </div>
+      </div>
+
+      {showCancel && (
+        <CancelSubModal
+          periodEnd={periodEnd}
+          onClose={() => setShowCancel(false)}
+          onCanceled={async () => {
+            setShowCancel(false);
+            setCanceled(true);
+            // Atualiza o claim p/ refletir o cancelamento (e some o paywall não muda — readonly/blocked vem do cron/webhook).
+            try { await supabase.auth.refreshSession(); } catch { /* noop */ }
+            await reload();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function Row({ label, children }) {
+  return (
+    <div className="flex flex-col">
+      <dt className="text-xs font-medium text-[var(--p-text-muted)]">{label}</dt>
+      <dd className="mt-0.5 text-sm text-[var(--p-text)]">{children}</dd>
+    </div>
+  );
+}
+
+// Cancelamento NÃO é exclusão: tom de parceria, escape "Manter assinatura".
+function CancelSubModal({ periodEnd, onClose, onCanceled }) {
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function handleCancel() {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/billing/cancel", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErr(data.error || "Não foi possível cancelar agora. Tente de novo.");
+        setLoading(false);
+        return;
+      }
+      await onCanceled();
+    } catch (e) {
+      setErr(e?.message || String(e));
+      setLoading(false);
+    }
+  }
+
+  return (
+    <AppModal title="Cancelar assinatura" onClose={loading ? () => {} : onClose} maxWidth="sm">
+      <div className="flex flex-col gap-4 px-5 py-5 text-sm">
+        <p className="text-[var(--p-text-muted)]">
+          {periodEnd
+            ? <>Você continua com acesso completo até <span className="font-medium text-[var(--p-text)]">{periodEnd}</span> (período já pago). Depois disso o painel é pausado, mas seus dados ficam guardados.</>
+            : <>Sua assinatura será cancelada. Seus dados ficam guardados e você pode reativar quando quiser.</>}
+        </p>
+        <FormError message={err} />
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} disabled={loading} autoFocus className="p-btn p-btn-primary">
+            Manter assinatura
+          </button>
+          <button
+            type="button"
+            onClick={handleCancel}
+            disabled={loading}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-[var(--p-danger)]/30 px-4 py-2 text-sm font-medium text-[var(--p-danger)] hover:bg-[var(--p-danger-50)] disabled:opacity-60"
+          >
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+            {loading ? "Cancelando…" : "Cancelar mesmo assim"}
+          </button>
+        </div>
+      </div>
+    </AppModal>
   );
 }
 

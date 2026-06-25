@@ -53,7 +53,7 @@ PLAN_MONTHLY_BRL=...              # server only — valor mensal do plano (place
 APP_URL=...                       # opcional — base p/ links nos e-mails de dunning
 ```
 
-> **Billing/Asaas (PRD-2):** `src/lib/asaas.ts` (cliente, padrão `mailgun.ts`), webhook em `src/app/api/webhooks/asaas`, rotas `src/app/api/billing/{subscribe,cancel}`. Entitlement no banco (C1) via `tenant_access_level()`/`tenant_can_read()`/`tenant_can_write()` aplicadas como policies RESTRICTIVE nas tabelas de negócio. Crons: `expire-subscriptions` (backstop) e `subscription-dunning`.
+> **Billing/Asaas (PRD-2/3):** `src/lib/asaas.ts` (cliente, padrão `mailgun.ts`; cartão via checkout hospedado e **Pix inline** via `getPaymentPixQrCode`), webhook em `src/app/api/webhooks/asaas`, rotas `src/app/api/billing/{subscribe,cancel,status}`. UI: `/assinatura` (paywall + assinar) e aba "Plano e cobrança" em `/conta`. A rota `GET /billing/status` lê `subscriptions` via **service role** (anti-deadlock vs. policies RESTRICTIVE C1, gated por `is_admin_or_owner`); o status/datas a UI lê do **claim** JWT (`useSubscription`/`readSubscriptionClaim`), nunca da tabela direto. Entitlement no banco (C1) via `tenant_access_level()`/`tenant_can_read()`/`tenant_can_write()` aplicadas como policies RESTRICTIVE nas tabelas de negócio. Crons: `expire-subscriptions` (backstop) e `subscription-dunning`.
 
 ## Architecture & layered data access
 

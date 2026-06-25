@@ -120,6 +120,9 @@
 .p-btn-primary:hover { background: var(--p-primary-600); box-shadow: var(--p-shadow); }
 .p-btn-ghost { background: transparent; color: var(--p-text); border: 1px solid var(--p-border); }
 .p-btn-ghost:hover { background: var(--p-surface-2); border-color: var(--p-border-strong); }
+/* Ação destrutiva discreta (ex.: cancelar assinatura — "cancelar ≠ deletar"). */
+.p-btn-danger-soft { background: transparent; color: var(--p-danger); border: 1px solid color-mix(in srgb, var(--p-danger) 30%, transparent); }
+.p-btn-danger-soft:hover { background: var(--p-danger-50); }
 
 .p-chip {
   display: inline-flex;
