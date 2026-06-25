@@ -12,15 +12,24 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import crypto from "node:crypto";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+// Comparação de tempo constante (evita timing attack na checagem do secret).
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
 
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   const header =
     req.headers.get("authorization") || req.headers.get("Authorization");
-  if (!secret || header !== `Bearer ${secret}`) {
+  if (!secret || !header || !safeEqual(header, `Bearer ${secret}`)) {
     return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
   }
 
@@ -49,6 +58,9 @@ export async function GET(req: NextRequest) {
     if (e1) throw e1;
 
     // 2) Assinaturas ativas vencidas sem renovação → past_due
+    // NOTA: linhas com current_period_end NULL são ignoradas (NULL < now → NULL),
+    // o que é intencional. Esse campo só é populado quando há cobrança real
+    // (webhook do PRD-2); até lá, esta transição fica efetivamente inerte.
     const { data: pastDue, error: e2 } = await supabase
       .from("subscriptions")
       .update({ status: "past_due" })

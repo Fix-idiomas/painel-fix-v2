@@ -85,25 +85,27 @@ WHERE s.id IS NULL
 ON CONFLICT (tenant_id) DO NOTHING;
 
 -- ──────────────────────────────────────────────────────────────────────────
--- 3) Isenção vitalícia para contas ESPECÍFICAS (decisão travada com o dono).
---    >>> SUBSTITUIR a lista de e-mails abaixo antes de aplicar em produção. <<<
---    Alternativa: usar tenant_id direto (ver bloco comentado).
+-- 3) Isenção de cortesia: contas existentes ATÉ a data desta migração ("por
+--    enquanto", decisão interina). Contas criadas DEPOIS seguem o fluxo normal
+--    de trial → cobrança (billing_exempt = false default).
+--
+--    O corte por `tenants.created_at` torna a migração SEGURA para reaplicar:
+--    rerodá-la NÃO isenta pagantes futuros (criados após o corte).
+--    Para isentar apenas contas específicas, use o bloco comentado abaixo.
 -- ──────────────────────────────────────────────────────────────────────────
 UPDATE public.subscriptions sub
-   SET billing_exempt = true,
-       status = 'active'
- WHERE sub.tenant_id IN (
-   SELECT uc.tenant_id
-     FROM public.user_claims uc
-    WHERE uc.role = 'owner'
-      AND lower(uc.user_email_snapshot) IN (
-        -- 'email-do-dono-1@exemplo.com',
-        -- 'email-do-dono-2@exemplo.com'
-        ''  -- placeholder: não casa com ninguém até preencher
-      )
- );
+   SET billing_exempt = true
+  FROM public.tenants t
+ WHERE t.id = sub.tenant_id
+   AND sub.billing_exempt = false
+   AND t.created_at < timestamptz '2026-06-26 00:00:00+00';  -- corte: contas atuais
 
--- Alternativa por tenant_id (descomentar e preencher):
--- UPDATE public.subscriptions
---    SET billing_exempt = true, status = 'active'
---  WHERE tenant_id IN ('<tenant_id_1>', '<tenant_id_2>');
+-- Alternativa — isentar apenas contas específicas (descomentar e preencher):
+-- UPDATE public.subscriptions sub
+--    SET billing_exempt = true
+--  WHERE sub.tenant_id IN (
+--    SELECT uc.tenant_id
+--      FROM public.user_claims uc
+--      JOIN auth.users u ON u.id = uc.user_id
+--     WHERE lower(u.email) IN ('email-1@exemplo.com', 'email-2@exemplo.com')
+--  );

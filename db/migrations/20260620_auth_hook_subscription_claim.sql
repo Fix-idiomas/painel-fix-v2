@@ -30,6 +30,11 @@ begin
   claims := event->'claims';
 
   -- Tenant "atual" = claim mais recente do usuário (mesma regra do bootstrap).
+  -- PREMISSA (PRD-1): 1 claim/tenant ativo por usuário. Para usuários em
+  -- múltiplos tenants, o claim de assinatura reflete só o tenant mais recente,
+  -- que pode divergir de current_tenant_id(). Reavaliar quando multi-tenant por
+  -- usuário existir (alinhar a seleção a current_tenant_id()). Não é fronteira
+  -- de segurança — o isolamento de DADOS é por RLS; isto é só o gate de UI.
   select s.status, s.billing_exempt, s.trial_end, s.current_period_end
     into v_status, v_exempt, v_trial_end, v_period_end
   from public.user_claims uc
