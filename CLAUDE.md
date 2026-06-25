@@ -46,7 +46,14 @@ MAILGUN_API_KEY=...               # server only
 MAILGUN_DOMAIN=...
 MAILGUN_FROM=...
 CRON_SECRET=...                   # Bearer token guarding /api/cron/* routes
+ASAAS_API_KEY=...                 # server only — Asaas (assinaturas SaaS). Contém '$' → use ASPAS no .env.local
+ASAAS_WEBHOOK_TOKEN=...           # server only — valida o header asaas-access-token do webhook
+ASAAS_BASE_URL=...                # https://api-sandbox.asaas.com/v3 (sandbox) | https://api.asaas.com/v3 (prod)
+PLAN_MONTHLY_BRL=...              # server only — valor mensal do plano (placeholder até definição)
+APP_URL=...                       # opcional — base p/ links nos e-mails de dunning
 ```
+
+> **Billing/Asaas (PRD-2):** `src/lib/asaas.ts` (cliente, padrão `mailgun.ts`), webhook em `src/app/api/webhooks/asaas`, rotas `src/app/api/billing/{subscribe,cancel}`. Entitlement no banco (C1) via `tenant_access_level()`/`tenant_can_read()`/`tenant_can_write()` aplicadas como policies RESTRICTIVE nas tabelas de negócio. Crons: `expire-subscriptions` (backstop) e `subscription-dunning`.
 
 ## Architecture & layered data access
 
