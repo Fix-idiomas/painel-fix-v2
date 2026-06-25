@@ -56,6 +56,44 @@ const ROLE_PRESETS = {
   member: { role: "member" },
 };
 
+// Hidrata a sessão a partir do DB (fonte da verdade). Reutilizada no mount e
+// em mudanças de autenticação. Retorna a sessão normalizada ou null (sem usuário).
+async function hydrateFromDb(prevTenantName) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  // tenant atual (sempre do DB)
+  const { data: tenantId } = await supabase.rpc("current_tenant_id");
+
+  // claim do usuário no tenant
+  let claim = null;
+  if (tenantId) {
+    const { data: c } = await supabase
+      .from("user_claims")
+      .select("tenant_id, user_id, role, perms, user_email_snapshot, user_name_snapshot")
+      .eq("user_id", user.id)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    claim = c ?? null;
+  }
+
+  // opcional: teacherId
+  let teacherId = null;
+  try {
+    const { data: tid } = await supabase.rpc("current_teacher_id");
+    teacherId = tid ?? null;
+  } catch { /* ignore */ }
+
+  // opcional: owner (RPC correta — NÃO usar is_admin_or_owner, que elevaria admin a owner)
+  let isOwner = false;
+  try {
+    const { data: ownerOk } = await supabase.rpc("is_owner_current_tenant");
+    isOwner = ownerOk === true;
+  } catch { /* ignore */ }
+
+  return fromDbToSession({ user, tenantId, claim, isOwner, teacherId, tenantName: prevTenantName });
+}
+
 const SessionContext = createContext(null);
 
 export function SessionProvider({ children }) {
@@ -68,87 +106,42 @@ export function SessionProvider({ children }) {
       const raw = typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
       const parsed = raw ? JSON.parse(raw) : {};
       // Por enquanto só garantimos tenantName preferido (se você salva isso)
-      setSession({ ...DEFAULT_SESSION, tenantName: parsed.tenantName ?? DEFAULT_SESSION.tenantName });
+      setSession((prev) => ({
+        ...(prev ?? DEFAULT_SESSION),
+        tenantName: parsed.tenantName ?? DEFAULT_SESSION.tenantName,
+      }));
     } catch {
-      setSession({ ...DEFAULT_SESSION });
-  // Atualiza sessão ao mudar autenticação
-  useEffect(() => {
-    const { data: sub } = supabase.auth.onAuthStateChange(async () => {
-      setReady(false);
-      setSession(null);
-
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) { setReady(true); return; }
-        const { data: tenantId } = await supabase.rpc("current_tenant_id");
-        const { data: claim } = tenantId
-          ? await supabase.from("user_claims")
-              .select("tenant_id,user_id,role,perms,user_email_snapshot,user_name_snapshot")
-              .eq("user_id", user.id).eq("tenant_id", tenantId).maybeSingle()
-          : { data: null };
-        const { data: tid } = await supabase.rpc("current_teacher_id").catch(() => ({ data: null }));
-        const { data: ownerOk } = await supabase.rpc("is_admin_or_owner").catch(() => ({ data: false }));
-
-        setSession(fromDbToSession({
-          user, tenantId, claim, isOwner: ownerOk === true, teacherId: tid ?? null,
-          tenantName: session?.tenantName,
-        }));
-      } finally {
-        setReady(true);
-      }
-    });
-    return () => sub.subscription?.unsubscribe();
-  }, []);
+      setSession((prev) => prev ?? { ...DEFAULT_SESSION });
     }
   }, []);
 
-  // 2) Carrega usuário + tenant + claim do DB (fonte da verdade)
+  // 2) Carrega usuário + tenant + claim do DB (fonte da verdade) no mount E a
+  //    cada mudança de autenticação (login/logout/refresh de token).
   useEffect(() => {
-    (async () => {
+    let active = true;
+
+    async function refresh() {
+      setReady(false);
       try {
-        // 2.1 usuário
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) { setReady(true); return; }
-
-        // 2.2 tenant atual (sempre do DB)
-        const { data: tenantId } = await supabase.rpc("current_tenant_id");
-
-        // 2.3 claim do usuário no tenant
-        let claim = null;
-        if (tenantId) {
-          const { data: c } = await supabase
-            .from("user_claims")
-            .select("tenant_id, user_id, role, perms, user_email_snapshot, user_name_snapshot")
-            .eq("user_id", user.id)
-            .eq("tenant_id", tenantId)
-            .maybeSingle();
-          claim = c ?? null;
-        }
-
-        // 2.4 opcional: teacherId via função existente (se tiver)
-        let teacherId = null;
-        try {
-          const { data: tid } = await supabase.rpc("current_teacher_id");
-          teacherId = tid ?? null;
-        } catch { /* ignore */ }
-
-        // 2.5 opcional: owner
-        let isOwner = false;
-        try {
-          const { data: ownerOk } = await supabase.rpc("is_owner_current_tenant");
-          isOwner = ownerOk === true;
-        } catch { /* ignore */ }
-
-        const next = fromDbToSession({
-          user, tenantId, claim, isOwner, teacherId,
-          tenantName: session?.tenantName, // preserva label amigável se você usa
-        });
-
-        setSession(next);
+        const next = await hydrateFromDb(session?.tenantName);
+        if (active) setSession(next);
       } finally {
-        setReady(true);
+        if (active) setReady(true);
       }
-    })();
+    }
+
+    refresh(); // hidratação inicial
+
+    // INITIAL_SESSION é ignorado para não duplicar a hidratação do mount.
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "INITIAL_SESSION") return;
+      refresh();
+    });
+
+    return () => {
+      active = false;
+      sub.subscription?.unsubscribe();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
