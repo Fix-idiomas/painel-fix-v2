@@ -11,9 +11,14 @@ const BASE_URL = process.env.ASAAS_BASE_URL;
 const API_KEY = process.env.ASAAS_API_KEY;
 const WEBHOOK_TOKEN = process.env.ASAAS_WEBHOOK_TOKEN;
 
-export type AsaasResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; status: number; error: string };
+// Tipo "achatado" (campos opcionais) — narrowing de união discriminada não é
+// confiável neste projeto (tsconfig strict:false / sem strictNullChecks).
+export type AsaasResult<T> = {
+  ok: boolean;
+  data?: T;
+  status?: number;
+  error?: string;
+};
 
 type Json = Record<string, unknown>;
 
