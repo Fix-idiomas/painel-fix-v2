@@ -60,7 +60,7 @@ BEGIN
 
     -- NOVO: semeia o trial de 14 dias na mesma transação
     INSERT INTO public.subscriptions (tenant_id, status, trial_end)
-    VALUES (v_tenant_id, 'trial', now() + interval '14 days')
+    VALUES (v_tenant_id, 'trial', now() + interval '30 days')
     ON CONFLICT (tenant_id) DO NOTHING;
 
     RETURN v_tenant_id;
@@ -78,7 +78,7 @@ END $$;
 -- 2) Backfill: garante uma assinatura (trial de cortesia) p/ todo tenant atual.
 -- ──────────────────────────────────────────────────────────────────────────
 INSERT INTO public.subscriptions (tenant_id, status, trial_end)
-SELECT t.id, 'trial', now() + interval '14 days'
+SELECT t.id, 'trial', now() + interval '30 days'
 FROM public.tenants t
 LEFT JOIN public.subscriptions s ON s.tenant_id = t.id
 WHERE s.id IS NULL
