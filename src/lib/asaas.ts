@@ -9,7 +9,6 @@ import crypto from "node:crypto";
 
 const BASE_URL = process.env.ASAAS_BASE_URL;
 const API_KEY = process.env.ASAAS_API_KEY;
-const WEBHOOK_TOKEN = process.env.ASAAS_WEBHOOK_TOKEN;
 
 // Tipo "achatado" (campos opcionais) — narrowing de união discriminada não é
 // confiável neste projeto (tsconfig strict:false / sem strictNullChecks).
@@ -148,10 +147,11 @@ export async function cancelSubscription(
 // ──────────────────────────── Webhook ──────────────────────────────
 // Compara, em tempo constante, o header `asaas-access-token` com ASAAS_WEBHOOK_TOKEN.
 export function verifyWebhook(req: Request): boolean {
-  if (!WEBHOOK_TOKEN) return false;
+  const token = process.env.ASAAS_WEBHOOK_TOKEN;
+  if (!token) return false;
   const got = req.headers.get("asaas-access-token") || "";
   const a = Buffer.from(got);
-  const b = Buffer.from(WEBHOOK_TOKEN);
+  const b = Buffer.from(token);
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
 }

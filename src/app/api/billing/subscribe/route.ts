@@ -9,7 +9,12 @@ import { cookies } from "next/headers";
 import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
 import { createClient } from "@supabase/supabase-js";
 import type { NextRequest } from "next/server";
-import { getOrCreateCustomer, createSubscription, type AsaasMethod } from "@/lib/asaas";
+import {
+  getOrCreateCustomer,
+  createSubscription,
+  cancelSubscription,
+  type AsaasMethod,
+} from "@/lib/asaas";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -59,6 +64,23 @@ export async function POST(req: NextRequest) {
     const name = String(body?.name || "").trim() || session.user.email || "Cliente";
     const creditCardToken = body?.creditCardToken ? String(body.creditCardToken) : undefined;
     if (!cpfCnpj) return json({ error: "CPF/CNPJ é obrigatório." }, 400);
+    if (method === "credit_card" && !creditCardToken) {
+      return json({ error: "Token do cartão é obrigatório para pagamento no cartão." }, 400);
+    }
+
+    const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
+    // Evita assinatura órfã: cancela uma anterior (não cancelada) antes de criar.
+    const { data: existing } = await admin
+      .from("subscriptions")
+      .select("asaas_subscription_id, status")
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (existing?.asaas_subscription_id && existing.status !== "canceled") {
+      await cancelSubscription(existing.asaas_subscription_id); // best-effort
+    }
 
     const cust = await getOrCreateCustomer({
       name,
@@ -69,7 +91,7 @@ export async function POST(req: NextRequest) {
     if (!cust.ok) return json({ error: `Asaas (cliente): ${cust.error}` }, 502);
 
     const sub = await createSubscription({
-      customerId: cust.data.id,
+      customerId: cust.data!.id,
       method,
       value: PLAN_VALUE,
       nextDueDate: todayISO(),
@@ -80,14 +102,11 @@ export async function POST(req: NextRequest) {
     if (!sub.ok) return json({ error: `Asaas (assinatura): ${sub.error}` }, 502);
 
     // Persiste os ids (status só muda via webhook PAYMENT_CONFIRMED).
-    const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
     const { error: upErr } = await admin
       .from("subscriptions")
       .update({
-        asaas_customer_id: cust.data.id,
-        asaas_subscription_id: sub.data.id,
+        asaas_customer_id: cust.data!.id,
+        asaas_subscription_id: sub.data!.id,
         payment_method: method,
       })
       .eq("tenant_id", tenantId);

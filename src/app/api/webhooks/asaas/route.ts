@@ -14,52 +14,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyWebhook } from "@/lib/asaas";
+import { transition, normalizeRef } from "@/lib/asaasWebhook";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 type Dict = Record<string, unknown>;
-
-function addMonthsISO(ymd: string, n: number): string {
-  const [Y, M, D] = String(ymd).slice(0, 10).split("-").map(Number);
-  const d = new Date(Date.UTC(Y, (M - 1) + n, D));
-  return d.toISOString().slice(0, 10);
-}
-
-function mapBillingType(bt: unknown): string | null {
-  if (bt === "CREDIT_CARD") return "credit_card";
-  if (bt === "PIX") return "pix";
-  if (bt === "BOLETO") return "boleto";
-  return null;
-}
-
-// Transição de status a partir do evento. Retorna o patch (ou null = ignora).
-function transition(event: string, payment: Dict | null): Dict | null {
-  switch (event) {
-    case "PAYMENT_CONFIRMED":
-    case "PAYMENT_RECEIVED": {
-      const due = payment?.dueDate ? String(payment.dueDate).slice(0, 10) : null;
-      return {
-        status: "active",
-        payment_method: mapBillingType(payment?.billingType),
-        current_period_start: due,
-        // cobre até o próximo ciclo; o cron usa current_period_end < now (backstop)
-        current_period_end: due ? addMonthsISO(due, 1) : null,
-      };
-    }
-    case "PAYMENT_OVERDUE":
-      return { status: "past_due" };
-    case "PAYMENT_REFUNDED":
-    case "PAYMENT_CHARGEBACK_REQUESTED":
-    case "PAYMENT_CHARGEBACK_DISPUTE":
-      return { status: "past_due" };
-    case "SUBSCRIPTION_DELETED":
-    case "SUBSCRIPTION_INACTIVATED":
-      return { status: "canceled" };
-    default:
-      return null;
-  }
-}
 
 export async function POST(req: NextRequest) {
   if (!verifyWebhook(req)) {
@@ -83,10 +43,9 @@ export async function POST(req: NextRequest) {
   const event = String(body?.event || "");
   const payment = (body?.payment as Dict) || null;
   const subObj = (body?.subscription as Dict) || null;
-  const asaasSubId =
-    (payment?.subscription as string) || (subObj?.id as string) || null;
-  const asaasCustId =
-    (payment?.customer as string) || (subObj?.customer as string) || null;
+  // Asaas pode mandar subscription/customer como string (id) ou objeto expandido.
+  const asaasSubId = normalizeRef(payment?.subscription) || normalizeRef(subObj?.id);
+  const asaasCustId = normalizeRef(payment?.customer) || normalizeRef(subObj?.customer);
   const eventId =
     (body?.id as string) ||
     (payment?.id ? `${event}:${payment.id}` : null) ||
