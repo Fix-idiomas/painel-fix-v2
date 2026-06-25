@@ -15,22 +15,26 @@ Com a fundação de entitlement pronta (PRD-1), este PRD **conecta a Asaas** par
 
 **In:**
 - Helper `src/lib/asaas.ts` (cliente HTTP da Asaas).
+- **Cartão de crédito recorrente E Pix recorrente** no MVP (assinaturas Asaas com `billingType` `CREDIT_CARD` e `PIX`). Usuário escolhe o método.
 - Webhook `src/app/api/webhooks/asaas/route.ts` com idempotência e mapeamento de tenant.
 - Rotas `src/app/api/billing/subscribe` e `src/app/api/billing/cancel`.
-- **Enforcement de entitlement no banco** (achado C1): função SQL + aplicação em RLS/RPC das tabelas sensíveis, para bloquear dados de tenant sem assinatura.
-- **Preenchimento de `current_period_end`** pelo webhook (achado A1), destravando a transição `active→past_due` do cron do PRD-1.
+- **Entitlement tri-estado + carência somente-leitura** (decisão de produto): total → somente-leitura (N dias) → bloqueado. Ver §5.4.
+- **Enforcement de entitlement no banco** (achado C1): função SQL + aplicação em RLS/RPC, respeitando o tri-estado (leitura liberada na carência; escrita bloqueada).
+- **Preenchimento de `current_period_end`** pelo webhook (achado A1), destravando a transição do cron do PRD-1.
+- **Cron de dunning de assinatura** reusando o padrão do `dunning-reminders` (e-mail ao owner em atraso) + retry de cartão da Asaas.
 - Env vars e documentação (`README_INTEGRACOES.md`, `CLAUDE.md`).
 - Testes em **sandbox Asaas**.
 
 **Out:**
 - UI rica de checkout/gestão (PRD-3) — aqui a `/assinatura` consome as rotas, mas o polimento de UX é do PRD-3.
 - Cobrança por seat (preparado no schema do PRD-1).
-- Pix/boleto recorrente (futuro).
+- Boleto recorrente (futuro).
+- Limites por plano (nº de alunos/turmas) via C1 — oportunidade futura.
 
 ## 3. Requisitos funcionais
 
 - **RF-1** — `getOrCreateCustomer({ name, email, cpfCnpj, tenantId })`: busca por `externalReference=tenantId`; se não existir, cria. Persiste `asaas_customer_id` em `subscriptions`.
-- **RF-2** — `createCardSubscription(...)`: cria assinatura `cycle:'MONTHLY'` no cartão (token ou hosted), com `externalReference=tenantId`. Persiste `asaas_subscription_id` e `payment_method='credit_card'`.
+- **RF-2** — `createSubscription({ method, ... })`: cria assinatura `cycle:'MONTHLY'` com `externalReference=tenantId`, suportando **`method='credit_card'`** (token/hosted) **e `method='pix'`** (`billingType: PIX`). Persiste `asaas_subscription_id` e `payment_method`. Nota: cartão **renova automático**; Pix gera cobrança a cada ciclo e depende mais de dunning/retry (RF-14).
 - **RF-3** — `getSubscription(id)` e `cancelSubscription(id)` para reconciliação e cancelamento.
 - **RF-4** — Webhook autentica comparando o header `asaas-access-token` com `ASAAS_WEBHOOK_TOKEN` (comparação de tempo constante); rejeita **401** se inválido.
 - **RF-5** — Webhook é **idempotente**: registra `subscription_events.asaas_event_id` (unique); evento repetido → **200** sem reprocessar.
@@ -45,6 +49,8 @@ Com a fundação de entitlement pronta (PRD-1), este PRD **conecta a Asaas** par
 - **RF-10** — Toda alteração de status grava um registro em `subscription_events` (auditoria), inclusive ações iniciadas pelas rotas de billing.
 - **RF-11 (C1 — enforcement no banco)** — Criar função `tenant_has_entitlement()` (`SECURITY DEFINER`, lê a `subscriptions` do tenant atual; regra idêntica ao `hasEntitlement` do PRD-1: `billing_exempt` OU `active` OU `trial` não vencido). Aplicá-la como **fronteira de dados**, não só de UI, acrescentando `AND public.tenant_has_entitlement()` às policies RLS das tabelas de negócio (e/ou roteando mutações por RPCs `SECURITY DEFINER` que dão `RAISE EXCEPTION` quando bloqueado). **Escopo = bloqueio total** (alinhado à decisão do [README](README.md)): tanto registro quanto financeiro, em leitura e escrita — exceto uma **allowlist** de tabelas necessárias à tela de pagamento/conta (ver §5.4). O `SubscriptionGuard` (PRD-1) continua como **caminho primário de UX**; o banco é a **rede de segurança**. Contas com `billing_exempt=true` continuam liberadas (a função já cobre).
 - **RF-12 (A1 — período preenchido)** — Em `PAYMENT_CONFIRMED`/`PAYMENT_RECEIVED`, o webhook **deve** preencher `current_period_start` e `current_period_end` com as datas do ciclo retornadas pela Asaas. Sem isso, a transição `active→past_due` do cron `expire-subscriptions` (PRD-1) fica inerte (`NULL < now()` nunca casa). No fluxo normal, cada confirmação **empurra** `current_period_end` para o futuro; o rebaixamento primário em atraso é o evento `PAYMENT_OVERDUE` (RF-7), e o cron é apenas **backstop** para o caso de esse webhook se perder.
+- **RF-13 (tri-estado / carência somente-leitura)** — O entitlement deixa de ser binário e passa a ter **3 níveis de acesso**: `full` (operação normal), `readonly` (carência: lê/exporta, **não** escreve) e `blocked` (paywall total — só `/assinatura` e `/conta`). Regra: `billing_exempt` ou `active` ou `trial` não vencido → **full**; vencido/`past_due`/`expired` dentro da janela de carência de **N dias** → **readonly**; após a carência → **blocked**. A janela é configurável (ex.: 7 dias). Isso substitui o "bloqueio total imediato" do PRD-1 — o paywall (guard) e o enforcement no banco (C1) passam a respeitar os 3 níveis.
+- **RF-14 (dunning de assinatura)** — Cron `subscription-dunning` (espelha [dunning-reminders](../../src/app/api/cron/dunning-reminders/route.ts): Bearer `CRON_SECRET` + service role) que, para tenants em carência/`past_due` (não isentos), envia e-mail ao owner com link para `/assinatura` (sequência ex.: D+0, D+3, D+6 antes do bloqueio). Confiar primeiro no **retry automático de cartão da Asaas**; o e-mail cobre inadimplência involuntária e o caso Pix (que não renova sozinho).
 
 ## 4. Requisitos não-funcionais
 
@@ -92,34 +98,52 @@ Auth por cookie de sessão, como [student-insights](../../src/app/api/ai/student
 Migration nova (ex.: `db/migrations/<data>_entitlement_enforcement.sql`):
 
 ```sql
--- Fonte única de verdade do entitlement, no banco (espelha hasEntitlement do PRD-1).
-create or replace function public.tenant_has_entitlement()
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
+-- Nível de acesso do tenant atual (TRI-ESTADO), espelhando a regra do PRD-1 + carência.
+--   full     : billing_exempt OU active OU trial não vencido
+--   readonly : dentro da janela de carência de N dias após o direito vencer
+--   blocked  : após a carência (ou sem assinatura)
+create or replace function public.tenant_access_level()
+returns text language sql stable security definer set search_path = public
 as $$
-  select exists (
-    select 1 from public.subscriptions s
-    where s.tenant_id = current_tenant_id()
-      and ( s.billing_exempt
-         or s.status = 'active'
-         or (s.status = 'trial' and (s.trial_end is null or s.trial_end >= now())) )
-  );
+  with s as (
+    select * from public.subscriptions where tenant_id = current_tenant_id() limit 1
+  )
+  select case
+    when not exists (select 1 from s)                              then 'blocked'
+    when (select billing_exempt from s)                           then 'full'
+    when (select status from s) = 'active'                        then 'full'
+    when (select status from s) = 'trial'
+         and ((select trial_end from s) is null
+              or (select trial_end from s) >= now())              then 'full'
+    -- carência: até N dias após o ponto de vencimento (trial_end/current_period_end)
+    when coalesce((select trial_end from s),
+                  (select current_period_end from s))
+         >= now() - interval '7 days'                             then 'readonly'
+    else 'blocked'
+  end;
 $$;
+
+-- Helpers usados nas policies.
+create or replace function public.tenant_can_read() returns boolean
+  language sql stable security definer set search_path = public
+  as $$ select public.tenant_access_level() in ('full','readonly') $$;
+
+create or replace function public.tenant_can_write() returns boolean
+  language sql stable security definer set search_path = public
+  as $$ select public.tenant_access_level() = 'full' $$;
 ```
 
 **Notas de implementação da função:**
 - É `SECURITY DEFINER` e o owner deve **ignorar a RLS de `subscriptions`** (evita recursão de policy ao ser chamada dentro de policies de outras tabelas). Testar explicitamente "ausência de recursão". `grant execute` para `authenticated`.
 - **Performance:** nas policies, usar o padrão `(select public.tenant_has_entitlement())` — o `select` força o Postgres a avaliar **uma vez por statement** (initPlan/cache), em vez de por linha. Importante em tabelas grandes (`payments`).
 
-**Escopo de aplicação (bloqueio total, com allowlist):**
-- **Bloquear** (leitura e escrita) as tabelas de negócio: `payments`, `expense_entries`, `other_revenues`, `students`, `teachers`, `turmas`, `payers`, sessões/agenda, etc.
-- **Allowlist (NÃO bloquear)** — necessárias para o tenant bloqueado conseguir se regularizar e operar a conta: `subscriptions` (leitura, já isolada por tenant), `tenant_settings` e `user_claims` (shell/sessão). As rotas `billing/subscribe|cancel` escrevem via **service role** (bypassam RLS), então o fluxo de pagamento continua funcionando mesmo bloqueado.
+**Escopo de aplicação (tri-estado, com allowlist):**
+- **Tabelas de negócio** (`payments`, `expense_entries`, `other_revenues`, `students`, `teachers`, `turmas`, `payers`, sessões/agenda, etc.):
+  - **SELECT:** `AND (select public.tenant_can_read())` → liberado em `full` e `readonly` (carência), negado em `blocked`.
+  - **INSERT/UPDATE/DELETE:** `AND (select public.tenant_can_write())` → só em `full`. Na carência o tenant **vê/exporta mas não opera**.
+- **Allowlist (sem checagem de entitlement)** — para o tenant em carência/bloqueado conseguir se regularizar e operar a conta: `subscriptions` (leitura, já isolada por tenant), `tenant_settings` e `user_claims` (shell/sessão). As rotas `billing/subscribe|cancel` escrevem via **service role** (bypassam RLS), então pagar/desbloquear sempre funciona.
 - Definir a lista fechada (tabela por tabela, operação) na implementação.
-
-**Aplicação por tabela:** `AND (select public.tenant_has_entitlement())` nas policies; ou mutações via RPC `SECURITY DEFINER` com `if not (select tenant_has_entitlement()) then raise exception ... end if;`.
+- **Alternativa por RPC:** mutações via RPC `SECURITY DEFINER` com `if not (select tenant_can_write()) then raise exception ... end if;`.
 
 > **Rollout seguro (não impactar atuais):** como todas as contas atuais estão `billing_exempt=true` (PRD-1), `tenant_has_entitlement()` retorna `true` para elas — ligar o enforcement **não** bloqueia ninguém hoje; só passa a barrar novos inadimplentes. Ordem: aplicar a função → validar (inclusive anti-deadlock) → acoplar às policies tabela a tabela.
 > **Kill-switch / rollback:** se o enforcement bloquear indevidamente em produção, reverter é `DROP POLICY`/recriar a policy sem o `AND tenant_has_entitlement()` (por tabela). Manter as policies do enforcement isoladas/identificáveis (nome próprio) para reversão rápida. Considerar uma flag global (ex.: setting que faz a função retornar `true`) como interruptor de emergência.
@@ -180,5 +204,13 @@ $$;
 ## 11. Dependências
 
 - Conta Asaas (sandbox + produção), chave de API e token de webhook.
-- PRD-1 em produção (tabelas, claim, guard).
-- Decisão de produto: valor mensal do plano e CPF/CNPJ exigido no cadastro do customer.
+- PRD-1 em produção (tabelas, claim, guard) — com trial atualizado p/ 30 dias.
+
+### Decisões de produto em aberto (do trabalho de Produto/Design)
+- **Preço mensal do plano** (bloqueia avaliar funil; PRD-2 não roda sem isso).
+- **Janela de carência somente-leitura**: quantos dias (`N`)? (a §5.4 usa 7 como exemplo).
+- **CPF/CNPJ** obrigatório no cadastro do customer Asaas (afeta fricção e PF vs. MEI/PJ).
+- **Política de refund/chargeback**: vira `past_due` ou `canceled`? (RF-7).
+- **Lista de contas `billing_exempt`** (pendência do PRD-1 §5.2).
+- **Sucessão/troca de owner** com assinatura ativa (edge case de billing).
+- **Pix recorrente**: definir cadência de dunning e re-cobrança (Pix não renova sozinho).

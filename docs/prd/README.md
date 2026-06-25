@@ -13,9 +13,9 @@ Hoje qualquer pessoa cria conta, faz onboarding (`bootstrap_tenant_and_admin`) e
 | Tema | Decisão | Evolução futura |
 |---|---|---|
 | **Unidade de cobrança** | Uma assinatura **por tenant** (preço flat, independente do nº de professores) | Evoluir para **por-professor (seat)** — modelo de dados já preparado |
-| **Método de cobrança** | **Assinatura recorrente no cartão de crédito** (auto-cobrança mensal via Asaas) | Pix/boleto recorrente como opção adicional |
-| **Planos** | **Plano único pago + trial grátis de 14 dias** | Tiers (Free/Pro) |
-| **Inadimplência** | **Bloqueio total no vencimento** (sem carência): assinatura inativa → paywall | Carência / modo somente-leitura |
+| **Método de cobrança** | **Cartão de crédito recorrente + Pix recorrente**, ambos no MVP (via Asaas) | Boleto como opção adicional |
+| **Planos** | **Plano único pago + trial grátis de 30 dias** (cobre um ciclo mensal de valor; sem cartão no início) | Tiers (Free/Pro); por-professor |
+| **Inadimplência** | **Carência somente-leitura, depois bloqueio total.** No vencimento/atraso: janela de N dias em modo leitura (vê/exporta, não opera) → depois paywall total. Entitlement vira **tri-estado** (total / leitura / bloqueado) | Ajuste fino da janela por plano |
 | **Quem gerencia billing** | Apenas **owner/admin** do tenant (verificado server-side via RPC) | — |
 | **Contas isentas (cortesia)** | Flag **`billing_exempt`** por tenant → entitlement vitalício, ignora cobrança. Aplicada a **contas específicas** já existentes (lista a definir) | Painel admin para alternar a flag |
 
@@ -40,10 +40,10 @@ Hoje qualquer pessoa cria conta, faz onboarding (`bootstrap_tenant_and_admin`) e
 - **Tenant** — uma conta/escola. `1 tenant = 1 owner`. É a unidade cobrada na v1.
 - **Owner / Admin** — papéis em `user_claims.role`. Só eles gerenciam billing.
 - **Professor** — registro de dados (`teachers`) sob um tenant; nem sempre é um usuário com login. **Não** é a unidade cobrada na v1.
-- **Trial** — período inicial gratuito (14 dias) que todo tenant ganha ao ser criado.
-- **Entitlement** — direito de acesso ao app; ativo quando `billing_exempt = true`, ou `status = active`, ou `status = trial` (não expirado).
+- **Trial** — período inicial gratuito (30 dias, sem cartão) que todo tenant ganha ao ser criado.
+- **Entitlement (tri-estado)** — nível de acesso ao app: **total** (`billing_exempt`, `active`, ou `trial` não expirado), **somente-leitura** (janela de carência após vencer: lê/exporta, não opera) e **bloqueado** (paywall). Detalhado no PRD-2 (§5.4).
 - **Isenção vitalícia (`billing_exempt`)** — flag por tenant que concede entitlement permanente e o exclui de cobrança, cron e rebaixamento por webhook. Usada para contas de cortesia / dono da plataforma.
-- **Asaas** — gateway de cobrança brasileiro. Usaremos a API de **Assinaturas** (`/subscriptions`) com cartão de crédito.
+- **Asaas** — gateway de cobrança brasileiro. Usaremos a API de **Assinaturas** (`/subscriptions`) com **cartão de crédito e Pix recorrente**.
 
 ## Convenções seguidas
 

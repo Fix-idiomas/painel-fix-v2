@@ -5,7 +5,9 @@
 
 ## 1. Contexto & objetivo
 
-O Painel Fix v2 é hoje 100% gratuito. Este PRD estabelece a **fundação de entitlement** (direito de acesso) e o **paywall**, **sem ainda integrar cobrança**. Ao final, todo tenant nasce com um **trial de 14 dias** e, quando o entitlement não está ativo (`trial` expirado, ou — no futuro — `past_due`/`canceled`/`expired`), o app inteiro é bloqueado e redirecionado para uma tela de assinatura.
+O Painel Fix v2 é hoje 100% gratuito. Este PRD estabelece a **fundação de entitlement** (direito de acesso) e o **paywall**, **sem ainda integrar cobrança**. Ao final, todo tenant nasce com um **trial de 30 dias** e, quando o entitlement não está ativo (`trial` expirado, ou — no futuro — `past_due`/`canceled`/`expired`), o app é bloqueado e redirecionado para uma tela de assinatura.
+
+> **Nota (decisão de produto posterior):** o bloqueio binário deste PRD evolui para **tri-estado** (total → somente-leitura na carência → bloqueado) no **PRD-2**. A duração do trial passou a **30 dias** (cobre um ciclo mensal de valor).
 
 **Por que primeiro:** é entregável de forma independente, valida o mecanismo de bloqueio com risco baixo e prepara o terreno para a Asaas (PRD-2) sem depender dela.
 
@@ -29,7 +31,7 @@ O Painel Fix v2 é hoje 100% gratuito. Este PRD estabelece a **fundação de ent
 
 ## 3. Requisitos funcionais
 
-- **RF-1** — Ao criar um tenant (`bootstrap_tenant_and_admin`), criar **na mesma transação** uma linha em `subscriptions` com `status='trial'` e `trial_end = now() + interval '14 days'`.
+- **RF-1** — Ao criar um tenant (`bootstrap_tenant_and_admin`), criar **na mesma transação** uma linha em `subscriptions` com `status='trial'` e `trial_end = now() + interval '30 days'`.
 - **RF-2** — Tenants já existentes (criados antes deste PRD) recebem uma linha de assinatura via **backfill**, para **não serem bloqueados** ao ligar o guard. Decisão travada: **um conjunto específico de contas** recebe `billing_exempt = true` (isenção vitalícia); as demais contas atuais recebem **trial de cortesia**. A lista de contas isentas (e-mails/`tenant_id`s) é parâmetro da migration — ver §5.2.
 - **RF-2b** — **Isenção vitalícia** (`billing_exempt = true`): a conta tem entitlement permanente, **nunca expira**, e é **ignorada** por cron e webhooks (nunca rebaixada para `expired`/`past_due`). A flag é ortogonal ao `status` — uma conta isenta pode até assinar depois sem quebrar nada.
 - **RF-3** — Todo usuário autenticado de um tenant pode **ler** a assinatura do próprio tenant (necessário para o guard). Nenhum cliente pode **escrever** (só service role).
@@ -104,7 +106,7 @@ create policy subscriptions_read on public.subscriptions
 
 ```sql
 insert into public.subscriptions (tenant_id, status, trial_end)
-values (v_tenant_id, 'trial', now() + interval '14 days')
+values (v_tenant_id, 'trial', now() + interval '30 days')
 on conflict (tenant_id) do nothing;
 ```
 
@@ -113,7 +115,7 @@ on conflict (tenant_id) do nothing;
 ```sql
 -- 1) Garante uma linha de assinatura para todo tenant existente (trial de cortesia).
 insert into public.subscriptions (tenant_id, status, trial_end)
-select t.id, 'trial', now() + interval '14 days'
+select t.id, 'trial', now() + interval '30 days'
 from public.tenants t
 left join public.subscriptions s on s.tenant_id = t.id
 where s.id is null
@@ -177,7 +179,7 @@ Lógica: lê `subscriptionStatus`/`trial_end` do `useSession`; computa entitleme
 
 ## 7. Critérios de aceite
 
-- [ ] Criar um tenant novo gera automaticamente linha em `subscriptions` com `status='trial'` e `trial_end ≈ now()+14d`.
+- [ ] Criar um tenant novo gera automaticamente linha em `subscriptions` com `status='trial'` e `trial_end ≈ now()+30d`.
 - [ ] Tenants pré-existentes têm linha após o backfill (nenhum fica sem assinatura).
 - [ ] As contas da lista de isenção ficam com `billing_exempt = true` e **nunca** caem no paywall, mesmo com `trial_end`/`current_period_end` no passado.
 - [ ] O cron `expire-subscriptions` **não** altera contas com `billing_exempt = true`.

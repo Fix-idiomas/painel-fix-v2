@@ -12,10 +12,12 @@ Com a fundação (PRD-1) e a integração Asaas (PRD-2) prontas, este PRD entreg
 ## 2. Escopo
 
 **In:**
-- `/assinatura` completa: estado (trial/ativo/past_due/expirado), countdown, formulário de assinatura (hosted/tokenizado), tratamento de retorno.
-- Aba **"Plano e cobrança"** em `src/app/(app)/conta/page.jsx`: status atual, fim do período, atualizar cartão, cancelar.
-- Mensageria de trial/dunning/bloqueio (banners, estados vazios).
-- Gating de UX: apenas **owner/admin** vê/gerencia billing.
+- `/assinatura` completa, cobrindo o **entitlement tri-estado** (PRD-2): `trial`, `trial` expirando, `active`, **`readonly` (carência)**, `past_due`, `expired`/`canceled` e `billing_exempt` (cortesia).
+- **Checkout hospedado da Asaas** com escolha de método **cartão ou Pix** (sem campos de cartão no nosso domínio).
+- **Banner global** (no `AppShell`) de aviso antes do bloqueio (trial ≤3 dias, carência/`past_due`).
+- Aba **"Plano e cobrança"** em `src/app/(app)/conta/page.jsx`: status, fim do período, método mascarado, trocar cartão/método, cancelar.
+- **Microcopy pt-BR** e e-mails de dunning (tom de parceria).
+- Gating de UX: apenas **owner/admin** vê/gerencia billing (com estado informativo para os demais).
 
 **Out:**
 - Tiers/planos múltiplos, cupons, cobrança por seat (futuro).
@@ -23,17 +25,22 @@ Com a fundação (PRD-1) e a integração Asaas (PRD-2) prontas, este PRD entreg
 
 ## 3. Requisitos funcionais
 
-- **RF-1** — `/assinatura` mostra o estado correto:
-  - **trial** → dias restantes + CTA "Assinar agora".
+- **RF-1** — `/assinatura` mostra o estado correto (ver microcopy no §12):
+  - **trial** → dias restantes (+ data absoluta) + CTA "Assinar agora".
+  - **trial expirando (≤3 dias)** → urgência leve + CTA.
   - **active** → confirmação + próximo vencimento + acesso à gestão.
-  - **past_due** → aviso de pagamento pendente + ação de regularizar.
-  - **expired/canceled** → paywall com CTA de assinatura.
-- **RF-2** — Formulário de assinatura usa **checkout hospedado** ou **cartão tokenizado** (sem campos de PAN/CVV trafegando pelo nosso backend), chamando `POST /api/billing/subscribe` (PRD-2).
-- **RF-3** — Ao concluir, o cliente chama `supabase.auth.refreshSession()` e o app destrava sem novo login.
-- **RF-4** — Aba "Plano e cobrança" em `conta` exibe: plano, `status`, `current_period_end`/`trial_end`, método de pagamento (mascarado), e ações **Atualizar cartão** e **Cancelar assinatura**.
-- **RF-5** — **Cancelar** chama `POST /api/billing/cancel` (PRD-2), com confirmação; reflete o novo status.
-- **RF-6** — Toda a área de billing é visível/operável **apenas** para owner/admin; demais usuários veem estado informativo ("fale com o administrador").
-- **RF-7** — Banner global de trial expirando (ex.: ≤ 3 dias) e de `past_due`, consistente com o `<SubscriptionGuard>` (PRD-1).
+  - **readonly (carência)** → "acesso em modo leitura, regularize para voltar a operar" + CTA.
+  - **past_due** → ação **Atualizar forma de pagamento** (distinta de "assinar" — já existe assinatura).
+  - **expired/canceled** → paywall com CTA "Assinar novamente".
+  - **billing_exempt** → "Acesso de cortesia", **sem** CTA de cobrança.
+- **RF-2** — Assinatura via **checkout hospedado da Asaas** com escolha de método **cartão ou Pix** (sem PAN/CVV no nosso backend), chamando `POST /api/billing/subscribe` (PRD-2). Botão com loading/anti-duplo-clique.
+- **RF-3** — Ao concluir, o cliente chama `supabase.auth.refreshSession()` e o app destrava sem novo login; tratar retorno sucesso/cancelado/falha.
+- **RF-4** — Aba "Plano e cobrança" em `conta` exibe: plano, `status`, `current_period_end`/`trial_end` (data absoluta), método mascarado, e ações **Trocar cartão/método** e **Cancelar assinatura**. Lê status do **claim** e dados via rotas (service role) — **nunca** tabela de negócio (anti-deadlock, PRD-2 §5.4).
+- **RF-5** — **Cancelar** chama `POST /api/billing/cancel` (PRD-2), via `ConfirmDeleteModal` existente com **tom adaptado** (cancelar ≠ deletar; deixar claro até quando o acesso continua; ação de escape "Manter assinatura").
+- **RF-6** — Billing visível/operável **apenas** para owner/admin; demais veem **estado informativo** ("Apenas o proprietário/administrador gerencia a assinatura. Fale com [owner].") — não esconder silenciosamente.
+- **RF-7** — **Banner global** no `AppShell` em trial ≤3 dias / carência / `past_due`, usando a **mesma fonte de verdade** do guard (`useSubscription`/`entitlement`). Dispensável por sessão, reaparece a cada login enquanto durar.
+- **RF-8** — **Paywall com contexto**: o `<SubscriptionGuard>` preserva a rota de origem (`?next=`) e a `/assinatura` explica o motivo do bloqueio ("você tentou acessar **Financeiro**…"); microcopy por motivo (trial vencido vs. carência vs. past_due vs. canceled).
+- **RF-9** — Para `billing_exempt`, a aba de conta mostra só "Acesso de cortesia — sem cobrança" e **oculta** vencimento/cancelar/trocar método. (É o estado que a maioria verá no dia 1 do rollout.)
 
 ## 4. Requisitos não-funcionais
 
@@ -90,3 +97,30 @@ Com a fundação (PRD-1) e a integração Asaas (PRD-2) prontas, este PRD entreg
 
 - PRD-1 e PRD-2 em produção.
 - Definição final de copy/preço e identidade visual da página de assinatura.
+
+## 12. Microcopy (pt-BR) por estado
+
+> Base entregue pelo trabalho de Design; ajustar tom/preço na implementação.
+
+- **Trial:** "Você está no período de teste — acesso completo até **{data}** (faltam {n} dias). Assine quando quiser para não perder nada." · CTA `Assinar agora`
+- **Trial ≤3 dias (banner):** "⏳ Seu teste termina em **{n} dias** ({data}). Assine para manter alunos, turmas e financeiro sempre à mão." · CTA `Assinar agora`
+- **Carência (readonly):** "Seu acesso está em **modo leitura**. Você ainda vê e exporta seus dados, mas para voltar a lançar/editar é preciso regularizar." · CTA `Regularizar`
+- **Bloqueado por trial vencido:** "Seu período de teste terminou. Seus dados estão guardados e seguros — reative em menos de 1 minuto para voltar de onde parou." · CTA `Assinar agora` · _pagamento seguro pela Asaas 🔒_
+- **past_due:** "Não conseguimos confirmar seu último pagamento — pode ser limite, validade ou erro temporário. Atualize para reabrir o acesso, sem perder nada." · CTA `Atualizar forma de pagamento`
+- **expired/canceled:** "Sua assinatura está inativa. Para voltar a usar o painel, assine novamente. Seus dados continuam aqui esperando por você." · CTA `Assinar novamente`
+- **active (conta):** "Assinatura ativa ✓ · Próxima cobrança em **{data}** · {método mascarado}" · `Trocar método` `Cancelar assinatura`
+- **billing_exempt:** "Acesso de cortesia — sua conta tem acesso liberado, sem cobrança."
+- **Confirmar cancelamento:** "Você continua com acesso completo até **{data}** (período já pago). Depois disso o painel é pausado, mas seus dados ficam guardados." · `Manter assinatura` / `Cancelar mesmo assim`
+- **E-mail dunning (1ª falha):** tom de parceria — "Tentamos renovar a assinatura da {escola} hoje, mas o pagamento não passou. Geralmente é limite/validade. Atualize em 1 minuto: {link}."
+
+## 13. Acessibilidade (WCAG AA)
+
+- Não depender de cor: cada estado tem ícone + título textual.
+- Contador como `aria-live="polite"`; data absoluta além do relativo ("{n} dias — até {data}").
+- Modais com focus-trap e retorno de foco ao gatilho; Tabs da conta com `role=tablist/tab/tabpanel` + navegação por setas.
+- Alvos de toque ≥44px; foco visível nos CTAs; idempotência de clique (botão `disabled`+spinner durante a chamada).
+- Migrar a `/assinatura` para os tokens `--p-*`/classes `p-card`/`p-btn` (herda a cor da marca do tenant) e conferir contraste dos banners.
+
+## 14. Protótipo
+
+Mockup visual interativo dos estados-chave (paywall por estado, banner global e aba "Plano e cobrança"): [`prototipo-assinatura.html`](prototipo-assinatura.html) — arquivo standalone, abre no navegador, alterna entre os 7 estados (trial, trial ≤3 dias, ativo, carência/leitura, atrasado, bloqueado, cortesia). Referência de layout/copy, não código final.

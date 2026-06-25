@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Protótipo — Assinatura · Painel Fix v2</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.24.0/dist/tabler-icons.min.css" />
+<style>
+  :root{
+    --color-background-primary:#ffffff;
+    --color-background-secondary:#f4f3ee;
+    --color-background-tertiary:#faf9f5;
+    --color-background-info:#E6F1FB; --color-text-info:#0C447C; --color-border-info:#378ADD;
+    --color-background-warning:#FAEEDA; --color-text-warning:#854F0B; --color-border-warning:#EF9F27;
+    --color-background-danger:#FCEBEB; --color-text-danger:#A32D2D; --color-border-danger:#E24B4A;
+    --color-background-success:#EAF3DE; --color-text-success:#3B6D11; --color-border-success:#97C459;
+    --color-text-primary:#1f1e1c; --color-text-secondary:#5F5E5A; --color-text-tertiary:#888780;
+    --color-border-tertiary:rgba(0,0,0,0.12); --color-border-secondary:rgba(0,0,0,0.26);
+    --border-radius-md:8px; --border-radius-lg:12px;
+    --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --color-background-primary:#1c1c1a; --color-background-secondary:#26241f; --color-background-tertiary:#161513;
+      --color-background-info:#0C447C; --color-text-info:#B5D4F4;
+      --color-background-warning:#633806; --color-text-warning:#FAC775;
+      --color-background-danger:#791F1F; --color-text-danger:#F7C1C1;
+      --color-background-success:#27500A; --color-text-success:#C0DD97;
+      --color-text-primary:#f3f1ea; --color-text-secondary:#b4b2a9; --color-text-tertiary:#888780;
+      --color-border-tertiary:rgba(255,255,255,0.14); --color-border-secondary:rgba(255,255,255,0.28);
+    }
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--color-background-tertiary); color:var(--color-text-primary);
+    font-family:var(--font-sans); font-size:16px; line-height:1.6; padding:24px 16px;}
+  .wrap{max-width:680px; margin:0 auto;}
+  h1{font-size:20px; font-weight:500; margin:0 0 4px;}
+  h3{font-weight:500;}
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);}
+  button{font-family:inherit; background:transparent; border:0.5px solid var(--color-border-tertiary);
+    border-radius:var(--border-radius-md); padding:7px 12px; color:var(--color-text-secondary);
+    cursor:pointer; font-size:14px; transition:background .12s,border-color .12s;}
+  button:hover{background:var(--color-background-secondary);}
+  button:active{transform:scale(0.98);}
+  .ti{line-height:1;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2 class="sr-only">Protótipo das telas de assinatura do Painel Fix nos estados: trial, trial expirando, ativo, carência somente-leitura, pagamento atrasado, bloqueado e cortesia.</h2>
+  <h1>Protótipo — Assinatura</h1>
+  <p style="margin:0 0 16px; font-size:13px; color:var(--color-text-secondary);">Painel Fix v2 · estados do paywall (PRD-3). Alterne entre os estados abaixo.</p>
+
+  <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:12px;">
+    <span style="font-size:13px; color:var(--color-text-secondary); margin-right:4px;">Estado:</span>
+    <div id="switcher" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
+  </div>
+
+  <div style="background:var(--color-background-secondary); border-radius:var(--border-radius-lg); padding:14px;">
+    <div style="background:var(--color-background-primary); border:0.5px solid var(--color-border-tertiary); border-radius:var(--border-radius-md); overflow:hidden; min-height:360px; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:0.5px solid var(--color-border-tertiary);">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div style="width:26px; height:26px; border-radius:6px; background:var(--color-background-info); color:var(--color-text-info); display:flex; align-items:center; justify-content:center; font-weight:500; font-size:13px;">F</div>
+          <span style="font-weight:500; font-size:14px;">Fix Idiomas</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:14px; color:var(--color-text-tertiary); font-size:18px;">
+          <i class="ti ti-search" aria-hidden="true"></i>
+          <i class="ti ti-bell" aria-hidden="true"></i>
+          <div style="width:24px; height:24px; border-radius:50%; background:var(--color-background-secondary); display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--color-text-secondary);">VP</div>
+        </div>
+      </div>
+      <div id="banner"></div>
+      <div id="stage" style="flex:1; padding:20px 16px;"></div>
+    </div>
+    <p style="margin:10px 4px 0; font-size:12px; color:var(--color-text-tertiary);">Protótipo de UX — layout e copy de referência, não código final.</p>
+  </div>
+</div>
+
+<script>
+(function(){
+  var tx=function(t){return "var(--color-text-"+t+")";};
+  var bg=function(t){return "var(--color-background-"+t+")";};
+  var states = {
+    trial:{label:"Trial",icon:"ti-rocket",banner:null,tone:"info",badgeIcon:"ti-clock",badge:"Período de teste",
+      title:"Você está no período de teste",body:"Acesso completo até <b>24/07/2026</b> — faltam 23 dias. Assine quando quiser para não perder nada.",
+      cta:"Assinar agora",ctaIcon:"ti-arrow-right",method:true},
+    trial3:{label:"Trial ≤3 dias",icon:"ti-alarm",banner:{tone:"warning",icon:"ti-clock",text:"Seu teste termina em <b>2 dias</b> (02/07). Assine para manter alunos, turmas e financeiro sempre à mão."},
+      tone:"warning",badgeIcon:"ti-clock",badge:"Teste terminando",title:"Faltam 2 dias de teste",
+      body:"Garanta o acesso sem interrupção. Você assina em menos de 1 minuto.",cta:"Assinar agora",ctaIcon:"ti-arrow-right",method:true},
+    active:{label:"Ativo",icon:"ti-circle-check",banner:null,manage:true},
+    readonly:{label:"Carência (leitura)",icon:"ti-eye",banner:{tone:"warning",icon:"ti-eye",text:"Seu acesso está em <b>modo leitura</b>. Regularize para voltar a lançar e editar."},
+      tone:"warning",badgeIcon:"ti-eye",badge:"Modo leitura",title:"Acesso em modo leitura",
+      body:"Você ainda vê e exporta seus dados, mas para voltar a <b>operar</b> (lançar/editar) é preciso regularizar o pagamento.",cta:"Regularizar",ctaIcon:"ti-refresh"},
+    past_due:{label:"Atrasado",icon:"ti-credit-card-off",banner:{tone:"danger",icon:"ti-alert-triangle",text:"Não conseguimos confirmar seu último pagamento. Atualize para reabrir o acesso."},
+      tone:"danger",badgeIcon:"ti-credit-card-off",badge:"Pagamento pendente",title:"Não conseguimos confirmar seu pagamento",
+      body:"Pode ter sido limite, validade ou um erro temporário do cartão. Atualize os dados — sem perder nada.",cta:"Atualizar forma de pagamento",ctaIcon:"ti-credit-card"},
+    blocked:{label:"Bloqueado",icon:"ti-lock",banner:null,tone:"danger",badgeIcon:"ti-lock",badge:"Acesso pausado",
+      context:"Você tentou acessar <b>Financeiro</b>.",title:"Seu período de teste terminou",
+      body:"Seus dados estão guardados e seguros. Reative em menos de 1 minuto para voltar de onde parou.",cta:"Assinar agora",ctaIcon:"ti-arrow-right",method:true,secure:true},
+    exempt:{label:"Cortesia",icon:"ti-gift",banner:null,tone:"success",badgeIcon:"ti-gift",badge:"Cortesia",
+      title:"Acesso de cortesia",body:"Sua conta tem acesso liberado, sem cobrança. Aproveite!",exempt:true}
+  };
+
+  function renderBanner(b){
+    if(!b) return "";
+    return '<div style="display:flex; gap:8px; align-items:flex-start; padding:9px 14px; background:'+bg(b.tone)+'; color:'+tx(b.tone)+'; font-size:13px; line-height:1.5; border-bottom:0.5px solid var(--color-border-'+b.tone+');">'
+      +'<i class="ti '+b.icon+'" style="font-size:16px; margin-top:1px;" aria-hidden="true"></i><div>'+b.text+'</div></div>';
+  }
+  function methodToggle(){
+    return '<div style="display:flex; gap:8px; margin:14px 0 4px;">'
+      +'<div style="flex:1; border:2px solid var(--color-border-info); border-radius:var(--border-radius-md); padding:9px 12px; display:flex; align-items:center; gap:8px; font-size:13px;"><i class="ti ti-credit-card" style="font-size:18px; color:'+tx("info")+'" aria-hidden="true"></i><div><div style="font-weight:500;">Cartão</div><div style="font-size:11px; color:var(--color-text-tertiary);">renova automático</div></div></div>'
+      +'<div style="flex:1; border:0.5px solid var(--color-border-secondary); border-radius:var(--border-radius-md); padding:9px 12px; display:flex; align-items:center; gap:8px; font-size:13px;"><i class="ti ti-qrcode" style="font-size:18px; color:var(--color-text-secondary)" aria-hidden="true"></i><div><div style="font-weight:500;">Pix</div><div style="font-size:11px; color:var(--color-text-tertiary);">cobrança mensal</div></div></div>'
+      +'</div>';
+  }
+  function metric(l,v){return '<div style="background:var(--color-background-secondary); border-radius:var(--border-radius-md); padding:10px 12px;"><div style="font-size:12px; color:var(--color-text-secondary);">'+l+'</div><div style="font-size:16px; font-weight:500; margin-top:2px;">'+v+'</div></div>';}
+  function manageCard(){
+    return '<div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;"><i class="ti ti-receipt" style="font-size:18px; color:var(--color-text-secondary)" aria-hidden="true"></i><span style="font-weight:500; font-size:15px;">Plano e cobrança</span></div>'
+      +'<div style="display:inline-flex; align-items:center; gap:6px; background:'+bg("success")+'; color:'+tx("success")+'; font-size:12px; padding:3px 10px; border-radius:var(--border-radius-md); margin:6px 0 14px;"><i class="ti ti-circle-check" aria-hidden="true"></i> Assinatura ativa</div>'
+      +'<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px;">'+metric("Plano","Padrão")+metric("Próxima cobrança","24/07/2026")+metric("Método","Cartão •••• 4242")+'</div>'
+      +'<div style="display:flex; gap:8px; flex-wrap:wrap;"><button style="display:inline-flex; align-items:center; gap:6px;"><i class="ti ti-credit-card" aria-hidden="true"></i> Trocar método</button>'
+      +'<button style="display:inline-flex; align-items:center; gap:6px; color:'+tx("danger")+'; border-color:var(--color-border-danger);"><i class="ti ti-x" aria-hidden="true"></i> Cancelar assinatura</button></div>';
+  }
+  function render(key){
+    var s=states[key];
+    document.getElementById("banner").innerHTML=renderBanner(s.banner);
+    var html="";
+    if(s.manage){ html=manageCard(); }
+    else{
+      html+='<div style="max-width:430px; margin:0 auto;">';
+      if(s.context){ html+='<div style="font-size:12px; color:var(--color-text-tertiary); margin-bottom:10px;"><i class="ti ti-lock" style="font-size:13px; vertical-align:-2px;" aria-hidden="true"></i> '+s.context+'</div>'; }
+      html+='<div style="display:inline-flex; align-items:center; gap:6px; background:'+bg(s.tone)+'; color:'+tx(s.tone)+'; font-size:12px; padding:3px 10px; border-radius:var(--border-radius-md); margin-bottom:10px;"><i class="ti '+s.badgeIcon+'" aria-hidden="true"></i> '+s.badge+'</div>';
+      html+='<h3 style="margin:0 0 6px; font-size:18px;">'+s.title+'</h3>';
+      html+='<p style="margin:0; font-size:14px; line-height:1.6; color:var(--color-text-secondary);">'+s.body+'</p>';
+      if(s.method){ html+=methodToggle(); }
+      if(s.cta){ var p=(s.tone==="danger")?"var(--color-border-danger)":"var(--color-border-info)";
+        html+='<button style="margin-top:14px; display:inline-flex; align-items:center; gap:8px; border:2px solid '+p+'; color:var(--color-text-primary); font-weight:500;">'+s.cta+' <i class="ti '+s.ctaIcon+'" aria-hidden="true"></i></button>'; }
+      if(s.secure){ html+='<div style="margin-top:10px; font-size:12px; color:var(--color-text-tertiary);"><i class="ti ti-lock" style="font-size:13px; vertical-align:-2px;" aria-hidden="true"></i> Pagamento seguro processado pela Asaas</div>'; }
+      if(s.exempt){ html+='<div style="margin-top:14px; font-size:12px; color:var(--color-text-tertiary);">Nenhuma cobrança será feita nesta conta.</div>'; }
+      html+='</div>';
+    }
+    document.getElementById("stage").innerHTML=html;
+    document.querySelectorAll("#switcher button").forEach(function(b){
+      var on=b.getAttribute("data-k")===key;
+      b.style.borderColor=on?"var(--color-border-info)":"var(--color-border-tertiary)";
+      b.style.background=on?"var(--color-background-info)":"transparent";
+      b.style.color=on?"var(--color-text-info)":"var(--color-text-secondary)";
+    });
+  }
+  var sw=document.getElementById("switcher");
+  Object.keys(states).forEach(function(k){
+    var b=document.createElement("button");
+    b.setAttribute("data-k",k);
+    b.style.cssText="font-size:12px; padding:5px 10px; display:inline-flex; align-items:center; gap:5px;";
+    b.innerHTML='<i class="ti '+states[k].icon+'" aria-hidden="true"></i> '+states[k].label;
+    b.onclick=function(){render(k);};
+    sw.appendChild(b);
+  });
+  render("trial");
+})();
+</script>
+</body>
+</html>
