@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import BillingBanner from "@/components/BillingBanner";
 import {
   LayoutDashboard,
   Users,
@@ -356,6 +357,8 @@ export default function AppShell({ children, crumb, title, rightAction, showSear
             {rightAction}
           </div>
         </header>
+
+        <BillingBanner />
 
         {/* Page content */}
         <main className="flex-1">{children}</main>

@@ -135,6 +135,54 @@ export async function getSubscription(id: string): Promise<AsaasResult<Json>> {
   return asaasFetch<Json>(`/subscriptions/${encodeURIComponent(id)}`);
 }
 
+// 1ª cobrança da assinatura → invoiceUrl é a página de pagamento HOSPEDADA da
+// Asaas (cartão ou Pix), evitando manejar dados de cartão na nossa UI (PCI SAQ-A).
+export async function getSubscriptionFirstPayment(
+  subscriptionId: string
+): Promise<AsaasResult<{ id: string; invoiceUrl: string | null; status: string }>> {
+  const r = await asaasFetch<{ data: Array<{ id: string; invoiceUrl?: string; status?: string }> }>(
+    `/payments?subscription=${encodeURIComponent(subscriptionId)}&limit=1&order=asc`
+  );
+  if (!r.ok) return { ok: false, status: r.status, error: r.error };
+  const p = r.data?.data?.[0];
+  // Cobrança ainda não gerada pela Asaas (a 1ª leva um instante) → sinaliza
+  // "não pronto" em vez de devolver id vazio (contrato non-null mais seguro:
+  // evita GET /payments//pixQrCode e persistência de id falso a jusante).
+  if (!p?.id) return { ok: false, status: 404, error: "Cobrança ainda não gerada." };
+  return {
+    ok: true,
+    data: {
+      id: p.id,
+      invoiceUrl: p.invoiceUrl ?? null,
+      status: p.status ?? "",
+    },
+  };
+}
+
+// QR Code Pix de uma cobrança (1ª cobrança da assinatura). Retorna a imagem
+// (base64 PNG) e o payload "copia e cola" para exibir Pix INLINE na nossa UI —
+// sem dados de cartão, sem sair do app. PCI não se aplica a Pix.
+export async function getPaymentPixQrCode(
+  paymentId: string
+): Promise<AsaasResult<{ encodedImage: string; payload: string; expirationDate: string | null }>> {
+  const r = await asaasFetch<{ encodedImage?: string; payload?: string; expirationDate?: string }>(
+    `/payments/${encodeURIComponent(paymentId)}/pixQrCode`
+  );
+  if (!r.ok) return { ok: false, status: r.status, error: r.error };
+  // Pix indisponível (ex.: cobrança ainda não processada) → sem imagem/payload.
+  if (!r.data?.encodedImage || !r.data?.payload) {
+    return { ok: false, status: 404, error: "QR Code Pix ainda não disponível." };
+  }
+  return {
+    ok: true,
+    data: {
+      encodedImage: r.data.encodedImage,
+      payload: r.data.payload,
+      expirationDate: r.data.expirationDate ?? null,
+    },
+  };
+}
+
 export async function cancelSubscription(
   id: string
 ): Promise<AsaasResult<{ deleted: boolean; id: string }>> {

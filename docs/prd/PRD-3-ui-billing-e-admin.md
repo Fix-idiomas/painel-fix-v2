@@ -13,7 +13,9 @@ Com a fundação (PRD-1) e a integração Asaas (PRD-2) prontas, este PRD entreg
 
 **In:**
 - `/assinatura` completa, cobrindo o **entitlement tri-estado** (PRD-2): `trial`, `trial` expirando, `active`, **`readonly` (carência)**, `past_due`, `expired`/`canceled` e `billing_exempt` (cortesia).
-- **Checkout hospedado da Asaas** com escolha de método **cartão ou Pix** (sem campos de cartão no nosso domínio).
+- **Dois caminhos de pagamento**, sem dados de cartão no nosso domínio:
+  - **Cartão** → **checkout hospedado** da Asaas (renovação automática mensal).
+  - **Pix INLINE** → **QR Code + copia-e-cola exibidos no próprio app** (sem abrir nova aba), com botão "Copiar" e verificação de pagamento. Fallback para o checkout hospedado se o QR não gerar a tempo.
 - **Banner global** (no `AppShell`) de aviso antes do bloqueio (trial ≤3 dias, carência/`past_due`).
 - Aba **"Plano e cobrança"** em `src/app/(app)/conta/page.jsx`: status, fim do período, método mascarado, trocar cartão/método, cancelar.
 - **Microcopy pt-BR** e e-mails de dunning (tom de parceria).
@@ -33,7 +35,9 @@ Com a fundação (PRD-1) e a integração Asaas (PRD-2) prontas, este PRD entreg
   - **past_due** → ação **Atualizar forma de pagamento** (distinta de "assinar" — já existe assinatura).
   - **expired/canceled** → paywall com CTA "Assinar novamente".
   - **billing_exempt** → "Acesso de cortesia", **sem** CTA de cobrança.
-- **RF-2** — Assinatura via **checkout hospedado da Asaas** com escolha de método **cartão ou Pix** (sem PAN/CVV no nosso backend), chamando `POST /api/billing/subscribe` (PRD-2). Botão com loading/anti-duplo-clique.
+- **RF-2** — Assinatura via `POST /api/billing/subscribe` (PRD-2) com escolha de método, sem PAN/CVV no nosso backend e botão com loading/anti-duplo-clique:
+  - **Cartão** → abre o **checkout hospedado** da Asaas (`invoiceUrl`) em nova aba.
+  - **Pix** → o backend busca o **QR Code da 1ª cobrança** (`/payments/{id}/pixQrCode`: `encodedImage` + `payload`) e a UI exibe **QR + copia-e-cola inline**, com "Copiar" e expiração. Se o QR não estiver pronto, cai no `invoiceUrl` (checkout hospedado).
 - **RF-3** — Ao concluir, o cliente chama `supabase.auth.refreshSession()` e o app destrava sem novo login; tratar retorno sucesso/cancelado/falha.
 - **RF-4** — Aba "Plano e cobrança" em `conta` exibe: plano, `status`, `current_period_end`/`trial_end` (data absoluta), método mascarado, e ações **Trocar cartão/método** e **Cancelar assinatura**. Lê status do **claim** e dados via rotas (service role) — **nunca** tabela de negócio (anti-deadlock, PRD-2 §5.4).
 - **RF-5** — **Cancelar** chama `POST /api/billing/cancel` (PRD-2), via `ConfirmDeleteModal` existente com **tom adaptado** (cancelar ≠ deletar; deixar claro até quando o acesso continua; ação de escape "Manter assinatura").
@@ -57,8 +61,8 @@ Com a fundação (PRD-1) e a integração Asaas (PRD-2) prontas, este PRD entreg
 
 ## 6. Arquivos a criar/alterar
 
-**Criar (se extrair compartilhados):** `src/components/billing/*` (ex.: `PlanCard`, `SubscribeForm`, `BillingStatusBanner`).
-**Alterar:** [src/app/(app)/assinatura/page.jsx](../../src/app/(app)/assinatura), [src/app/(app)/conta/page.jsx](../../src/app/(app)/conta/page.jsx).
+**Criado:** `src/components/BillingBanner.jsx` (banner global), `src/app/api/billing/status/route.ts` (GET service-role: plano/status/método/datas para a aba de conta — anti-deadlock vs. policies RESTRICTIVE).
+**Alterado:** [src/app/(app)/assinatura/page.jsx](../../src/app/(app)/assinatura) (página completa + Pix inline), [src/app/(app)/conta/page.jsx](../../src/app/(app)/conta/page.jsx) (aba "Plano e cobrança" + modal de cancelamento), `src/components/SubscriptionGuard.jsx` (tri-estado), `src/components/AppShell.jsx` (monta o banner), `src/lib/asaas.ts` (`getPaymentPixQrCode`), `src/app/api/billing/subscribe/route.ts` (Pix QR + cancela-depois-de-criar).
 
 ## 7. Critérios de aceite
 
@@ -73,6 +77,7 @@ Com a fundação (PRD-1) e a integração Asaas (PRD-2) prontas, este PRD entreg
 
 1. Com tenant em trial, abrir `/assinatura` → conferir countdown e CTA.
 2. Assinar com cartão de teste → confirmar destravamento e status `active`.
+2b. Assinar com **Pix** → conferir QR + copia-e-cola inline (botão "Copiar"); pagar no sandbox → webhook → status `active` e destravamento.
 3. Abrir `conta` → "Plano e cobrança" → conferir dados e cancelar → status `canceled` + paywall.
 4. Logar como usuário não-admin → confirmar ausência de controles e bloqueio server-side.
 5. Forçar `past_due` (PRD-2) → conferir banner e fluxo de regularização.
@@ -82,9 +87,10 @@ Com a fundação (PRD-1) e a integração Asaas (PRD-2) prontas, este PRD entreg
 | Risco | Mitigação |
 |---|---|
 | **Confiar só no gating de UI** | Autorização real nas rotas (RPC owner/admin); UI é conveniência |
-| **Dupla assinatura por clique** | Desabilitar botão durante a chamada; idempotência por `externalReference=tenantId` (PRD-2) |
+| **Dupla assinatura por clique** | Desabilitar botão durante a chamada; idempotência por `externalReference=tenantId` (PRD-2). **Reassinatura concorrente (trial/past_due) ainda não é idempotente → débito [TD-1](../TECH_DEBT.md), tratar no go-live** (impacto atual zero: contas isentas + webhook = verdade) |
 | **Mensagem inconsistente guard vs. página** | Fonte única do cálculo de entitlement (mesmo helper do `<SubscriptionGuard>`) |
-| **PCI na UI** | Hosted/tokenizado; sem campos de cartão no nosso domínio |
+| **PCI na UI** | Cartão via checkout hospedado; Pix inline não envolve dados de cartão; sem campos de cartão no nosso domínio |
+| **QR Pix não gerar a tempo** | Retry (3×) no backend; fallback para o checkout hospedado (`invoiceUrl`); botão "Já paguei — verificar" |
 
 ## 10. Métricas de sucesso
 

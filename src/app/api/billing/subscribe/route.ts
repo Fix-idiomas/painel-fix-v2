@@ -13,6 +13,8 @@ import {
   getOrCreateCustomer,
   createSubscription,
   cancelSubscription,
+  getSubscriptionFirstPayment,
+  getPaymentPixQrCode,
   type AsaasMethod,
 } from "@/lib/asaas";
 
@@ -20,6 +22,10 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 // Placeholder até a definição de produto (preço mensal). Ajustar via env.
 const PLAN_VALUE = Number(process.env.PLAN_MONTHLY_BRL || "49.9");
+
+// Os dois loops de retry (1ª cobrança + QR Pix) são sequenciais e podem somar
+// alguns segundos em rede lenta — folga de tempo p/ não cortar no meio.
+export const maxDuration = 30;
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -63,24 +69,30 @@ export async function POST(req: NextRequest) {
     const cpfCnpj = String(body?.cpfCnpj || "").replace(/\D/g, ""); // CPF ou CNPJ (só dígitos)
     const name = String(body?.name || "").trim() || session.user.email || "Cliente";
     const creditCardToken = body?.creditCardToken ? String(body.creditCardToken) : undefined;
-    if (!cpfCnpj) return json({ error: "CPF/CNPJ é obrigatório." }, 400);
-    if (method === "credit_card" && !creditCardToken) {
-      return json({ error: "Token do cartão é obrigatório para pagamento no cartão." }, 400);
+    if (cpfCnpj.length !== 11 && cpfCnpj.length !== 14) {
+      return json({ error: "Informe um CPF (11 dígitos) ou CNPJ (14 dígitos)." }, 400);
     }
+    // Fluxo de checkout HOSPEDADO: o usuário paga (cartão ou Pix) na página da
+    // Asaas, então não recebemos dados de cartão aqui (sem token necessário).
 
     const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    // Evita assinatura órfã: cancela uma anterior (não cancelada) antes de criar.
     const { data: existing } = await admin
       .from("subscriptions")
       .select("asaas_subscription_id, status")
       .eq("tenant_id", tenantId)
       .maybeSingle();
-    if (existing?.asaas_subscription_id && existing.status !== "canceled") {
-      await cancelSubscription(existing.asaas_subscription_id); // best-effort
+    // Quem já está ativo gerencia em Conta → Plano e cobrança (não reassina aqui).
+    if (existing?.status === "active") {
+      return json({ error: "Você já tem uma assinatura ativa. Gerencie em Conta → Plano e cobrança." }, 409);
     }
+    const oldSubId = existing?.asaas_subscription_id || null;
+    // TODO(TD-1, go-live): reassinatura concorrente (trial/past_due/canceled) não
+    // é idempotente — 2 cliques quase simultâneos podem criar 2 assinaturas Asaas
+    // (uma vira órfã). Impacto atual zero (contas isentas + webhook = verdade +
+    // botão desabilitado). Tratar com índice único parcial no banco. Ver docs/TECH_DEBT.md.
 
     const cust = await getOrCreateCustomer({
       name,
@@ -110,13 +122,58 @@ export async function POST(req: NextRequest) {
         payment_method: method,
       })
       .eq("tenant_id", tenantId);
-    if (upErr) throw upErr;
+    if (upErr) {
+      // A assinatura já existe na Asaas mas não foi persistida aqui → compensa
+      // cancelando para não deixar cobrança órfã, e loga o id p/ reconciliação.
+      console.error("[billing:subscribe] persist failed — compensating", {
+        tenant: tenantId, sub: sub.data!.id, err: upErr.message,
+      });
+      try { await cancelSubscription(sub.data!.id); } catch { /* best-effort */ }
+      throw upErr;
+    }
 
-    console.log("[billing:subscribe] ok", { tenant: tenantId, method, sub: sub.data.id });
-    return json({ ok: true, subscriptionId: sub.data.id, status: sub.data.status });
+    // Só DEPOIS de a nova existir e estar persistida, cancela a anterior órfã
+    // (evita janela em que o tenant fica sem assinatura). Best-effort.
+    if (oldSubId && oldSubId !== sub.data!.id) {
+      await cancelSubscription(oldSubId);
+    }
+
+    // 1ª cobrança da assinatura — pode levar um instante p/ a Asaas gerar.
+    // Guardamos o paymentId p/ buscar o QR Pix; invoiceUrl é o checkout hospedado
+    // (usado p/ cartão e como fallback do Pix).
+    let checkoutUrl: string | null = null;
+    let firstPaymentId: string | null = null;
+    for (let i = 0; i < 3 && !checkoutUrl; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 800));
+      const fp = await getSubscriptionFirstPayment(sub.data.id);
+      if (fp.ok) {
+        if (fp.data?.id) firstPaymentId = fp.data.id;
+        if (fp.data?.invoiceUrl) checkoutUrl = fp.data.invoiceUrl;
+      }
+    }
+
+    // Pix INLINE: busca o QR Code (imagem + copia-e-cola) p/ exibir no app, sem
+    // abrir o checkout hospedado. Best-effort — se falhar, o cliente cai no
+    // invoiceUrl (checkout hospedado) como fallback.
+    let pix: { encodedImage: string; payload: string; expirationDate: string | null } | null = null;
+    if (method === "pix" && firstPaymentId) {
+      for (let i = 0; i < 3 && !pix; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 800));
+        const qr = await getPaymentPixQrCode(firstPaymentId);
+        if (qr.ok && qr.data) pix = qr.data;
+      }
+    }
+
+    console.log("[billing:subscribe] ok", {
+      tenant: tenantId, method, sub: sub.data.id, checkout: !!checkoutUrl, pix: !!pix,
+    });
+    // Não expõe o id interno da assinatura Asaas ao cliente (menor privilégio);
+    // a UI usa apenas checkoutUrl (cartão) e pix (inline).
+    return json({ ok: true, status: sub.data.status, checkoutUrl, pix });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[billing:subscribe] error", msg);
-    return json({ error: msg }, 500);
+    // Mensagem genérica ao cliente (não vaza detalhe interno de Postgres/driver).
+    return json({ error: "Não foi possível processar a assinatura. Tente novamente." }, 500);
   }
 }
