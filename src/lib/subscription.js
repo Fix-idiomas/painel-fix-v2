@@ -5,26 +5,11 @@
 
 import { useEffect, useState } from "react";
 import { supabase, getClaims } from "@/lib/supabaseClient";
+import { hasEntitlement } from "@/lib/entitlement";
 
-/**
- * Decide se o tenant tem direito de acesso ao app.
- * Regra (PRD-1 RF-5/RF-7):
- *   - billing_exempt = true        → sempre liberado (isenção vitalícia)
- *   - status = 'active'            → liberado
- *   - status = 'trial' e não vencido → liberado (avaliado por data LOCAL)
- *   - caso contrário               → bloqueado
- * @param {{status?:string, billing_exempt?:boolean, trial_end?:string|null}|null} sub
- */
-export function hasEntitlement(sub) {
-  if (!sub) return false;
-  if (sub.billing_exempt) return true;
-  if (sub.status === "active") return true;
-  if (sub.status === "trial") {
-    if (!sub.trial_end) return true;
-    return new Date(sub.trial_end).getTime() >= Date.now();
-  }
-  return false;
-}
+// Re-exporta a lógica pura (testada em entitlement.js) para manter os imports
+// existentes (`import { hasEntitlement } from "@/lib/subscription"`).
+export { hasEntitlement };
 
 /** Lê o claim "subscription" do access token atual (ou null). */
 export async function readSubscriptionClaim() {
@@ -32,9 +17,17 @@ export async function readSubscriptionClaim() {
   return claims?.subscription ?? null;
 }
 
+// Tempo máximo de espera pela leitura do claim antes de assumir estado seguro.
+// Evita "loading" preso (e tela branca) se a leitura travar por sessão/timing.
+const SUBSCRIPTION_READ_TIMEOUT_MS = 5000;
+
 /**
  * Hook de assinatura para componentes client (guard, banners, página).
  * Re-lê o claim em mudanças de autenticação (login/refresh/logout).
+ *
+ * À prova de falha: `loading` SEMPRE resolve (try/catch + timeout). Em caso de
+ * erro ou demora, assume `subscription = null` (estado seguro → o guard
+ * redireciona em vez de ficar em branco).
  * @returns {{ loading: boolean, subscription: object|null }}
  */
 export function useSubscription() {
@@ -42,14 +35,28 @@ export function useSubscription() {
 
   useEffect(() => {
     let active = true;
+
+    // Backstop: se nada resolver em N ms, sai do loading com estado seguro.
+    const timeout = setTimeout(() => {
+      if (active) setState((prev) => (prev.loading ? { loading: false, subscription: null } : prev));
+    }, SUBSCRIPTION_READ_TIMEOUT_MS);
+
     async function load() {
-      const sub = await readSubscriptionClaim();
-      if (active) setState({ loading: false, subscription: sub });
+      try {
+        const sub = await readSubscriptionClaim();
+        if (active) setState({ loading: false, subscription: sub });
+      } catch {
+        // Falha ao ler/decodificar o claim → trata como sem assinatura.
+        if (active) setState({ loading: false, subscription: null });
+      }
     }
+
     load();
     const { data } = supabase.auth.onAuthStateChange(() => load());
+
     return () => {
       active = false;
+      clearTimeout(timeout);
       data?.subscription?.unsubscribe?.();
     };
   }, []);

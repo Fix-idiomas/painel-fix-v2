@@ -9,11 +9,7 @@
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useSubscription, hasEntitlement } from "@/lib/subscription";
-
-// Sempre acessível mesmo sem entitlement (auth e /onboarding já estão fora de (app)).
-const ALLOWLIST = ["/assinatura", "/conta"];
-const isAllowed = (pathname) =>
-  ALLOWLIST.some((p) => pathname === p || pathname.startsWith(p + "/"));
+import { isAllowed } from "@/lib/paywallRoutes";
 
 export default function SubscriptionGuard({ children }) {
   const router = useRouter();
@@ -28,10 +24,19 @@ export default function SubscriptionGuard({ children }) {
     if (blocked) router.replace("/assinatura");
   }, [blocked, router]);
 
-  // Enquanto o claim carrega, não pisca conteúdo nem paywall.
-  if (loading) return null;
-  // Bloqueado: evita flash do conteúdo enquanto o redirect acontece.
-  if (blocked) return null;
+  // Enquanto o claim carrega (ou durante o redirect do bloqueio), mostra um
+  // fallback leve — nunca tela branca. O loading SEMPRE resolve (useSubscription
+  // tem try/catch + timeout), então isto não fica preso.
+  if (loading) return <GuardFallback label="Carregando…" />;
+  if (blocked) return <GuardFallback label="Redirecionando…" />;
 
   return children;
+}
+
+function GuardFallback({ label }) {
+  return (
+    <div className="flex min-h-[50vh] items-center justify-center text-sm text-slate-500">
+      {label}
+    </div>
+  );
 }
