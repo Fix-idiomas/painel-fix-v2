@@ -119,23 +119,30 @@ export function SessionProvider({ children }) {
   //    cada mudança de autenticação (login/logout/refresh de token).
   useEffect(() => {
     let active = true;
+    let firstLoad = true;
 
     async function refresh() {
-      setReady(false);
+      // Só bloqueia a UI ("Preparando sessão…") na hidratação INICIAL; nas
+      // re-hidratações (token refresh) mantém a sessão atual visível e usável.
+      if (firstLoad) setReady(false);
       try {
         const next = await hydrateFromDb(session?.tenantName);
         if (active) setSession(next);
       } finally {
-        if (active) setReady(true);
+        if (active) { setReady(true); firstLoad = false; }
       }
     }
 
     refresh(); // hidratação inicial
 
     // INITIAL_SESSION é ignorado para não duplicar a hidratação do mount.
+    // IMPORTANTE: adiar o refresh() para fora do callback. hydrateFromDb chama
+    // supabase.auth.getUser(), que disputa o lock do token; chamá-lo DENTRO do
+    // onAuthStateChange causa deadlock no TOKEN_REFRESHED (sessão trava em
+    // "Preparando sessão…"). setTimeout(0) libera o lock antes de hidratar.
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (event === "INITIAL_SESSION") return;
-      refresh();
+      setTimeout(() => { if (active) refresh(); }, 0);
     });
 
     return () => {

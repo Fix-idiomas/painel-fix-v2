@@ -52,7 +52,12 @@ export function useSubscription() {
     }
 
     load();
-    const { data } = supabase.auth.onAuthStateChange(() => load());
+    // IMPORTANTE: adiar para fora do callback. Chamar métodos do supabase.auth
+    // (getSession via getClaims) DENTRO do onAuthStateChange disputa o lock do
+    // token e causa deadlock no TOKEN_REFRESHED. setTimeout(0) libera o lock.
+    const { data } = supabase.auth.onAuthStateChange(() => {
+      setTimeout(() => { if (active) load(); }, 0);
+    });
 
     return () => {
       active = false;
