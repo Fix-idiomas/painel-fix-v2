@@ -21,6 +21,8 @@ import {
   Home,
   IdCard,
   LogOut,
+  GraduationCap,
+  Wallet,
 } from "lucide-react";
 
 import { useSession } from "@/contexts/SessionContext";
@@ -34,6 +36,9 @@ const ICON_BY_KEY = {
   home: Home,
   dashboard: LayoutDashboard,
   cadastro: Users,
+  alunos: GraduationCap,
+  professores: Users,
+  pagadores: Wallet,
   turmas: BookOpen,
   agenda: Calendar,
   financeiro: DollarSign,

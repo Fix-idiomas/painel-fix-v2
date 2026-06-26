@@ -72,6 +72,9 @@ export default function Sidebar({ open = false, onClose }) {
     switch (key) {
       case "home":        return "🏠";
       case "cadastro":    return "🗂️";
+      case "alunos":      return "🎓";
+      case "professores": return "🧑‍🏫";
+      case "pagadores":   return "👛";
       case "turmas":      return "👩‍🏫";
       case "agenda":      return "🗓️";
       case "relatorios":  return "📊";

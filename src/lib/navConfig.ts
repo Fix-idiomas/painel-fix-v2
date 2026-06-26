@@ -24,7 +24,9 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "agenda",   label: "Agenda",   href: "/agenda",   perm: { area: "classes",  action: "read" }, meta: { icon: "calendar" } },
   { key: "relatorios", label: "Relatórios", href: "/relatorios", meta: { icon: "chart" } },
   { key: "financeiro", label: "Financeiro", href: "/financeiro", perm: { area: "finance", action: "read" }, meta: { icon: "money" } },
-  { key: "cadastro",   label: "Cadastro",   href: "/cadastro",   perm: { area: "registry", action: "read" }, meta: { icon: "folder" } },
+  { key: "alunos",      label: "Alunos",      href: "/alunos",      perm: { area: "registry", action: "read" }, meta: { icon: "graduation" } },
+  { key: "professores", label: "Professores", href: "/professores", perm: { area: "registry", action: "read" }, meta: { icon: "users" } },
+  { key: "pagadores",   label: "Pagadores",   href: "/pagadores",   perm: { area: "registry", action: "read" }, meta: { icon: "wallet" } },
   { key: "config", label: "Configurações", href: "/configuracoes", requireAdmin: true, meta: { icon: "settings" } },
 ];
 
