@@ -34,12 +34,26 @@ re-claim; `now()-89s` nega. Revisado por engenheiro sênior (✅ aprovado) e QA.
 
 ---
 
-## TD-2 — Reconciliação de assinaturas órfãs na Asaas (billing/subscribe)
+## TD-2 — Reconciliação de assinaturas órfãs na Asaas — ✅ RESOLVIDO (jun/2026)
 
 - **Severidade:** 🟠 média (latente; impacto atual ZERO — todas as contas isentas)
 - **Origem:** revisão de QA do TD-1 (jun/2026)
-- **Local:** [`src/app/api/billing/subscribe/route.ts`](../src/app/api/billing/subscribe/route.ts), [`src/lib/asaas.ts`](../src/lib/asaas.ts)
-- **Gatilho para tratar:** **go-live** (antes de habilitar a 1ª conta NÃO isenta).
+- **Local:** [`src/app/api/cron/reconcile-subscriptions/route.ts`](../src/app/api/cron/reconcile-subscriptions/route.ts), [`src/lib/subscriptionReconcile.ts`](../src/lib/subscriptionReconcile.ts), [`src/lib/asaas.ts`](../src/lib/asaas.ts)
+- **Resolução:** **cron de reconciliação** (`reconcile-subscriptions`, diário 06:30 no
+  vercel.json) que varre tenants com customer Asaas, lista as assinaturas por
+  `externalReference` e cancela as **extras**. Lógica pura `reconcilePlan` (testada):
+  conservadora — só cancela quando a verdadeira (`asaas_subscription_id`) está
+  confirmada entre as ativas; caso ambíguo (id nulo OU não encontrado) → **revisão
+  manual logada, não cancela**. Pula tenants com checkout em andamento (claim < 5min)
+  para não cancelar assinatura legítima ainda não persistida.
+- **Verificação ao tratar (go-live, sandbox):** matar a função entre create e
+  persist; rodar o cron; confirmar que a órfã é cancelada e a legítima preservada.
+  O caso ambíguo (stored nulo + 1 órfã de trial) sai como "revisão manual".
+  **Crítico:** confirmar que `GET /subscriptions?externalReference=` filtra
+  server-side (senão `listSubscriptions` traria subs de outros tenants → único
+  caminho teórico p/ cancelar de outro tenant). O mesmo filtro já é usado e
+  validado em `getOrCreateCustomer` (customers), o que dá confiança. Falta também
+  teste do route handler (auth 401, skip por claim recente, agregação).
 
 ### Problema
 `createSubscription` **não é idempotente** (diferente de `getOrCreateCustomer`,

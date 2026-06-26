@@ -135,6 +135,30 @@ export async function getSubscription(id: string): Promise<AsaasResult<Json>> {
   return asaasFetch<Json>(`/subscriptions/${encodeURIComponent(id)}`);
 }
 
+// Lista as assinaturas de um tenant na Asaas (por externalReference). Usado pela
+// reconciliação (TD-2) p/ detectar assinaturas órfãs — criadas mas nunca
+// persistidas (ex.: timeout serverless entre criar e gravar o id).
+export async function listSubscriptions(
+  tenantId: string
+): Promise<AsaasResult<Array<{ id: string; deleted: boolean; status: string }>>> {
+  const out: Array<{ id: string; deleted: boolean; status: string }> = [];
+  const LIMIT = 100;
+  // Pagina até esgotar (hasMore): um tenant com muitas órfãs não pode escapar da
+  // limpeza por ficar além da 1ª página. Teto defensivo de páginas (anti-loop).
+  for (let offset = 0, page = 0; page < 50; page++, offset += LIMIT) {
+    const r = await asaasFetch<{
+      data: Array<{ id: string; deleted?: boolean; status?: string }>;
+      hasMore?: boolean;
+    }>(`/subscriptions?externalReference=${encodeURIComponent(tenantId)}&limit=${LIMIT}&offset=${offset}`);
+    if (!r.ok) return { ok: false, status: r.status, error: r.error };
+    for (const s of r.data?.data ?? []) {
+      out.push({ id: s.id, deleted: !!s.deleted, status: s.status ?? "" });
+    }
+    if (!r.data?.hasMore) break;
+  }
+  return { ok: true, data: out };
+}
+
 // 1ª cobrança da assinatura → invoiceUrl é a página de pagamento HOSPEDADA da
 // Asaas (cartão ou Pix), evitando manejar dados de cartão na nossa UI (PCI SAQ-A).
 export async function getSubscriptionFirstPayment(
