@@ -6,47 +6,66 @@ impacto atual, a correção proposta e o gatilho para tratá-lo.
 
 ---
 
-## TD-1 — Idempotência de reassinatura concorrente (billing/subscribe)
+## TD-1 — Idempotência de reassinatura concorrente (billing/subscribe) — ✅ RESOLVIDO (jun/2026)
 
 - **Severidade:** 🟠 média
 - **Origem:** PRD-3, revisão de segurança/QA do backend Pix (jun/2026)
 - **Local:** [`src/app/api/billing/subscribe/route.ts`](../src/app/api/billing/subscribe/route.ts)
-- **Gatilho para tratar:** **go-live** (quando houver cobrança real), junto com a
-  configuração da conta Asaas de produção.
+- **Resolução:** **claim atômico** (NÃO índice único parcial — `subscriptions` tem
+  1 linha por tenant, então o duplicado é na Asaas, não em linhas). Migration
+  `db/migrations/20260626_subscribe_claim.sql` adiciona `checkout_claim_at` + a
+  função `claim_checkout(uuid)` (SECURITY DEFINER, só service_role): UPDATE
+  condicional (`status<>'active' AND (checkout_claim_at IS NULL OR < now()-90s)`)
+  que trava a linha no Postgres → só 1 request vence; o perdedor recebe 409. A
+  janela de 90s é avaliada no servidor (sem timestamp na query string) e expira
+  sozinha; o claim é liberado no sucesso (persist) e em qualquer falha (try/finally).
+  **Pendente: aplicar a migration na prod ANTES do deploy da rota.**
+
+### Problema (resolvido)
+Sem idempotência, dois cliques concorrentes de reassinatura (trial/past_due/
+canceled/expired) podiam criar **duas assinaturas na Asaas** (uma órfã). O claim
+atômico serializa: só 1 request vence; o outro recebe 409.
+
+### Verificação ao tratar (recomendada no go-live, em sandbox)
+Concorrência real não é coberta pelo mock (Supabase mockado não modela row lock).
+Validar contra Postgres real: 2 `claim_checkout(tenant)` em paralelo → exatamente
+1 retorna true. Boundary da janela: `checkout_claim_at = now()-91s` permite
+re-claim; `now()-89s` nega. Revisado por engenheiro sênior (✅ aprovado) e QA.
+
+---
+
+## TD-2 — Reconciliação de assinaturas órfãs na Asaas (billing/subscribe)
+
+- **Severidade:** 🟠 média (latente; impacto atual ZERO — todas as contas isentas)
+- **Origem:** revisão de QA do TD-1 (jun/2026)
+- **Local:** [`src/app/api/billing/subscribe/route.ts`](../src/app/api/billing/subscribe/route.ts), [`src/lib/asaas.ts`](../src/lib/asaas.ts)
+- **Gatilho para tratar:** **go-live** (antes de habilitar a 1ª conta NÃO isenta).
 
 ### Problema
-O guard de `409` só bloqueia quem já está `active`. Para tenants em `trial`,
-`past_due`, `canceled` ou `expired` que reassinam, **não há idempotência real**.
-Dois cliques quase simultâneos (duplo-clique entre abas, ou retry por latência)
-podem criar **duas assinaturas na Asaas**: ambos os requests leem o mesmo
-`existing` (mesmo `oldSubId`), ambos criam assinatura nova (A e B), os dois
-`UPDATE` rodam (last-write-wins → banco fica com A *ou* B) e a assinatura
-perdedora vira **órfã** (o `cancel-old` só cancela a `oldSubId` original, não a
-concorrente).
+`createSubscription` **não é idempotente** (diferente de `getOrCreateCustomer`,
+que busca por `externalReference` antes de criar). Duas janelas geram assinatura
+órfã na Asaas (cobrando o cliente sem registro local consistente):
+1. **Timeout serverless**: se a função morre (maxDuration 30s) entre `createSubscription`
+   ter criado na Asaas e o persist, o `finally` não roda; passados 90s, um retry
+   cria uma **2ª** assinatura (a 1ª fica órfã). O claim do TD-1 NÃO cobre isto
+   (a criação já aconteceu antes da morte).
+2. **Dupla-falha**: se o persist falha E o `cancelSubscription` de compensação
+   também falha (rede), a sub recém-criada fica órfã ativa.
 
-### Impacto atual: ZERO
-- Todas as contas atuais são `billing_exempt = true` → ninguém exercita o fluxo.
-- O **webhook é a fonte da verdade** do status (reconcilia).
-- O botão da UI fica **desabilitado durante a chamada** (anti-duplo-clique na aba).
+### Por que adiar
+Raro (exige morte no intervalo create→persist) e **impacto atual zero** (ninguém
+não-isento usa o fluxo). A correção certa é não-trivial: `externalReference=tenantId`
+é **compartilhado** entre a assinatura antiga e a nova, então "getOrCreate por
+externalReference" não distingue qual reutilizar — precisa de lógica de reconciliação.
 
-### Por que foi adiado
-Implementar agora adiciona risco ao **caminho de pagamento já validado em e2e**
-(o mais crítico) sem ganho atual. O lock otimista com compensação tem um modo de
-falha pior que o bug: um **falso positivo** cancelaria uma assinatura legítima de
-quem pagou. Além disso, a suíte (Supabase mockado) **não exercita concorrência** —
-não há arnês para validar o fix com confiança hoje.
+### Correção proposta
+- **Reconciliação**: cron/rotina que lista assinaturas Asaas por `externalReference`
+  e cancela as que não batem com `subscriptions.asaas_subscription_id` do tenant
+  (espelha o padrão dos crons existentes, service-role). OU
+- **Create idempotente**: antes de criar, listar subs Asaas por `externalReference`
+  excluindo `oldSubId` e canceladas; reutilizar uma pendente se existir.
+- Alertar/logar a órfã na dupla-falha de compensação para limpeza manual.
 
-### Correção proposta (preferir a determinística)
-1. **Determinística (recomendada):** índice único parcial em `subscriptions`
-   impedindo > 1 assinatura ativa/pendente por tenant no nível do banco
-   (migration + reaplicar em prod). Sem o modo de falha de "cancelar assinatura
-   legítima"; testável.
-2. Alternativa: lock otimista no `UPDATE`
-   (`... WHERE tenant_id = ? AND asaas_subscription_id IS NOT DISTINCT FROM oldSubId`,
-   abortar + compensar se 0 linhas) — exige `IS NOT DISTINCT FROM` (branch null vs
-   não-null) e `.select()` para contagem; mais frágil.
-
-### Verificação ao tratar
-Teste de concorrência contra Asaas sandbox/prod real (não o mock): dois requests
-paralelos de reassinatura → garantir 1 única assinatura na Asaas e linha
-consistente no banco; nenhuma assinatura legítima cancelada por engano.
+### Verificação ao tratar (sandbox)
+Matar a função entre create e persist; confirmar que a reconciliação cancela a 1ª
+e não deixa 2 assinaturas ativas. Testar dupla-falha (persist + cancel falham).

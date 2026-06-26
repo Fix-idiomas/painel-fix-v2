@@ -89,87 +89,116 @@ export async function POST(req: NextRequest) {
       return json({ error: "Você já tem uma assinatura ativa. Gerencie em Conta → Plano e cobrança." }, 409);
     }
     const oldSubId = existing?.asaas_subscription_id || null;
-    // TODO(TD-1, go-live): reassinatura concorrente (trial/past_due/canceled) não
-    // é idempotente — 2 cliques quase simultâneos podem criar 2 assinaturas Asaas
-    // (uma vira órfã). Impacto atual zero (contas isentas + webhook = verdade +
-    // botão desabilitado). Tratar com índice único parcial no banco. Ver docs/TECH_DEBT.md.
 
-    const cust = await getOrCreateCustomer({
-      name,
-      email: session.user.email ?? undefined,
-      cpfCnpj,
-      tenantId,
-    });
-    if (!cust.ok) return json({ error: `Asaas (cliente): ${cust.error}` }, 502);
+    // TD-1 — CLAIM atômico (idempotência de reassinatura concorrente). A função
+    // claim_checkout faz um UPDATE condicional que trava a linha no Postgres: só
+    // 1 request concorrente vence; o perdedor recebe false → 409. A janela de 90s
+    // é avaliada no servidor (now() - interval) e expira sozinha. Só se aplica
+    // quando há linha (todo tenant tem uma via bootstrap; ausência = anomalia).
+    let claimHeld = false;
+    if (existing) {
+      const { data: claimed, error: claimErr } = await admin.rpc("claim_checkout", { p_tenant: tenantId });
+      if (claimErr) throw claimErr;
+      if (!claimed) {
+        return json({ error: "Já há uma assinatura sendo processada. Aguarde alguns segundos e tente de novo." }, 409);
+      }
+      claimHeld = true;
+    }
 
-    const sub = await createSubscription({
-      customerId: cust.data!.id,
-      method,
-      value: PLAN_VALUE,
-      nextDueDate: todayISO(),
-      tenantId,
-      description: "Assinatura Painel Fix",
-      creditCardToken,
-    });
-    if (!sub.ok) return json({ error: `Asaas (assinatura): ${sub.error}` }, 502);
-
-    // Persiste os ids (status só muda via webhook PAYMENT_CONFIRMED).
-    const { error: upErr } = await admin
-      .from("subscriptions")
-      .update({
-        asaas_customer_id: cust.data!.id,
-        asaas_subscription_id: sub.data!.id,
-        payment_method: method,
-      })
-      .eq("tenant_id", tenantId);
-    if (upErr) {
-      // A assinatura já existe na Asaas mas não foi persistida aqui → compensa
-      // cancelando para não deixar cobrança órfã, e loga o id p/ reconciliação.
-      console.error("[billing:subscribe] persist failed — compensating", {
-        tenant: tenantId, sub: sub.data!.id, err: upErr.message,
+    // A partir daqui, qualquer saída SEM sucesso (return de erro OU exceção)
+    // passa pelo finally, que LIBERA o claim — assim um erro transitório não
+    // bloqueia o retry por até 90s. No sucesso, o próprio persist zera o claim.
+    let success = false;
+    try {
+      const cust = await getOrCreateCustomer({
+        name,
+        email: session.user.email ?? undefined,
+        cpfCnpj,
+        tenantId,
       });
-      try { await cancelSubscription(sub.data!.id); } catch { /* best-effort */ }
-      throw upErr;
-    }
+      if (!cust.ok) return json({ error: `Asaas (cliente): ${cust.error}` }, 502);
 
-    // Só DEPOIS de a nova existir e estar persistida, cancela a anterior órfã
-    // (evita janela em que o tenant fica sem assinatura). Best-effort.
-    if (oldSubId && oldSubId !== sub.data!.id) {
-      await cancelSubscription(oldSubId);
-    }
+      const sub = await createSubscription({
+        customerId: cust.data!.id,
+        method,
+        value: PLAN_VALUE,
+        nextDueDate: todayISO(),
+        tenantId,
+        description: "Assinatura Painel Fix",
+        creditCardToken,
+      });
+      if (!sub.ok) return json({ error: `Asaas (assinatura): ${sub.error}` }, 502);
 
-    // 1ª cobrança da assinatura — pode levar um instante p/ a Asaas gerar.
-    // Guardamos o paymentId p/ buscar o QR Pix; invoiceUrl é o checkout hospedado
-    // (usado p/ cartão e como fallback do Pix).
-    let checkoutUrl: string | null = null;
-    let firstPaymentId: string | null = null;
-    for (let i = 0; i < 3 && !checkoutUrl; i++) {
-      if (i > 0) await new Promise((r) => setTimeout(r, 800));
-      const fp = await getSubscriptionFirstPayment(sub.data.id);
-      if (fp.ok) {
-        if (fp.data?.id) firstPaymentId = fp.data.id;
-        if (fp.data?.invoiceUrl) checkoutUrl = fp.data.invoiceUrl;
+      // Persiste os ids e zera o claim (status só muda via webhook PAYMENT_CONFIRMED).
+      const { error: upErr } = await admin
+        .from("subscriptions")
+        .update({
+          asaas_customer_id: cust.data!.id,
+          asaas_subscription_id: sub.data!.id,
+          payment_method: method,
+          checkout_claim_at: null,
+        })
+        .eq("tenant_id", tenantId);
+      if (upErr) {
+        // A assinatura já existe na Asaas mas não foi persistida → compensa
+        // cancelando para não deixar cobrança órfã (o finally libera o claim).
+        console.error("[billing:subscribe] persist failed — compensating", {
+          tenant: tenantId, sub: sub.data!.id, err: upErr.message,
+        });
+        try { await cancelSubscription(sub.data!.id); } catch { /* best-effort */ }
+        throw upErr;
       }
-    }
+      // Assinatura criada e persistida → sucesso. O claim já foi zerado no persist;
+      // o que vem a seguir (cancelar antiga, gerar QR/checkout) é best-effort.
+      success = true;
 
-    // Pix INLINE: busca o QR Code (imagem + copia-e-cola) p/ exibir no app, sem
-    // abrir o checkout hospedado. Best-effort — se falhar, o cliente cai no
-    // invoiceUrl (checkout hospedado) como fallback.
-    let pix: { encodedImage: string; payload: string; expirationDate: string | null } | null = null;
-    if (method === "pix" && firstPaymentId) {
-      for (let i = 0; i < 3 && !pix; i++) {
+      // Só DEPOIS de a nova existir e estar persistida, cancela a anterior órfã
+      // (evita janela em que o tenant fica sem assinatura). Best-effort.
+      if (oldSubId && oldSubId !== sub.data!.id) {
+        try { await cancelSubscription(oldSubId); } catch { /* best-effort */ }
+      }
+
+      // 1ª cobrança da assinatura — pode levar um instante p/ a Asaas gerar.
+      // Guardamos o paymentId p/ buscar o QR Pix; invoiceUrl é o checkout hospedado
+      // (usado p/ cartão e como fallback do Pix).
+      let checkoutUrl: string | null = null;
+      let firstPaymentId: string | null = null;
+      for (let i = 0; i < 3 && !checkoutUrl; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, 800));
-        const qr = await getPaymentPixQrCode(firstPaymentId);
-        if (qr.ok && qr.data) pix = qr.data;
+        const fp = await getSubscriptionFirstPayment(sub.data.id);
+        if (fp.ok) {
+          if (fp.data?.id) firstPaymentId = fp.data.id;
+          if (fp.data?.invoiceUrl) checkoutUrl = fp.data.invoiceUrl;
+        }
+      }
+
+      // Pix INLINE: busca o QR Code (imagem + copia-e-cola) p/ exibir no app, sem
+      // abrir o checkout hospedado. Best-effort — se falhar, o cliente cai no
+      // invoiceUrl (checkout hospedado) como fallback.
+      let pix: { encodedImage: string; payload: string; expirationDate: string | null } | null = null;
+      if (method === "pix" && firstPaymentId) {
+        for (let i = 0; i < 3 && !pix; i++) {
+          if (i > 0) await new Promise((r) => setTimeout(r, 800));
+          const qr = await getPaymentPixQrCode(firstPaymentId);
+          if (qr.ok && qr.data) pix = qr.data;
+        }
+      }
+
+      console.log("[billing:subscribe] ok", {
+        tenant: tenantId, method, sub: sub.data.id, checkout: !!checkoutUrl, pix: !!pix,
+      });
+      // Não expõe o id interno da assinatura Asaas ao cliente (menor privilégio);
+      // a UI usa apenas checkoutUrl (cartão) e pix (inline).
+      return json({ ok: true, status: sub.data.status, checkoutUrl, pix });
+    } finally {
+      // Saída sem sucesso (return de erro ou exceção) com o claim ainda em mãos
+      // → libera já, em vez de esperar a janela de 90s expirar.
+      if (claimHeld && !success) {
+        try {
+          await admin.from("subscriptions").update({ checkout_claim_at: null }).eq("tenant_id", tenantId);
+        } catch { /* best-effort */ }
       }
     }
-
-    console.log("[billing:subscribe] ok", {
-      tenant: tenantId, method, sub: sub.data.id, checkout: !!checkoutUrl, pix: !!pix,
-    });
-    // Não expõe o id interno da assinatura Asaas ao cliente (menor privilégio);
-    // a UI usa apenas checkoutUrl (cartão) e pix (inline).
-    return json({ ok: true, status: sub.data.status, checkoutUrl, pix });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[billing:subscribe] error", msg);
