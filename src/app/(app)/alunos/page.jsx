@@ -235,7 +235,15 @@ export default function AlunosPage() {
           <>
             {/* Tabela desktop */}
             <div className="hidden md:block overflow-x-auto">
-              <table className="w-full min-w-[820px] text-sm">
+              <table className="w-full min-w-[820px] table-fixed text-sm">
+                <colgroup>
+                  <col />
+                  <col className="w-[140px]" />
+                  <col className="w-[116px]" />
+                  <col className="w-[132px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[164px]" />
+                </colgroup>
                 <thead>
                   <tr className="border-b border-[var(--p-border)] bg-[var(--p-surface-2)] text-left text-xs font-medium uppercase tracking-wider text-[var(--p-text-muted)]">
                     <th className="px-5 py-3">Aluno</th>
@@ -243,7 +251,7 @@ export default function AlunosPage() {
                     <th className="px-5 py-3">Vencimento</th>
                     <th className="px-5 py-3">Nascimento</th>
                     <th className="px-5 py-3">Status</th>
-                    <th className="px-5 py-3"></th>
+                    <th className="sticky right-0 z-20 bg-[var(--p-surface-2)] pl-3 pr-4 py-3 shadow-[-6px_0_6px_-6px_rgba(24,18,15,0.10)]"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--p-border)]">
@@ -252,7 +260,7 @@ export default function AlunosPage() {
                     const photoPath = String(s.photo_url || "").trim();
                     const photoUrl = photoPath ? signedMap[photoPath] : null;
                     return (
-                      <tr key={s.id} className="hover:bg-[var(--p-surface-2)]">
+                      <tr key={s.id} className="group hover:bg-[var(--p-surface-2)]">
                         <td className="px-5 py-3">
                           <div className="flex items-center gap-3">
                             <AvatarAluno
@@ -286,7 +294,7 @@ export default function AlunosPage() {
                             <Icon className="h-3 w-3" /> {label}
                           </span>
                         </td>
-                        <td className="px-5 py-3 text-right">
+                        <td className="sticky right-0 z-10 bg-[var(--p-surface)] pl-3 pr-4 py-3 text-right shadow-[-6px_0_6px_-6px_rgba(24,18,15,0.10)] group-hover:bg-[var(--p-surface-2)]">
                           <div className="inline-flex gap-1">
                             <button
                               onClick={() => setEditTarget(s)}
