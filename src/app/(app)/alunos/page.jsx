@@ -234,8 +234,8 @@ export default function AlunosPage() {
         ) : (
           <>
             {/* Tabela desktop */}
-            <div className="hidden md:block">
-              <table className="w-full text-sm">
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full min-w-[820px] text-sm">
                 <thead>
                   <tr className="border-b border-[var(--p-border)] bg-[var(--p-surface-2)] text-left text-xs font-medium uppercase tracking-wider text-[var(--p-text-muted)]">
                     <th className="px-5 py-3">Aluno</th>
