@@ -238,11 +238,11 @@ export default function GastosPage() {
     if (!canWriteDB) return;
     try {
       setUpdatingId(id);
-      await financeGateway.updateExpenseEntry(id, {
-        status: "paid",
-        paid_at: new Date().toISOString(),
-      });
+      setError(null);
+      await financeGateway.markExpensePaid(id);
       await load();
+    } catch (e) {
+      setError(e?.message || String(e));
     } finally {
       setUpdatingId(null);
     }
@@ -252,11 +252,11 @@ export default function GastosPage() {
     if (!canWriteDB) return;
     try {
       setUpdatingId(id);
-      await financeGateway.updateExpenseEntry(id, {
-        status: "pending",
-        paid_at: null,
-      });
+      setError(null);
+      await financeGateway.reopenExpense(id);
       await load();
+    } catch (e) {
+      setError(e?.message || String(e));
     } finally {
       setUpdatingId(null);
     }
@@ -265,11 +265,11 @@ export default function GastosPage() {
   async function doCancel(id) {
     try {
       setUpdatingId(id);
-      await financeGateway.updateExpenseEntry(id, {
-        status: "canceled",
-        paid_at: null,
-      });
+      setError(null);
+      await financeGateway.cancelExpense(id);
       await load();
+    } catch (e) {
+      setError(e?.message || String(e));
     } finally {
       setUpdatingId(null);
     }
