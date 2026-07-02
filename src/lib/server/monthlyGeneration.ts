@@ -16,6 +16,19 @@ import { isRecurrenceActiveForMonth } from "@/lib/gateways/helpers";
 
 type Admin = SupabaseClient;
 
+// Data local (America/Sao_Paulo) "YYYY-MM-DD" de um timestamp qualquer — mesmo
+// padrão do tzToday() em gateways/helpers, mas para uma data arbitrária.
+function spDateOf(iso: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(iso));
+  const g = (t: string) => parts.find((p) => p.type === t)?.value;
+  return `${g("year")}-${g("month")}-${g("day")}`;
+}
+
 export interface MensalidadesResult {
   inserted: number;
   skipped_existing: number;
@@ -33,20 +46,34 @@ export async function generateMensalidadesForTenant(
 
   const { data: students, error: e1 } = await admin
     .from("students")
-    .select("id, name, monthly_value, due_day, payer_id, status")
+    .select("id, name, monthly_value, due_day, payer_id, status, created_at")
     .eq("tenant_id", tenantId)
     .eq("status", "ativo");
   if (e1) throw new Error(`generateMensalidades.students: ${e1.message}`);
 
-  const candidates = (students || []).filter((s) => Number(s.monthly_value || 0) > 0);
+  const candidates = (students || []).filter((s) => {
+    if (Number(s.monthly_value || 0) <= 0) return false;
+    // Só cobra o mês corrente para alunos que JÁ EXISTIAM no início do mês.
+    // Aluno cadastrado no meio do mês entra na cobrança só no mês seguinte —
+    // evita mensalidade retroativa criada pelo cron diário. (Fuso SP para não
+    // errar na virada do mês.) Sem created_at → inclui (defensivo).
+    const createdSp = s.created_at ? spDateOf(String(s.created_at)) : null;
+    return !createdSp || createdSp < monthStart;
+  });
   if (!candidates.length) return { inserted: 0, skipped_existing: 0, created_payers: 0 };
 
+  // Existência POR MÊS considera QUALQUER status, INCLUSIVE 'canceled'. Isso é
+  // load-bearing para o cron DIÁRIO: o índice único é parcial
+  // (`WHERE status <> 'canceled'`), então uma mensalidade cancelada não ocupa a
+  // chave — se ignorássemos canceladas aqui, o job recriaria uma nova todo dia,
+  // "ressuscitando" o cancelamento. Uma vez que exista lançamento do mês para o
+  // aluno (em qualquer status), o job não gera outro. Recriação intencional de
+  // um mês cancelado é feita manualmente (Prévia/criar), não pelo cron.
   const { data: existing, error: e2 } = await admin
     .from("payments")
     .select("student_id")
     .eq("tenant_id", tenantId)
-    .eq("competence_month", monthStart)
-    .neq("status", "canceled");
+    .eq("competence_month", monthStart);
   if (e2) throw new Error(`generateMensalidades.existing: ${e2.message}`);
   const exists = new Set((existing || []).map((p) => p.student_id));
 

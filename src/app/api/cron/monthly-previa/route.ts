@@ -45,11 +45,35 @@ export async function GET(req: NextRequest) {
   }
 
   const ym = new Date().toISOString().slice(0, 7);
+  const startedAt = new Date().toISOString();
+  const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  // Log durável best-effort: a falha ao registrar NUNCA quebra o job.
+  async function recordRun(fields: {
+    ok: boolean;
+    status: "ok" | "partial" | "error";
+    summary: Record<string, unknown>;
+    error: string | null;
+  }) {
+    try {
+      await admin.from("cron_runs").insert({
+        job: "monthly-previa",
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+        ...fields,
+      });
+    } catch (e) {
+      console.error(
+        "[cron:monthly-previa] cron_runs insert falhou",
+        e instanceof Error ? e.message : String(e)
+      );
+    }
+  }
+
   try {
     console.log("[cron:monthly-previa] start", { ym });
-    const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
 
     const { data: tenants, error } = await admin.from("tenants").select("id, name");
     if (error) throw error;
@@ -81,10 +105,18 @@ export async function GET(req: NextRequest) {
     const log = failed > 0 ? console.error : console.log;
     log("[cron:monthly-previa] done", summary);
 
+    await recordRun({
+      ok: failed === 0,
+      status: failed ? "partial" : "ok",
+      summary: { ...summary, perTenant },
+      error: null,
+    });
+
     return NextResponse.json({ ok: failed === 0, ...summary }, { status: failed ? 207 : 200 });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[cron:monthly-previa] error", msg);
+    await recordRun({ ok: false, status: "error", summary: { ym }, error: msg });
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }

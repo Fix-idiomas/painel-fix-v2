@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/monthly-previa",
-      "schedule": "13 6 1 * *"
+      "schedule": "13 6 * * *"
     },
     {
       "path": "/api/cron/expire-subscriptions",
