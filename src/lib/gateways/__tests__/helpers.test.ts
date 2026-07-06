@@ -34,7 +34,19 @@ describe("mapErr", () => {
   });
 
   it("falls back to generic message when error has no message", () => {
-    expect(() => mapErr("myCtx", {})).toThrow("Erro em myCtx");
+    expect(() => mapErr("myCtx", {})).toThrow("Não foi possível concluir a operação");
+  });
+
+  it("traduz erro de RLS para mensagem amigável de permissão", () => {
+    const err = {
+      code: "42501",
+      message: 'query would be affected by row-level security policy for table "teachers"',
+    };
+    expect(() => mapErr("createSession", err)).toThrow("permissão");
+  });
+
+  it("preserva mensagens já significativas no fallback", () => {
+    expect(() => mapErr("ctx", { message: "boom" })).toThrow("boom");
   });
 });
 

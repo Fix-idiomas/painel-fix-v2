@@ -2,24 +2,56 @@ import { supabase } from "../supabaseClient";
 import type { MeetingRule, RecurrenceTemplate } from "@/types";
 
 // ------------------------ Error mapping ------------------------
+// Traduz erros técnicos (Postgres/PostgREST) para mensagens amigáveis em pt-BR.
+// PADRÃO do projeto: o usuário nunca vê texto técnico cru; o erro ORIGINAL é
+// sempre logado no console (não "engolimos" o erro — só traduzimos a mensagem).
 export const mapErr = (ctx: string, err: unknown): never => {
   const e = err as Record<string, unknown>;
   const code = e?.code || e?.status || e?.name;
   const text = `${e?.message || ""} ${e?.details || ""}`.toLowerCase();
 
+  // Erro cru SEMPRE registrado (para depuração), independente da tradução.
+  console.error(`[gateway] ${ctx}:`, e?.message || err);
+
+  // NOT NULL — campos obrigatórios
   if (
     code === "23502" ||
-    (text as string).includes("null value in column") ||
-    (text as string).includes("violates not-null constraint")
+    text.includes("null value in column") ||
+    text.includes("violates not-null constraint")
   ) {
-    if ((text as string).includes("teacher_id_snapshot")) {
-      console.error(`[supabaseGateway] ${ctx}:`, err);
-      throw new Error("É obrigatório atribuir um professor à turma para criar uma sessão.");
+    if (text.includes("teacher_id_snapshot")) {
+      throw new Error("É obrigatório atribuir um professor à turma para criar uma aula.");
     }
+    throw new Error("Preencha todos os campos obrigatórios.");
   }
 
-  console.error(`[supabaseGateway] ${ctx}:`, e?.message || err);
-  throw new Error((e?.message as string) || `Erro em ${ctx}`);
+  // RLS / permissão negada (inclui a mensagem "row-level security policy")
+  if (
+    code === "42501" ||
+    text.includes("row-level security") ||
+    text.includes("row level security") ||
+    text.includes("permission denied")
+  ) {
+    throw new Error("Você não tem permissão para realizar esta operação nesta escola.");
+  }
+
+  // Unicidade
+  if (code === "23505" || text.includes("duplicate key") || text.includes("unique constraint")) {
+    throw new Error("Já existe um registro com esses dados.");
+  }
+
+  // Chave estrangeira — item vinculado a outros registros
+  if (code === "23503" || text.includes("foreign key")) {
+    throw new Error("Operação bloqueada: este item está vinculado a outros registros.");
+  }
+
+  // Formato inválido
+  if (code === "22P02" || text.includes("invalid input syntax")) {
+    throw new Error("Algum campo foi preenchido em um formato inválido.");
+  }
+
+  // Fallback: preserva a mensagem original (muitas já são pt-BR significativas).
+  throw new Error((e?.message as string) || `Não foi possível concluir a operação (${ctx}).`);
 };
 
 // Normaliza meeting_rules para manter shape consistente
