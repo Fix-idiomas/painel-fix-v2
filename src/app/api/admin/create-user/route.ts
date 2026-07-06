@@ -26,7 +26,42 @@ type CreateUserBody = {
   cpf?: string;
   role?: string;
   perms?: Record<string, unknown>;
+  teacherId?: string; // opcional: vincula este login ao cadastro de professor
 };
+
+// Vincula um login (auth user) a um professor do tenant (teachers.user_id_uuid),
+// que é o elo usado pela RLS (current_teacher_id) para o escopo por professor.
+// Retorna uma mensagem de erro amigável, ou null em caso de sucesso.
+async function linkTeacherToUser(
+  admin: SupabaseClient,
+  tenantId: string,
+  teacherId: string,
+  userId: string
+): Promise<string | null> {
+  const { data: teacher, error } = await admin
+    .from("teachers")
+    .select("id, user_id_uuid")
+    .eq("tenant_id", tenantId)
+    .eq("id", teacherId)
+    .maybeSingle();
+  if (error) return "Falha ao localizar o professor.";
+  if (!teacher) return "Professor não encontrado nesta escola.";
+  if (teacher.user_id_uuid && teacher.user_id_uuid !== userId)
+    return "Este professor já tem um acesso vinculado.";
+  if (teacher.user_id_uuid === userId) return null; // já vinculado a este login
+
+  const { error: upErr } = await admin
+    .from("teachers")
+    .update({ user_id_uuid: userId })
+    .eq("tenant_id", tenantId)
+    .eq("id", teacherId);
+  if (upErr) {
+    if (upErr.code === "23505")
+      return "Este login já está vinculado a outro professor.";
+    return "Falha ao vincular o professor ao login.";
+  }
+  return null;
+}
 
 // Recupera o chamador (via token Bearer) e um client "pub" que respeita RLS
 async function getCaller(req: NextRequest): Promise<{ user: { id: string; email?: string }; pub: SupabaseClient }> {
@@ -73,7 +108,7 @@ export async function POST(req: NextRequest) {
     const { user: caller, pub } = await getCaller(req);
 
     const body = (await req.json().catch(() => ({}))) as CreateUserBody;
-    const { email, password, name, phone, cpf, perms } = body || {};
+    const { email, password, name, phone, cpf, perms, teacherId } = body || {};
     let { role } = body || {};
 
     const permsObj: Record<string, unknown> = perms && typeof perms === "object" ? { ...perms } : {};
@@ -154,6 +189,18 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      // Vínculo opcional login↔professor (habilita o escopo por professor na RLS).
+      if (teacherId) {
+        const linkErr = await linkTeacherToUser(getAdmin(), tenant_id_server, teacherId, newUserId);
+        if (linkErr) {
+          return NextResponse.json(
+            { userId: newUserId, status: "created_unlinked", warning: linkErr },
+            { status: 207 }
+          );
+        }
+        return NextResponse.json({ userId: newUserId, status: "created_and_linked" }, { status: 201 });
+      }
+
       return NextResponse.json({ userId: newUserId, status: "created_and_confirmed" }, { status: 201 });
     }
 
@@ -179,6 +226,13 @@ export async function POST(req: NextRequest) {
 
       const isAlreadyMemberHere = (existingClaims || []).some((r: { tenant_id: string }) => r.tenant_id === tenant_id_server);
       if (isAlreadyMemberHere) {
+        if (teacherId) {
+          const linkErr = await linkTeacherToUser(getAdmin(), tenant_id_server, teacherId, existingUserId);
+          if (linkErr) {
+            return NextResponse.json({ userId: existingUserId, status: "already_member", warning: linkErr }, { status: 200 });
+          }
+          return NextResponse.json({ userId: existingUserId, status: "already_member_linked" }, { status: 200 });
+        }
         return NextResponse.json({ userId: existingUserId, status: "already_member" }, { status: 200 });
       }
 

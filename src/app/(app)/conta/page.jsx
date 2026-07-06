@@ -1018,6 +1018,23 @@ function CreateUserModal({ tenantId, onClose, onCreated }) {
   const [err, setErr] = useState(null);
   const [msg, setMsg] = useState(null);
 
+  // Professores do tenant, para vincular o login (habilita o escopo por professor).
+  const [teachers, setTeachers] = useState([]);
+  const [teacherId, setTeacherId] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("teachers")
+        .select("id, name, status, user_id_uuid")
+        .order("name", { ascending: true });
+      if (!cancelled) setTeachers(Array.isArray(data) ? data : []);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function togglePerm(path) {
     setPerms((prev) => {
       const [area, key] = path.split(".");
@@ -1064,6 +1081,7 @@ function CreateUserModal({ tenantId, onClose, onCreated }) {
           role: form.role,
           tenant_id: tenantId,
           perms,
+          teacherId: teacherId || undefined,
         }),
       });
 
@@ -1075,7 +1093,13 @@ function CreateUserModal({ tenantId, onClose, onCreated }) {
         return;
       }
 
-      if (out?.status === "already_member")
+      if (out?.warning)
+        setMsg(`Usuário criado. Atenção: ${out.warning}`);
+      else if (out?.status === "created_and_linked")
+        setMsg("Usuário criado e vinculado ao professor.");
+      else if (out?.status === "already_member_linked")
+        setMsg("Usuário vinculado ao professor.");
+      else if (out?.status === "already_member")
         setMsg("Usuário já é membro desta escola.");
       else if (out?.status === "linked_existing")
         setMsg("Usuário já existia. Vinculado a esta escola com sucesso.");
@@ -1149,6 +1173,29 @@ function CreateUserModal({ tenantId, onClose, onCreated }) {
             onChange={(v) => setForm((f) => ({ ...f, role: v }))}
             placeholder='ex.: "teacher B", "adm Bruno"'
           />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-medium text-[var(--p-text-muted)]">
+            Vincular a um professor (opcional)
+          </label>
+          <select
+            value={teacherId}
+            onChange={(e) => setTeacherId(e.target.value)}
+            className="w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-surface)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--p-primary)]/20 focus:border-[var(--p-primary)]/40"
+          >
+            <option value="">— Nenhum (não é professor) —</option>
+            {teachers.map((t) => (
+              <option key={t.id} value={t.id} disabled={!!t.user_id_uuid}>
+                {t.name}
+                {t.user_id_uuid ? " (já tem acesso)" : ""}
+                {t.status === "inativo" ? " — inativo" : ""}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-[var(--p-text-faint)]">
+            Necessário para o professor enxergar apenas as turmas e alunos dele.
+          </p>
         </div>
 
         <PermsGrid perms={perms} onToggle={togglePerm} />
