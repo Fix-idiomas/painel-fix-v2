@@ -224,6 +224,7 @@ export const turmaGateway = {
     const { data: sessRows, error: eS } = await supabase
       .from("sessions")
       .select("id, turma_id, date, duration_hours, notes")
+      .eq("turma_id", turmaId)
       .gte("date", startISO)
       .lte("date", endISO)
       .order("date", { ascending: true });
