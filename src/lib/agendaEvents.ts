@@ -135,7 +135,20 @@ export function buildEventsFromSessions(
     const diffDays = Math.floor((d.getTime() - startMs) / 86400000);
     if (diffDays < 0 || diffDays > 5) continue;
     const t = turmaMap[s.turma_id] || ({ id: s.turma_id } as TurmaLike);
-    const start = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    let start = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    // Sessões gravadas sem hora (placeholder 00:00) caem no horário da GRADE da
+    // turma: primeiro a meeting_rule do mesmo dia da semana; se não houver,
+    // o horário predominante da turma. Assim a agenda mostra a hora real, não
+    // meia-noite. (Correção definitiva do dado fica no fluxo de criação/backfill.)
+    if (start === "00:00") {
+      const rules = Array.isArray(t.meeting_rules) ? t.meeting_rules : [];
+      const wd = d.getDay(); // 0=Dom..6=Sáb, mesmo encoding das meeting_rules
+      const rule =
+        rules.find((r) => Number(r?.weekday) === wd) ||
+        rules.find((r) => r?.time);
+      const ruleTime = rule?.time ? String(rule.time).slice(0, 5) : null;
+      if (ruleTime) start = ruleTime;
+    }
     const dur = Math.max(0.25, Number(s.duration_hours || 1));
     const endStr = fmtHHMM(hourToMinutes(start) + Math.round(dur * 60));
     events.push({

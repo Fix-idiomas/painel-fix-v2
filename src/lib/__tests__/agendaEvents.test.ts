@@ -145,4 +145,37 @@ describe("buildEventsFromSessions", () => {
     );
     expect(events).toHaveLength(0);
   });
+
+  it("usa o horário da meeting_rule quando a sessão está em 00:00 (placeholder)", () => {
+    const map = {
+      t1: {
+        id: "t1",
+        name: "A",
+        teacher_id: "p1",
+        meeting_rules: [
+          { weekday: 1, time: "07:00", duration_hours: 0.5 }, // segunda
+          { weekday: 3, time: "11:00" },
+        ],
+      },
+    };
+    const sessions = [
+      { id: "s1", turma_id: "t1", date: "2026-04-27T00:00:00", duration_hours: 0.5 }, // segunda 00:00
+    ];
+    const events = buildEventsFromSessions(sessions, map, teacherMap, monday);
+    expect(events[0]).toMatchObject({ day: 0, start: "07:00", end: "07:30" });
+  });
+
+  it("preserva o horário real da sessão quando não é 00:00", () => {
+    const map = { t1: { id: "t1", name: "A", meeting_rules: [{ weekday: 1, time: "07:00" }] } };
+    const sessions = [{ id: "s1", turma_id: "t1", date: "2026-04-27T14:30:00", duration_hours: 1 }];
+    const events = buildEventsFromSessions(sessions, map, teacherMap, monday);
+    expect(events[0].start).toBe("14:30");
+  });
+
+  it("cai no horário predominante da turma se não há regra do dia da sessão", () => {
+    const map = { t1: { id: "t1", name: "A", meeting_rules: [{ weekday: 3, time: "09:00" }] } };
+    const sessions = [{ id: "s1", turma_id: "t1", date: "2026-04-27T00:00:00", duration_hours: 1 }]; // segunda, sem regra de segunda
+    const events = buildEventsFromSessions(sessions, map, teacherMap, monday);
+    expect(events[0].start).toBe("09:00");
+  });
 });
