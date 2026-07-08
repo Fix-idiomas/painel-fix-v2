@@ -307,7 +307,7 @@ export default function RecepcaoV2Page() {
       parts.push(
         `${pendingAttendance.length} ${
           pendingAttendance.length === 1 ? "aula" : "aulas"
-        } sem presença`
+        } sem chamada`
       );
     }
     return parts.join(" · ");
@@ -459,11 +459,11 @@ function TodayClassesCard({ loading, classes, className = "" }) {
                   </div>
                   {c.has_attendance ? (
                     <span className="p-chip p-chip-success">
-                      <CheckCircle2 className="h-3 w-3" /> Presença OK
+                      <CheckCircle2 className="h-3 w-3" /> Chamada feita
                     </span>
                   ) : c.session_id ? (
                     <span className="p-chip p-chip-warning">
-                      <AlertCircle className="h-3 w-3" /> Sem presença
+                      <AlertCircle className="h-3 w-3" /> Chamada pendente
                     </span>
                   ) : null}
                 </div>
@@ -538,7 +538,7 @@ function AttentionCard({
                   <div className="text-sm font-medium">
                     {pendingAttendance.length}{" "}
                     {pendingAttendance.length === 1 ? "aula" : "aulas"} sem
-                    presença
+                    chamada
                   </div>
                   <div className="text-xs text-[var(--p-text-muted)] truncate">
                     {pendingAttendance[0].turma_name}

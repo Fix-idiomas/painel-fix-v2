@@ -230,12 +230,38 @@ export const turmaGateway = {
       .lt("date", e)
       .order("date", { ascending: true });
     if (error) throw new Error(`listSessionsInRange: ${error.message}`);
+
+    // Chamada por sessão (has_attendance/present) — a recepção usa para "chamada
+    // feita x pendente"; sem isso toda aula aparecia como "sem presença".
+    const rows = data || [];
+    const ids = rows.map((r) => r.id);
+    const agg = new Map<string, { count: number; present: number }>();
+    if (ids.length) {
+      const { data: att, error: eA } = await supabase
+        .from("attendance")
+        .select("session_id, present")
+        .in("session_id", ids);
+      if (eA) throw new Error(`listSessionsInRange.attendance: ${eA.message}`);
+      for (const a of att || []) {
+        const cur = agg.get(a.session_id) || { count: 0, present: 0 };
+        cur.count += 1;
+        if (a.present) cur.present += 1;
+        agg.set(a.session_id, cur);
+      }
+    }
+
     const toIso = (d: unknown) => (d ? new Date(d as string).toISOString() : null);
-    return (data || []).map((row) => ({
-      ...row,
-      date: toIso(row.date),
-      duration_hours: Number(row.duration_hours || 0),
-    }));
+    return rows.map((row) => {
+      const a = agg.get(row.id) || { count: 0, present: 0 };
+      return {
+        ...row,
+        date: toIso(row.date),
+        duration_hours: Number(row.duration_hours || 0),
+        has_attendance: a.count > 0,
+        attendance_count: a.count,
+        present_count: a.present,
+      };
+    });
   },
 
   async listSessionsWithAttendance({ turmaId, start, end }: { turmaId: string; start?: string; end?: string }) {
