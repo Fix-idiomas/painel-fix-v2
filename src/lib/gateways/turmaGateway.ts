@@ -443,9 +443,13 @@ export const turmaGateway = {
       const dd   = String(d.getUTCDate()).padStart(2, "0");
       const dateStr = `${yyyy}-${mm}-${dd}`;
 
+      // Usa o HORÁRIO da regra (senão a aula nascia meia-noite → agenda 00:00).
+      const rt = r.time ? String(r.time).slice(0, 5) : null;
+      const whenStr = rt ? `${dateStr}T${rt}` : dateStr;
+
       rows.push({
         turma_id: turmaId,
-        date: toIsoTz(dateStr),
+        date: toIsoTz(whenStr),
         duration_hours: Number(r.duration_hours ?? 0.5),
         notes: null,
         headcount_snapshot: null,
