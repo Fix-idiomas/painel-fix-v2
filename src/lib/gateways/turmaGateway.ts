@@ -169,10 +169,26 @@ export const turmaGateway = {
       .order("date", { ascending: true });
 
     if (error) throw new Error(`listSessions: ${error.message}`);
+
+    // has_attendance: a lista da turma marca "presença registrada" a partir disso.
+    // Sem este flag a UI mostrava sempre "sem presença".
+    const rows = data || [];
+    const ids = rows.map((s) => s.id);
+    let has = new Set<string>();
+    if (ids.length) {
+      const { data: att, error: eA } = await supabase
+        .from("attendance")
+        .select("session_id")
+        .in("session_id", ids);
+      if (eA) throw new Error(`listSessions.attendance: ${eA.message}`);
+      has = new Set((att || []).map((a) => a.session_id));
+    }
+
     const toIso = (d) => (d ? new Date(d).toISOString() : null);
-    return (data || []).map(s => ({
+    return rows.map((s) => ({
       ...s,
       date: toIso(s.date),
+      has_attendance: has.has(s.id),
     }));
   },
 

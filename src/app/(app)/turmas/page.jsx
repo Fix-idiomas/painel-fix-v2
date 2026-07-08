@@ -867,6 +867,29 @@ function fmtSessionDate(iso) {
   );
 }
 
+// Igual ao fmtSessionDate, mas quando a sessão está sem hora (00:00) usa o horário
+// da grade da turma para aquele dia (fallback: horário predominante). Assim a lista
+// "Registro de aulas" não mostra meia-noite. (Correção de exibição; raiz fica na
+// geração/backfill das sessões.)
+function fmtSessionDateWithRules(iso, turma) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const dateStr = d.toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+  let time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (time === "00:00") {
+    const rules = Array.isArray(turma?.meeting_rules) ? turma.meeting_rules : [];
+    const wd = d.getDay();
+    const rule = rules.find((r) => Number(r?.weekday) === wd) || rules.find((r) => r?.time);
+    if (rule?.time) time = String(rule.time).slice(0, 5);
+  }
+  return `${dateStr} · ${time}`;
+}
+
 function TurmaDetailsModal({ turma, teacherName, onClose }) {
   const [members, setMembers] = useState([]);
   const [sessions, setSessions] = useState([]);
@@ -1028,7 +1051,7 @@ function TurmaDetailsModal({ turma, teacherName, onClose }) {
                         <Calendar className="h-4 w-4 text-[var(--p-text-muted)]" />
                         <div className="min-w-0">
                           <div className="text-sm font-medium truncate">
-                            {fmtSessionDate(s.date)}
+                            {fmtSessionDateWithRules(s.date, turma)}
                           </div>
                           <div className="text-xs text-[var(--p-text-muted)]">
                             {Number(s.duration_hours || 0)}h
