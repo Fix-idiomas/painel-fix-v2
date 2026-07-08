@@ -75,10 +75,18 @@ function buildTodayClasses(turmas, teacherMap, todaySessions, todayDow) {
       if (Number(r.weekday) !== todayDow) continue;
       const time = String(r.time || t.meeting_time || "08:00").slice(0, 5);
       const dur = Math.max(0.25, Number(r.duration_hours || 1));
-      // Já existe sessão registrada hoje pra essa turma?
-      const matchingSession = (todaySessions || []).find(
-        (s) => s.turma_id === t.id
-      );
+      // Já existe sessão registrada hoje pra essa turma NESTE horário? Casa pelo
+      // horário do slot (turma com 2 aulas no mesmo dia não compartilha a flag);
+      // fallback: qualquer sessão da turma hoje (ex.: sessão sem hora).
+      const sessAt = (s) => {
+        const d = new Date(s?.date);
+        if (Number.isNaN(d.getTime())) return null;
+        return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      };
+      const matchingSession =
+        (todaySessions || []).find(
+          (s) => s.turma_id === t.id && sessAt(s) === time
+        ) || (todaySessions || []).find((s) => s.turma_id === t.id);
       out.push({
         key: `${t.id}-${time}`,
         turma_id: t.id,

@@ -107,13 +107,18 @@ function AssiduidadeInner() {
       setError(null);
       setLoading(true);
       const allTurmas = await financeGateway.listTurmas();
+      // Nomes de todos os alunos (fallback p/ quem teve presença mas saiu da turma).
+      const students = await financeGateway.listStudents();
+      const studentNameById = new Map(
+        (students || []).map((s) => [s.id, s.name])
+      );
       const ts =
         turmaId === "all"
           ? allTurmas
           : allTurmas.filter((t) => t.id === turmaId);
       const all = [];
       for (const t of ts) {
-        const turmaRows = await reportForTurma(t, ym);
+        const turmaRows = await reportForTurma(t, ym, studentNameById);
         all.push(...turmaRows);
       }
       setRows(all);
@@ -464,11 +469,27 @@ function GroupedTable({ rows }) {
   );
 }
 
+// Ano-mês "YYYY-MM" no fuso America/Sao_Paulo — evita que aula noturna do
+// último/primeiro dia do mês caia no mês errado (a data é armazenada em UTC).
+function spYearMonth(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(d);
+  const y = p.find((x) => x.type === "year")?.value;
+  const m = p.find((x) => x.type === "month")?.value;
+  return `${y}-${m}`;
+}
+
 // ─── Cálculo do relatório ────────────────────────────────────────
-async function reportForTurma(turma, ym) {
+async function reportForTurma(turma, ym, studentNameById) {
   const ymKey = (ym || "").slice(0, 7);
   const sessions = (await financeGateway.listSessions(turma.id)).filter(
-    (s) => (s.date || "").slice(0, 7) === ymKey
+    (s) => spYearMonth(s.date) === ymKey
   );
   const members = await financeGateway.listTurmaMembers(turma.id);
   const map = new Map();
@@ -482,7 +503,10 @@ async function reportForTurma(turma, ym) {
     for (const a of list) {
       const e =
         map.get(a.student_id) || {
-          name: a.student_name_snapshot || "(Aluno)",
+          name:
+            (studentNameById && studentNameById.get(a.student_id)) ||
+            a.student_name_snapshot ||
+            "(Aluno)",
           presents: 0,
           absents: 0,
         };

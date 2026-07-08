@@ -491,9 +491,9 @@ export default function PainelPage() {
   const overdueCount = payments.filter(
     (p) => statusOfRevenue(p, today) === "overdue"
   ).length;
-  const paidOnTime = payments.filter((p) => p.status === "paid").length;
+  const paidCount = payments.filter((p) => p.status === "paid").length;
   const paidPct = payments.length
-    ? Math.round((paidOnTime / payments.length) * 100)
+    ? Math.round((paidCount / payments.length) * 100)
     : 0;
   const activeStudents = students.filter((s) => s.status === "ativo").length;
 
@@ -576,9 +576,9 @@ export default function PainelPage() {
       hint: "vs. mês anterior",
     },
     {
-      label: "Pagamentos em dia",
+      label: "Mensalidades pagas",
       value: `${paidPct}%`,
-      delta: `${paidOnTime}/${payments.length || 0}`,
+      delta: `${paidCount}/${payments.length || 0}`,
       trend: null,
       icon: CheckCircle2,
       hint: "mensalidades pagas",
@@ -617,13 +617,7 @@ export default function PainelPage() {
               ? "Carregando…"
               : `Você tem ${todayClasses.length} ${
                   todayClasses.length === 1 ? "aula" : "aulas"
-                } hoje${
-                  canReadFinance
-                    ? ` e ${overdueCount} ${
-                        overdueCount === 1 ? "mensalidade" : "mensalidades"
-                      } em atraso`
-                    : ""
-                }.`}
+                } hoje.`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
