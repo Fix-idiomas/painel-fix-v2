@@ -50,6 +50,12 @@ export const mapErr = (ctx: string, err: unknown): never => {
     throw new Error("Algum campo foi preenchido em um formato inválido.");
   }
 
+  // CHECK constraint (ex.: role inválida no bootstrap do tenant) — nunca vaza o
+  // nome do constraint pro usuário.
+  if (code === "23514" || text.includes("check constraint")) {
+    throw new Error("Não foi possível concluir a operação: um dado ficou fora do formato esperado. Tente novamente; se persistir, fale com o suporte.");
+  }
+
   // Fallback: preserva a mensagem original (muitas já são pt-BR significativas).
   throw new Error((e?.message as string) || `Não foi possível concluir a operação (${ctx}).`);
 };

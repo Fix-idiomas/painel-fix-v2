@@ -48,6 +48,17 @@ describe("mapErr", () => {
   it("preserva mensagens já significativas no fallback", () => {
     expect(() => mapErr("ctx", { message: "boom" })).toThrow("boom");
   });
+
+  it("traduz CHECK constraint (23514) sem vazar o nome do constraint", () => {
+    const err = {
+      code: "23514",
+      message: 'new row for relation "user_claims" violates check constraint "user_claims_role_check"',
+    };
+    // não deve vazar o texto técnico...
+    expect(() => mapErr("bootstrap", err)).not.toThrow("user_claims_role_check");
+    // ...e deve dar uma mensagem amigável
+    expect(() => mapErr("bootstrap", err)).toThrow("Não foi possível concluir a operação");
+  });
 });
 
 // --- normalizeRules ---

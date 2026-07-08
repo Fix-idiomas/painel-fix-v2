@@ -3,6 +3,27 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { mapErr } from "@/lib/gateways/helpers";
+
+// Traduz qualquer erro do bootstrap para pt-BR amigável, garantindo que texto
+// técnico cru (nomes de constraint, "violates", identificadores) NUNCA chegue à
+// tela. Usa o mapErr do projeto e, se sobrar algo técnico, cai numa mensagem de
+// contexto do onboarding.
+function friendlyOnboardingError(err) {
+  const generico =
+    "Não foi possível criar sua escola agora. Tente novamente; se o problema continuar, entre em contato com o suporte.";
+  let msg = "";
+  try {
+    mapErr("onboarding", err);
+  } catch (translated) {
+    msg = translated?.message || "";
+  }
+  // Se a tradução não bateu numa regra conhecida, ainda pode conter texto cru.
+  if (!msg || /constraint|violates|null value|invalid input|syntax|row-level|_/i.test(msg)) {
+    return generico;
+  }
+  return msg;
+}
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -69,7 +90,8 @@ export default function OnboardingPage() {
       // 3) pronto → vai pro Início
       router.replace("/");
     } catch (err) {
-      setError(err?.message || String(err));
+      // O erro cru é logado dentro do mapErr; a tela recebe só a versão pt-BR.
+      setError(friendlyOnboardingError(err));
     } finally {
       setSaving(false);
     }
@@ -138,8 +160,9 @@ export default function OnboardingPage() {
         </form>
 
         <p className="mt-4 text-xs text-slate-500">
-          Obs.: esta ação cria sua escola e te torna administrador. Você poderá ajustar
-          detalhes depois em <code>/conta</code>.
+          Obs.: esta ação cria sua escola e te torna administrador. Sua conta começa
+          com um período de teste gratuito — você poderá assinar depois em{" "}
+          <b>Plano e cobrança</b>. Detalhes podem ser ajustados em <code>/conta</code>.
         </p>
       </div>
     </main>
