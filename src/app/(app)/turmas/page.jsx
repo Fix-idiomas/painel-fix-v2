@@ -1056,8 +1056,8 @@ function TurmaDetailsModal({ turma, teacherName, onClose }) {
                           <div className="text-xs text-[var(--p-text-muted)]">
                             {Number(s.duration_hours || 0)}h
                             {s.has_attendance
-                              ? " · presença registrada"
-                              : " · sem presença"}
+                              ? " · chamada feita"
+                              : " · sem chamada"}
                           </div>
                         </div>
                       </div>

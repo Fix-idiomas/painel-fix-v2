@@ -913,7 +913,8 @@ function SessionFormModal({ turma, members, initial, prefill, onClose, onSaved }
     (defaultTime ? `Horário padrão: ${defaultTime}` : "");
 
   const [form, setForm] = useState({
-    date: initial?.date || prefill?.date || "",
+    // Só a data (o input é type="date"); o horário vem da grade da turma ao salvar.
+    date: String(initial?.date || prefill?.date || "").slice(0, 10),
     notes: initialNotes,
     duration_hours: String(
       initial?.duration_hours ??
@@ -989,8 +990,12 @@ function SessionFormModal({ turma, members, initial, prefill, onClose, onSaved }
     try {
       setSaving(true);
       const enrolledNow = members.filter((m) => m.status === "ativo").length;
+      // Combina a data com o horário da grade da turma (o campo é só data). Sem
+      // isso a aula era gravada 00:00. Turma sem horário na regra → fica só data.
+      const dayOnly = String(form.date).slice(0, 10);
+      const when = defaultTime ? `${dayOnly}T${defaultTime}` : dayOnly;
       const payload = {
-        date: form.date,
+        date: when,
         notes: form.notes,
         duration_hours: Number(form.duration_hours || 0.5),
         headcount_snapshot: enrolledNow,
