@@ -551,13 +551,18 @@ export default function TurmaDetailPage() {
                     <span className="text-xs text-[var(--p-text-muted)]">
                       · {fmtNum(s.duration_hours)}h
                     </span>
-                    {s.has_attendance ? (
+                    {!s.attendance_count ? (
+                      <span className="p-chip p-chip-warning">
+                        Sem chamada
+                      </span>
+                    ) : s.present_count > 0 ? (
                       <span className="p-chip p-chip-success">
-                        <CheckCircle2 className="h-3 w-3" /> Presença
+                        <CheckCircle2 className="h-3 w-3" />{" "}
+                        {s.present_count} presente{s.present_count > 1 ? "s" : ""}
                       </span>
                     ) : (
-                      <span className="p-chip p-chip-warning">
-                        Sem presença
+                      <span className="p-chip p-chip-danger">
+                        Todos ausentes
                       </span>
                     )}
                   </div>

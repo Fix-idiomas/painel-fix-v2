@@ -170,26 +170,37 @@ export const turmaGateway = {
 
     if (error) throw new Error(`listSessions: ${error.message}`);
 
-    // has_attendance: a lista da turma marca "presença registrada" a partir disso.
-    // Sem este flag a UI mostrava sempre "sem presença".
+    // Agrega a chamada por sessão: total de linhas e quantos presentes. A UI
+    // distingue "sem chamada" x "N presentes" x "todos ausentes" (uma chamada
+    // pode existir com todos ausentes — não confundir com "houve presença").
     const rows = data || [];
     const ids = rows.map((s) => s.id);
-    let has = new Set<string>();
+    const agg = new Map<string, { count: number; present: number }>();
     if (ids.length) {
       const { data: att, error: eA } = await supabase
         .from("attendance")
-        .select("session_id")
+        .select("session_id, present")
         .in("session_id", ids);
       if (eA) throw new Error(`listSessions.attendance: ${eA.message}`);
-      has = new Set((att || []).map((a) => a.session_id));
+      for (const a of att || []) {
+        const cur = agg.get(a.session_id) || { count: 0, present: 0 };
+        cur.count += 1;
+        if (a.present) cur.present += 1;
+        agg.set(a.session_id, cur);
+      }
     }
 
     const toIso = (d) => (d ? new Date(d).toISOString() : null);
-    return rows.map((s) => ({
-      ...s,
-      date: toIso(s.date),
-      has_attendance: has.has(s.id),
-    }));
+    return rows.map((s) => {
+      const a = agg.get(s.id) || { count: 0, present: 0 };
+      return {
+        ...s,
+        date: toIso(s.date),
+        has_attendance: a.count > 0,
+        attendance_count: a.count,
+        present_count: a.present,
+      };
+    });
   },
 
   async getSession(id: string) {
