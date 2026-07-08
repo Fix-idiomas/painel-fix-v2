@@ -10,6 +10,7 @@ import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
 import { supabaseGateway } from "@/lib/supabaseGateway";
 import { supabase } from "@/lib/supabaseClient";
+import { buildTodayClasses } from "@/lib/sessionDisplay";
 import {
   Calendar,
   Clock,
@@ -65,44 +66,6 @@ function addDaysISO(iso, n) {
 
 function firstName(name) {
   return String(name || "Usuário").trim().split(/\s+/)[0];
-}
-
-function buildTodayClasses(turmas, teacherMap, todaySessions, todayDow) {
-  const out = [];
-  for (const t of turmas || []) {
-    const rules = Array.isArray(t.meeting_rules) ? t.meeting_rules : [];
-    for (const r of rules) {
-      if (Number(r.weekday) !== todayDow) continue;
-      const time = String(r.time || t.meeting_time || "08:00").slice(0, 5);
-      const dur = Math.max(0.25, Number(r.duration_hours || 1));
-      // Já existe sessão registrada hoje pra essa turma NESTE horário? Casa pelo
-      // horário do slot (turma com 2 aulas no mesmo dia não compartilha a flag);
-      // fallback: qualquer sessão da turma hoje (ex.: sessão sem hora).
-      const sessAt = (s) => {
-        const d = new Date(s?.date);
-        if (Number.isNaN(d.getTime())) return null;
-        return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-      };
-      const matchingSession =
-        (todaySessions || []).find(
-          (s) => s.turma_id === t.id && sessAt(s) === time
-        ) || (todaySessions || []).find((s) => s.turma_id === t.id);
-      out.push({
-        key: `${t.id}-${time}`,
-        turma_id: t.id,
-        turma_name: t.name || "—",
-        time,
-        duration_h: dur,
-        teacher_name: t.teacher_id
-          ? teacherMap[t.teacher_id] || "—"
-          : "Sem professor",
-        room: t.room || null,
-        session_id: matchingSession?.id || null,
-        has_attendance: matchingSession?.has_attendance || false,
-      });
-    }
-  }
-  return out.sort((a, b) => a.time.localeCompare(b.time));
 }
 
 // Aniversariantes nos próximos 7 dias

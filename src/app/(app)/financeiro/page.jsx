@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { financeGateway } from "@/lib/financeGateway";
+import { readCombinedRevenue } from "@/lib/revenueKpis";
 import {
   DollarSign,
   TrendingUp,
@@ -127,16 +128,10 @@ export default function FinanceiroPage() {
     };
   }, [ym]);
 
-  // KPIs derivados (compatibilidade: o gateway usa "recebido"/"a_receber"/"atrasado",
-  // mas o preview usava "received"/"upcoming"/"overdue"; suportamos ambos)
-  const recebido = Number(kpis?.received ?? kpis?.recebido ?? 0);
-  const aReceber = Number(kpis?.upcoming ?? kpis?.a_receber ?? 0);
-  const atrasado = Number(kpis?.overdue ?? kpis?.atrasado ?? 0);
-  const gross = Number(
-    kpis?.total ?? recebido + aReceber + atrasado
-  );
+  // KPIs derivados via helper único (fonte usa chaves em inglês).
+  const { recebido, aReceber, atrasado, gross } = readCombinedRevenue(kpis);
   const net = recebido - Number(expenseKpis?.paid || 0);
-  const prevRecebido = Number(prevKpis?.received ?? prevKpis?.recebido ?? 0);
+  const prevRecebido = readCombinedRevenue(prevKpis).recebido;
   const delta = percentDelta(recebido, prevRecebido);
 
   const paidPayments = payments.filter((p) => p.status === "paid");

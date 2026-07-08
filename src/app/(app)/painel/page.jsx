@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
 import { computeRevenueKPIs } from "@/lib/finance";
+import { readCombinedRevenue } from "@/lib/revenueKpis";
 import { supabase } from "@/lib/supabaseClient";
 import {
   BookOpen,
@@ -497,13 +498,13 @@ export default function PainelPage() {
     : 0;
   const activeStudents = students.filter((s) => s.status === "ativo").length;
 
-  const recebido = Number(currKpis?.recebido || 0);
-  const prevRecebido = Number(prevKpis?.recebido || 0);
+  // Leitura única via helper (chaves em inglês da fonte). Sem isso os KPIs de
+  // receita vinham zerados.
+  const currRevenue = readCombinedRevenue(currKpis);
+  const recebido = currRevenue.recebido;
+  const prevRecebido = readCombinedRevenue(prevKpis).recebido;
   const delta = percentDelta(recebido, prevRecebido);
-  const grossRevenue =
-    recebido +
-    Number(currKpis?.a_receber || 0) +
-    Number(currKpis?.atrasado || 0);
+  const grossRevenue = currRevenue.gross;
 
   // Sparkline mensal (12 buckets)
   const sparkBars = useMemo(() => {
@@ -586,7 +587,7 @@ export default function PainelPage() {
     {
       label: "Em atraso",
       value: maskCount(overdueCount),
-      delta: maskMoney(currKpis?.atrasado || 0),
+      delta: maskMoney(currRevenue.atrasado),
       trend: overdueCount > 0 ? "down" : null,
       icon: AlertCircle,
       hint: "pendentes",
@@ -842,7 +843,7 @@ export default function PainelPage() {
               <div className="text-right">
                 <div className="text-xs text-[var(--p-text-muted)]">A receber</div>
                 <div className="p-kpi-value text-xl text-[var(--p-text-muted)]">
-                  {loading ? "…" : maskMoney(currKpis?.a_receber || 0)}
+                  {loading ? "…" : maskMoney(currRevenue.aReceber)}
                 </div>
               </div>
             </div>

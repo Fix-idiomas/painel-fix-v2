@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { financeGateway } from "@/lib/financeGateway";
+import { readCombinedRevenue } from "@/lib/revenueKpis";
 import {
   BarChart3,
   PieChart,
@@ -86,6 +87,18 @@ function money(v) {
     currency: "BRL",
   });
 }
+// Valor compacto p/ rótulo em cima da barra (ex.: "R$ 13k"): mantém o gráfico
+// legível sem depender só do tooltip (hover não existe no mobile).
+function abbrevMoney(v) {
+  const n = Number(v) || 0;
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "−" : "";
+  if (abs >= 1000) {
+    const k = abs / 1000;
+    return `${sign}R$ ${k.toFixed(abs >= 10000 ? 0 : 1).replace(".", ",")}k`;
+  }
+  return `${sign}R$ ${abs.toFixed(0)}`;
+}
 function currentYm() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -124,24 +137,42 @@ export default function RelatoriosHubPage() {
         const currYm = currentYm();
         const yms = [];
         for (let i = n - 1; i >= 0; i--) yms.push(addMonthsToYm(currYm, -i));
+
+        // Repasse de professores é custo (o /painel já trata assim). Buscamos a
+        // lista de professores uma vez e somamos o repasse por mês, para a
+        // "Líquida" não superestimar o lucro. Sem permissão/erro → 0 (graceful).
+        const teachers = await financeGateway.listTeachers().catch(() => []);
+        const teacherIds = (teachers || []).map((t) => t.id).filter(Boolean);
+        const sumPayouts = async (ym) => {
+          if (!teacherIds.length) return 0;
+          const parts = await Promise.all(
+            teacherIds.map((id) =>
+              financeGateway.sumTeacherPayoutByMonth(id, ym).catch(() => ({ amount: 0 }))
+            )
+          );
+          return parts.reduce((a, p) => a + Number(p?.amount || 0), 0);
+        };
+
         const results = await Promise.all(
           yms.map((ym) =>
             Promise.all([
               financeGateway.getCombinedRevenueKpis({ ym }),
               financeGateway.listExpenseEntries({ ym }),
+              sumPayouts(ym),
             ])
           )
         );
         if (cancelled) return;
         const out = yms.map((ym, idx) => {
-          const [kpis, exp] = results[idx];
-          const recebido = Number(kpis?.recebido || 0);
-          const aReceber = Number(kpis?.a_receber || 0);
-          const atrasado = Number(kpis?.atrasado || 0);
+          const [kpis, exp, professores] = results[idx];
+          // Leitura única via helper (chaves em inglês da fonte). Sem isso, gross
+          // ficava 0 e o gráfico vinha vazio.
+          const { recebido, gross } = readCombinedRevenue(kpis);
           const expPaid = Number(exp?.kpis?.paid || 0);
-          const gross = recebido + aReceber + atrasado;
-          const net = recebido - expPaid;
-          return { ym, gross, net, recebido, expenses: expPaid };
+          const prof = Number(professores || 0);
+          // Líquida = recebido − despesas pagas − repasse de professores.
+          const net = recebido - expPaid - prof;
+          return { ym, gross, net, recebido, expenses: expPaid, professores: prof };
         });
         setData(out);
       } catch (e) {
@@ -172,17 +203,22 @@ export default function RelatoriosHubPage() {
   }, [data]);
 
   const max = Math.max(1, ...data.map((x) => x.gross));
+  const currYmVal = currentYm();
+  // Rótulo com ano quando o período cruza anos (12M/YTD) — senão "Jan" é ambíguo.
+  const multiYear = new Set(data.map((d) => d.ym.slice(0, 4))).size > 1;
+  const hasCurrentPartial = data.some((d) => d.ym === currYmVal);
 
   function handleExport() {
     if (data.length === 0) return;
     const rows = [
-      ["Mes", "Bruta", "Recebido", "Liquida", "Despesas"],
+      ["Mes", "Bruta", "Recebido", "Liquida", "Despesas", "Professores"],
       ...data.map((m) => [
         m.ym,
         m.gross.toFixed(2),
         m.recebido.toFixed(2),
         m.net.toFixed(2),
         m.expenses.toFixed(2),
+        Number(m.professores || 0).toFixed(2),
       ]),
     ];
     const csv = rows
@@ -278,6 +314,13 @@ export default function RelatoriosHubPage() {
               />{" "}
               Líquida
             </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span
+                className="h-2.5 w-2.5 rounded-sm"
+                style={{ background: "var(--p-danger)" }}
+              />{" "}
+              Prejuízo
+            </span>
           </div>
         </div>
 
@@ -290,12 +333,32 @@ export default function RelatoriosHubPage() {
             Sem dados no período.
           </div>
         ) : (
-          <div className="flex items-end gap-3 md:gap-6 h-48">
+          <div
+            className="flex items-end gap-3 md:gap-6 h-48"
+            role="img"
+            aria-label={`Receita bruta e líquida por mês, ${data.length} ${
+              data.length === 1 ? "mês" : "meses"
+            }.`}
+          >
             {data.map((m) => {
               const gH = (m.gross / max) * 100;
-              const nH = (Math.max(0, m.net) / max) * 100;
+              const loss = m.net < 0;
+              // Prejuízo (líquida negativa): usa o módulo p/ dar altura visível e
+              // cor de alerta — senão a barra sumia e o mês parecia "sem dados".
+              const nH = (Math.min(Math.abs(m.net), max) / max) * 100;
+              const nHeight = loss ? Math.max(2, nH) : nH;
+              const isCurrent = m.ym === currYmVal;
+              const label = `${ymLabel(m.ym)}${multiYear ? "/" + m.ym.slice(2, 4) : ""}`;
               return (
-                <div key={m.ym} className="flex flex-1 flex-col items-center gap-1.5">
+                <div
+                  key={m.ym}
+                  className={`flex flex-1 flex-col items-center gap-1.5 ${
+                    isCurrent ? "opacity-60" : ""
+                  }`}
+                  aria-label={`${label}${isCurrent ? " (mês em curso, parcial)" : ""}: bruta ${money(
+                    m.gross
+                  )}, ${loss ? "prejuízo " : "líquida "}${money(m.net)}`}
+                >
                   <div className="relative flex h-full w-full items-end gap-1">
                     <div
                       className="flex-1 rounded-md"
@@ -304,16 +367,28 @@ export default function RelatoriosHubPage() {
                     />
                     <div
                       className="flex-1 rounded-md"
-                      style={{ height: `${nH}%`, background: "var(--p-accent)" }}
-                      title={`Líquida ${money(m.net)}`}
+                      style={{
+                        height: `${nHeight}%`,
+                        background: loss ? "var(--p-danger)" : "var(--p-accent)",
+                      }}
+                      title={`${loss ? "Líquida (prejuízo) " : "Líquida "}${money(m.net)}`}
                     />
                   </div>
                   <div className="text-[11px] text-[var(--p-text-muted)]">
-                    {ymLabel(m.ym)}
+                    {label}
+                    {isCurrent ? " *" : ""}
+                  </div>
+                  <div className="text-[10px] font-medium tabular-nums text-[var(--p-text)]">
+                    {abbrevMoney(m.gross)}
                   </div>
                 </div>
               );
             })}
+          </div>
+        )}
+        {!loading && hasCurrentPartial && (
+          <div className="mt-2 text-[11px] text-[var(--p-text-faint)]">
+            * mês em curso (parcial) — os valores ainda podem mudar.
           </div>
         )}
 
@@ -325,7 +400,12 @@ export default function RelatoriosHubPage() {
             </div>
           </div>
           <div>
-            <div className="text-xs text-[var(--p-text-muted)]">Crescimento {n}m</div>
+            <div
+              className="text-xs text-[var(--p-text-muted)]"
+              title="Compara a receita bruta do primeiro mês do período com a do último mês (que pode estar parcial)."
+            >
+              Crescimento {n}m
+            </div>
             <div
               className={`p-kpi-value text-lg ${
                 summary.growth !== null && summary.growth >= 0

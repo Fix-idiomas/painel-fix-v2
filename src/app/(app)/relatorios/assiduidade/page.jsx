@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { financeGateway } from "@/lib/financeGateway";
+import { spYearMonth } from "@/lib/sessionDisplay";
 import {
   ArrowLeft,
   Calendar,
@@ -467,22 +468,6 @@ function GroupedTable({ rows }) {
       })}
     </div>
   );
-}
-
-// Ano-mês "YYYY-MM" no fuso America/Sao_Paulo — evita que aula noturna do
-// último/primeiro dia do mês caia no mês errado (a data é armazenada em UTC).
-function spYearMonth(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const p = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Sao_Paulo",
-    year: "numeric",
-    month: "2-digit",
-  }).formatToParts(d);
-  const y = p.find((x) => x.type === "year")?.value;
-  const m = p.find((x) => x.type === "month")?.value;
-  return `${y}-${m}`;
 }
 
 // ─── Cálculo do relatório ────────────────────────────────────────

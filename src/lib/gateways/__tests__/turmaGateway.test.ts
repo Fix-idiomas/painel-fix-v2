@@ -1,3 +1,7 @@
+// toIsoTz interpreta "YYYY-MM-DDTHH:MM" (sem offset) como hora LOCAL do runtime.
+// No navegador do usuário isso é SP; fixamos aqui para asserção determinística.
+process.env.TZ = "America/Sao_Paulo";
+
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createSupabaseMock } from "./supabaseMock";
 
@@ -9,6 +13,10 @@ const { turmaGateway } = await import("../turmaGateway");
 beforeEach(() => {
   vi.clearAllMocks();
   mock._result = { data: null, error: null };
+  mock._tableResults = {};
+  mock._rpcResults = {};
+  mock._calls = [];
+  mock._consumed = {};
 });
 
 describe("turmaGateway.listTurmas", () => {
@@ -189,5 +197,145 @@ describe("turmaGateway.ensureSessionsFromRules", () => {
     await expect(
       turmaGateway.ensureSessionsFromRules({ turmaId: "1", startDate: "2024-02-01", endDate: "2024-01-01" })
     ).rejects.toThrow("inválido");
+  });
+
+  it("returns 0 when the turma has no meeting rules", async () => {
+    mock._tableResults.turmas = { data: { id: "t1", meeting_rules: [] }, error: null };
+    const n = await turmaGateway.ensureSessionsFromRules({
+      turmaId: "t1",
+      startDate: "2026-07-06",
+      endDate: "2026-07-08",
+    });
+    expect(n).toBe(0);
+    // sem regra → não faz upsert
+    expect(mock._calls.some((c) => c.table === "sessions" && c.method === "upsert")).toBe(false);
+  });
+
+  it("cria a sessão com o HORÁRIO da regra (não meia-noite)", async () => {
+    // Regra: terça (weekday 2) às 19:30. O intervalo 06→08/07/2026 contém a terça 07/07.
+    mock._tableResults.turmas = {
+      data: { id: "t1", meeting_rules: [{ weekday: 2, time: "19:30", duration_hours: 1 }] },
+      error: null,
+    };
+    const n = await turmaGateway.ensureSessionsFromRules({
+      turmaId: "t1",
+      startDate: "2026-07-06",
+      endDate: "2026-07-08",
+    });
+    expect(n).toBe(1);
+
+    const upsert = mock._calls.find((c) => c.table === "sessions" && c.method === "upsert");
+    expect(upsert).toBeTruthy();
+    const rows = upsert!.args[0] as Array<{ date: string; turma_id: string }>;
+    expect(rows).toHaveLength(1);
+    // SP 19:30 = UTC 22:30 (UTC-3, sem horário de verão). Nunca 00:00.
+    expect(rows[0].date).toBe("2026-07-07T22:30:00.000Z");
+    expect(rows[0].turma_id).toBe("t1");
+  });
+});
+
+describe("turmaGateway.listSessions (agregação de chamada)", () => {
+  it("throws when turmaId is missing", async () => {
+    await expect(turmaGateway.listSessions("")).rejects.toThrow("obrigatório");
+  });
+
+  it("filtra por turma_id e agrega has_attendance/attendance_count/present_count", async () => {
+    mock._tableResults.sessions = {
+      data: [
+        { id: "s1", turma_id: "t1", date: "2026-07-07T22:30:00Z" },
+        { id: "s2", turma_id: "t1", date: "2026-07-08T22:30:00Z" },
+        { id: "s3", turma_id: "t1", date: "2026-07-09T22:30:00Z" },
+      ],
+      error: null,
+    };
+    mock._tableResults.attendance = {
+      // s1: 2 chamadas, 1 presente. s2: 1 chamada, 0 presente (todos ausentes). s3: nenhuma.
+      data: [
+        { session_id: "s1", present: true },
+        { session_id: "s1", present: false },
+        { session_id: "s2", present: false },
+      ],
+      error: null,
+    };
+
+    const rows = await turmaGateway.listSessions("t1");
+
+    // escopo por turma foi aplicado
+    expect(mock._calls.some((c) => c.table === "sessions" && c.method === "eq" && c.args[0] === "turma_id" && c.args[1] === "t1")).toBe(true);
+
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.s1).toMatchObject({ has_attendance: true, attendance_count: 2, present_count: 1 });
+    expect(byId.s2).toMatchObject({ has_attendance: true, attendance_count: 1, present_count: 0 });
+    expect(byId.s3).toMatchObject({ has_attendance: false, attendance_count: 0, present_count: 0 });
+  });
+
+  it("não consulta attendance quando não há sessões", async () => {
+    mock._tableResults.sessions = { data: [], error: null };
+    const rows = await turmaGateway.listSessions("t1");
+    expect(rows).toEqual([]);
+    expect(mock._calls.some((c) => c.table === "attendance")).toBe(false);
+  });
+});
+
+describe("turmaGateway.listSessionsInRange (agregação de chamada)", () => {
+  it("agrega present_count por sessão", async () => {
+    mock._tableResults.sessions = {
+      data: [{ id: "s1", turma_id: "t1", date: "2026-07-07T22:30:00Z", duration_hours: "1" }],
+      error: null,
+    };
+    mock._tableResults.attendance = {
+      data: [
+        { session_id: "s1", present: true },
+        { session_id: "s1", present: true },
+        { session_id: "s1", present: false },
+      ],
+      error: null,
+    };
+    const rows = await turmaGateway.listSessionsInRange({
+      start: "2026-07-01T00:00:00Z",
+      end: "2026-08-01T00:00:00Z",
+    });
+    expect(rows[0]).toMatchObject({
+      has_attendance: true,
+      attendance_count: 3,
+      present_count: 2,
+      duration_hours: 1,
+    });
+  });
+});
+
+describe("turmaGateway.listSessionsWithAttendance (sucesso)", () => {
+  it("escopa por turma e marca has_attendance por sessão", async () => {
+    mock._tableResults.sessions = {
+      data: [
+        { id: "s1", turma_id: "t1", date: "2026-07-07T22:30:00Z", duration_hours: "1", notes: "" },
+        { id: "s2", turma_id: "t1", date: "2026-07-08T22:30:00Z", duration_hours: "1", notes: "" },
+      ],
+      error: null,
+    };
+    // só s1 tem chamada
+    mock._tableResults.attendance = { data: [{ session_id: "s1" }], error: null };
+
+    const rows = await turmaGateway.listSessionsWithAttendance({
+      turmaId: "t1",
+      start: "2026-07-01",
+      end: "2026-07-31",
+    });
+
+    expect(mock._calls.some((c) => c.table === "sessions" && c.method === "eq" && c.args[0] === "turma_id" && c.args[1] === "t1")).toBe(true);
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.s1.has_attendance).toBe(true);
+    expect(byId.s2.has_attendance).toBe(false);
+  });
+
+  it("retorna [] sem consultar attendance quando não há sessões", async () => {
+    mock._tableResults.sessions = { data: [], error: null };
+    const rows = await turmaGateway.listSessionsWithAttendance({
+      turmaId: "t1",
+      start: "2026-07-01",
+      end: "2026-07-31",
+    });
+    expect(rows).toEqual([]);
+    expect(mock._calls.some((c) => c.table === "attendance")).toBe(false);
   });
 });

@@ -28,6 +28,7 @@ import AppModal, {
   ModalActions,
   ConfirmDeleteModal,
 } from "@/components/AppModal";
+import { fmtSessionDateWithRules } from "@/lib/sessionDisplay";
 
 // ─── Helpers ──────────────────────────────────────────────────────
 const AVATAR_PALETTE = [
@@ -865,29 +866,6 @@ function fmtSessionDate(iso) {
     " · " +
     d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
   );
-}
-
-// Igual ao fmtSessionDate, mas quando a sessão está sem hora (00:00) usa o horário
-// da grade da turma para aquele dia (fallback: horário predominante). Assim a lista
-// "Registro de aulas" não mostra meia-noite. (Correção de exibição; raiz fica na
-// geração/backfill das sessões.)
-function fmtSessionDateWithRules(iso, turma) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  const dateStr = d.toLocaleDateString("pt-BR", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
-  let time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  if (time === "00:00") {
-    const rules = Array.isArray(turma?.meeting_rules) ? turma.meeting_rules : [];
-    const wd = d.getDay();
-    const rule = rules.find((r) => Number(r?.weekday) === wd) || rules.find((r) => r?.time);
-    if (rule?.time) time = String(rule.time).slice(0, 5);
-  }
-  return `${dateStr} · ${time}`;
 }
 
 function TurmaDetailsModal({ turma, teacherName, onClose }) {
