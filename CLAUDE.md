@@ -88,14 +88,14 @@ Signup creates the Supabase Auth user. On first login, if `current_tenant_id()` 
 App Router under `src/app`:
 - **`(auth)/`** — `login`, `signup` (+ `reset-password` lives under `(app)`)
 - **`(app)/`** — main app: `recepcao` (post-login dashboard), `painel`, `alunos` (+ `[id]/evolucao`), `professores`, `turmas` (+ `[id]`), `pagadores`, `agenda`, `financeiro` (`mensalidades`, `gastos`, `categorias`, `outras-receitas`), `relatorios` (`assiduidade`, `inadimplencia`), `configuracoes`, `conta`, `cadastro`, `onboarding`, etc. `recepcao-old` and `gastos` are legacy (`/gastos` is slated to redirect to `/financeiro/gastos`).
-- **`api/`** — `ai/student-insights`, `admin/create-user`, `admin/update-user-perms`, `send-mail`, `cron/dunning-reminders`, `cron/monthly-previa`.
+- **`api/`** — `ai/student-insights`, `admin/{create-user,update-user-perms}`, `billing/{subscribe,cancel,status}`, `webhooks/asaas`, `send-mail`, and `cron/{dunning-reminders,monthly-previa,expire-subscriptions,subscription-dunning,reconcile-subscriptions}`.
 
-API routes use `createRouteHandlerClient`/server clients (not the browser singleton), re-check tenant + permission via RPC, and return JSON. Cron routes require `Authorization: Bearer ${CRON_SECRET}` and use the service-role key to scan all tenants server-to-server. Crons are scheduled in `vercel.json` (`dunning-reminders` daily 12:00, `monthly-previa` 06:13 on the 1st).
+API routes use `createRouteHandlerClient`/server clients (not the browser singleton), re-check tenant + permission via RPC, and return JSON. Cron routes require `Authorization: Bearer ${CRON_SECRET}` and use the service-role key to scan all tenants server-to-server. Crons are scheduled in `vercel.json` — the authoritative list/schedules live in `docs/ARCHITECTURE.md#crons-verceljson` (5 crons; note `monthly-previa` runs **daily** at 06:13, idempotent — not monthly).
 
 ## Conventions
 
 - Components are `.jsx` (`src/components/*`: `AppShell`, `Sidebar`, `Guard`, `Modal`, `Kpi`, etc.); libs and API routes are mostly `.ts`. Match the file type already in use for the area you touch.
-- Money is BRL; dates are handled as `YYYY-MM-DD` strings with São Paulo timezone helpers (`tzToday`, `monthStartOf`, `dueDateFor` in `gateways/helpers.ts`). Note: month-criterion for expenses (`due_date` vs `competence_month`) is still being unified — check `README_ARQUITETURA.md` §6 before assuming.
+- Money is BRL; dates are handled as `YYYY-MM-DD` strings with São Paulo timezone helpers (`tzToday`, `monthStartOf`, `dueDateFor` in `gateways/helpers.ts`). Note: month-criterion for expenses (`due_date` vs `competence_month`) is still being unified — check `docs/TECH_DEBT.md` before assuming.
 - AI insights (`src/lib/ai/anthropic.ts`) default to `claude-haiku-4-5`, expect strict JSON output, and are cached in `student_ai_insights` keyed by a SHA-256 hash of the input payload (`force_refresh` bypasses cache).
 
 ## Database
@@ -109,6 +109,13 @@ Vitest with mocked Supabase. Gateway tests live in `src/lib/gateways/__tests__/`
 
 ## Further reading (repo docs)
 
-- `README.md` — setup, auth/onboarding, photo storage, troubleshooting
-- `README_ARQUITETURA.md` — layered architecture, routes, security rules, open items
-- `README_INTEGRACOES.md`, `README_AUDIT_GASTOS.md`, `README_SUPABASE_AUDIT.md`, `README_FOTOS_ALUNOS.md`, `README_UI_PLAN.md` — deeper dives per area
+**Developer documentation hub: `docs/` — start at `docs/README.md`.**
+
+- `docs/ARCHITECTURE.md` — layers, data flow, routes, modules, session (supersedes the old `README_ARQUITETURA.md`, now a redirect stub)
+- `docs/SECURITY.md` — multi-tenant RLS model, roles, teacher-scoping, owner titularity, SECURITY DEFINER / row_security footguns
+- `docs/BEST_PRACTICES.md` — non-negotiables, layering, testing + the Supabase mock, the auth-lock rule, validation process, commit/migration discipline
+- `docs/DEVELOPMENT.md` — setup, env vars, commands, testing, deploy, troubleshooting
+- `docs/DATABASE.md` — migrations workflow, RPC catalog, verify scripts, crons, tables
+- `docs/TECH_DEBT.md` — deliberately deferred items
+- `README.md` — landing page / quick start
+- `README_INTEGRACOES.md`, `README_AUDIT_GASTOS.md`, `README_SUPABASE_AUDIT.md`, `README_FOTOS_ALUNOS.md`, `README_UI_PLAN.md` — historical per-area deep dives
