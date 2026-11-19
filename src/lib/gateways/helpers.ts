@@ -164,6 +164,17 @@ export function tzToday(tz = "America/Sao_Paulo"): string {
   return `${Y}-${M}-${D}`;
 }
 
+// Dia da semana (0=dom … 6=sáb) de um instante, no fuso informado (padrão SP).
+// Use no lugar de getUTCDay() para horários de aula: 21h em Brasília já é o dia
+// seguinte em UTC (auditoria A4). Retorna null se a data for inválida.
+const WEEKDAY_BY_SHORT: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+export function weekdayInTz(input: string | number | Date, tz = "America/Sao_Paulo"): number | null {
+  const d = new Date(input);
+  if (isNaN(d.getTime())) return null;
+  const short = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(d);
+  return WEEKDAY_BY_SHORT[short] ?? null;
+}
+
 // +N dias em "YYYY-MM-DD"
 export function addDaysISO(ymd: string, n = 0): string {
   const d = new Date(`${String(ymd).slice(0, 10)}T00:00:00Z`);

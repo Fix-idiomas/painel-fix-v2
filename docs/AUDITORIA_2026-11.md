@@ -130,10 +130,12 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 - **[confirmado]** com Node (`TZ=America/Sao_Paulo`): fevereiro vai até 03/03, março
   corta no dia 28, abril inclui 1 e 2 de maio e dezembro perde o dia 31.
 
-### A4. Aulas a partir das 21h são apagadas pelo prune — ⬜
+### A4. Aulas a partir das 21h são apagadas pelo prune — ✅
 - **Onde:** [`turmaGateway.pruneSessionsNotInRules`](../src/lib/gateways/turmaGateway.ts#L505).
 - **Problema:** usa `getUTCDay()` num horário local. Aulas às 21h ou depois caem no dia
   seguinte em UTC e são apagadas como "fora da regra". **[confirmado]** com Node.
+- **Feito (2026-11-19):** o prune usa `weekdayInTz` (dia da semana em SP). Nenhuma turma tinha
+  aula às 21h+ em produção, então nenhuma aula foi perdida.
 
 ### A5. `Guard.jsx` chama hooks depois de um `return`, e o lint ignora `.js` e `.jsx` — 🔧
 - **Feito:** os hooks do `Guard` vieram para o topo (o lint nos JSX agora passa).

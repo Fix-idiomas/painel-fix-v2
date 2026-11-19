@@ -339,3 +339,44 @@ describe("turmaGateway.listSessionsWithAttendance (sucesso)", () => {
     expect(mock._calls.some((c) => c.table === "attendance")).toBe(false);
   });
 });
+
+describe("turmaGateway.pruneSessionsNotInRules", () => {
+  // A4: o dia da semana é o de SP. Quarta 18/11/2026 às 21:30 em SP é
+  // 00:30 UTC de quinta — com getUTCDay() a aula era apagada como "fora da regra".
+  it("não apaga aula de 21h+ que está no dia certo em SP; apaga a de dia errado", async () => {
+    mock._tableResults.turmas = {
+      data: { id: "t1", meeting_rules: [{ weekday: 3, time: "21:30" }] },
+      error: null,
+    };
+    mock._tableResults.sessions = [
+      {
+        data: [
+          { id: "noite-quarta", turma_id: "t1", date: "2026-11-19T00:30:00.000Z" },
+          { id: "manha-quinta", turma_id: "t1", date: "2026-11-19T13:00:00.000Z" },
+        ],
+        error: null,
+      },
+      { data: null, error: null }, // delete
+    ];
+    mock._tableResults.attendance = { data: [], error: null };
+
+    const n = await turmaGateway.pruneSessionsNotInRules({
+      turmaId: "t1",
+      startDate: "2026-11-18",
+      endDate: "2026-11-20",
+    });
+    expect(n).toBe(1);
+    const del = mock._calls.find((c) => c.table === "sessions" && c.method === "in" && Array.isArray(c.args[1]) && c.args[0] === "id" && mock._calls.indexOf(c) > mock._calls.findIndex((x) => x.method === "delete"));
+    expect(del!.args[1]).toEqual(["manha-quinta"]);
+  });
+
+  it("não apaga sessão com chamada registrada", async () => {
+    mock._tableResults.turmas = { data: { id: "t1", meeting_rules: [{ weekday: 1 }] }, error: null };
+    mock._tableResults.sessions = [
+      { data: [{ id: "s1", turma_id: "t1", date: "2026-11-19T13:00:00.000Z" }], error: null },
+    ];
+    mock._tableResults.attendance = { data: [{ session_id: "s1" }], error: null };
+    const n = await turmaGateway.pruneSessionsNotInRules({ turmaId: "t1", startDate: "2026-11-18", endDate: "2026-11-20" });
+    expect(n).toBe(0);
+  });
+});
