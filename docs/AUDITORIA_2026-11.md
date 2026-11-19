@@ -259,3 +259,8 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
   produção. Preview atualizado com lotes 1+2.
 - **2026-11-19** — lotes 1 e 2 em produção (PR #5, https://fixdash.com.br). A6 decidido e
   corrigido: a Prévia deixa de recriar mês cancelado; aluno do meio do mês segue entrando.
+- **2026-11-19** — **A10 (novo, relatado pelo usuário):** "Registrar" aula no Dashboard dava
+  "Algum campo foi preenchido em um formato inválido". O id da turma era extraído com
+  `split("-")[0]`, que corta o UUID no primeiro hífen. Mesmo erro ao clicar numa aula
+  prevista na Agenda (modal abria sem a turma certa). Corrigido: eventos carregam `turmaId`;
+  aula já registrada mostra mensagem clara. ✅

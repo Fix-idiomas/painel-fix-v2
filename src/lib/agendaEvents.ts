@@ -9,6 +9,7 @@ const COLOR_PALETTE = [
 export interface AgendaEvent {
   id: string;
   kind: "rule" | "session";
+  turmaId: string;
   day: number;
   start: string;
   end: string;
@@ -85,6 +86,7 @@ export function buildEventsFromRules(
       events.push({
         id: `rule-${t.id}-${r.weekday}-${time}`,
         kind: "rule",
+        turmaId: t.id,
         day: col,
         start: time,
         end: endStr,
@@ -154,6 +156,7 @@ export function buildEventsFromSessions(
     events.push({
       id: `session-${s.id}`,
       kind: "session",
+      turmaId: s.turma_id,
       day: diffDays,
       start,
       end: endStr,

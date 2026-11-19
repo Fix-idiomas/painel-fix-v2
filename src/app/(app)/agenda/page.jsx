@@ -168,9 +168,9 @@ export default function AgendaPage() {
       return;
     }
     // rule event → abrir modal de nova aula com prefill
-    const turmaId = String(ev.id || "")
-      .replace(/^rule-/, "")
-      .split("-")[0];
+    // turmaId explícito no evento: antes cortava o id no primeiro hífen, o que
+    // truncava o UUID da turma (o modal abria sem a turma certa selecionada).
+    const turmaId = ev.turmaId;
     setNewPrefill({
       turma_id: turmaId,
       datetime: localDateTimeForGridSlot(weekStart, ev.day, ev.start),
