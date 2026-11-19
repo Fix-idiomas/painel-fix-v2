@@ -10,6 +10,10 @@ export const MAX_BODY_CHARS = 100_000;
 
 const EMAIL_RE = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;
 
+export function isValidEmail(s: string | null | undefined): boolean {
+  return EMAIL_RE.test(String(s ?? "").trim());
+}
+
 // Tipo "achatado" (campos opcionais) — narrowing de união discriminada não é
 // confiável neste projeto (tsconfig strict:false). Mesmo padrão de AsaasResult.
 export type MailCheck = {

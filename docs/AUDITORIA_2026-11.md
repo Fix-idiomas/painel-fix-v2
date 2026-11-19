@@ -163,7 +163,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
     uma duplicata derruba o lote inteiro.
   - O tipo de retorno varia: objeto ou array. **[código]**
 
-### A7. O cron `dunning-reminders` cobra todo dia, para sempre — ⬜
+### A7. O cron `dunning-reminders` cobra todo dia, para sempre — ✅ código · ⏸️ migration a aplicar
 - **Onde:** [`cron/dunning-reminders`](../src/app/api/cron/dunning-reminders/route.ts).
 - **Problema:**
   - Não consulta `finance_reminders_log`, então reenvia o mesmo lembrete diariamente.
@@ -171,6 +171,13 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
   - Corta em 1000 linhas (padrão do PostgREST).
   - Cobra alunos de escolas que já cancelaram a assinatura.
   - Compara o secret sem tempo constante. **[código]**
+- **Feito (2026-11-19):** no máximo 3 lembretes automáticos por mensalidade, a cada 7
+  dias (`src/lib/reminderPolicy.ts`), com histórico em `finance_reminders_log`; só
+  escolas com acesso pleno; e-mail inválido ignorado; texto sem "mês atual"; paginação;
+  "hoje" em SP; nomes escapados; secret em tempo constante.
+- **Achado extra:** o lembrete manual da tela nunca gravava o histórico (status `error`
+  fora do check, `sent_at` nulo, `tenant_id` enviado pelo frontend). Corrigido; exige a
+  migration `20261119_finance_reminders_log_tenant_default.sql` (DEFAULT no `tenant_id`).
 
 ### A8. Os e-mails de cobrança saem como "Fix Idiomas" para todas as escolas — ⬜
 - **Onde:** [`SessionContext.jsx`](../src/contexts/SessionContext.jsx) (o `tenantName`

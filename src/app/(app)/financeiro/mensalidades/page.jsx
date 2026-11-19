@@ -692,8 +692,11 @@ export default function MensalidadesPage() {
           fail++;
         }
         try {
-          await supabase.from("finance_reminders_log").insert({
-            tenant_id: session?.tenant?.id ?? session?.tenantId ?? null,
+          // tenant_id: preenchido pelo banco (DEFAULT current_tenant_id()) — nunca
+          // enviar do frontend. Status só aceita 'sent' | 'failed'; sent_at é
+          // NOT NULL (momento da tentativa). Antes nada era gravado (auditoria A7).
+          // Este histórico também adia o próximo lembrete automático do cron.
+          const { error: logErr } = await supabase.from("finance_reminders_log").insert({
             payment_id: r.id ?? null,
             student_id: r.student_id ?? null,
             payer_id: r.payer_id ?? null,
@@ -701,11 +704,12 @@ export default function MensalidadesPage() {
             subject: payload.subject ?? null,
             provider: "mailgun",
             provider_id: providerId,
-            status: res.ok ? "sent" : "error",
+            status: res.ok ? "sent" : "failed",
             error_text: errorText,
             payload,
-            sent_at: res.ok ? new Date().toISOString() : null,
+            sent_at: new Date().toISOString(),
           });
+          if (logErr) console.warn("[lembretes] falha ao registrar histórico", logErr.message);
         } catch {
           /* log opcional */
         }
