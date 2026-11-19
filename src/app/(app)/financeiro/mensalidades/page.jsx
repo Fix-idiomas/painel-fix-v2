@@ -1,6 +1,7 @@
 // src/app/(app)/financeiro/mensalidades/page.jsx
 "use client";
 
+import { todaySP, currentMonthSP } from "@/lib/tz";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
@@ -73,7 +74,7 @@ function reminderStatus(due, status) {
 }
 
 function statusChip(row) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todaySP();
   if (row.status === "paid")
     return { cls: "p-chip-success", icon: CheckCircle2, label: "Pago" };
   if (row.status === "canceled")
@@ -268,7 +269,7 @@ export default function MensalidadesPage() {
   }, [ready]);
 
   // Estado
-  const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
+  const [ym, setYm] = useState(() => currentMonthSP());
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
   const [rows, setRows] = useState([]);
@@ -724,7 +725,7 @@ export default function MensalidadesPage() {
   }
 
   // Filtragem cliente
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todaySP();
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase();
     return rows.filter((r) => {

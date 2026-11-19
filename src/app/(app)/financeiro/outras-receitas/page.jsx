@@ -1,5 +1,6 @@
 "use client";
 
+import { todaySP } from "@/lib/tz";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { financeGateway } from "@/lib/financeGateway";
@@ -115,7 +116,7 @@ function exportCSV(rows, ym, status, costCenter) {
 }
 
 function statusBadge(row) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todaySP();
   if (row.status === "paid") return { cls: "p-chip-success", label: "Pago" };
   if (row.status === "canceled") return { cls: "p-chip-neutral", label: "Cancelado" };
   if (

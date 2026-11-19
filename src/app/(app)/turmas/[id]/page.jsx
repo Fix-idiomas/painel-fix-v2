@@ -1,5 +1,6 @@
 "use client";
 
+import { currentMonthSP } from "@/lib/tz";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -89,7 +90,7 @@ const formatScheduleLine = (rule) => {
 };
 
 const norm = (v) => (v === undefined || v === null ? "" : String(v));
-const ymCurrent = new Date().toISOString().slice(0, 7);
+const ymCurrent = currentMonthSP();
 
 // ─── Página ──────────────────────────────────────────────────────
 export default function TurmaDetailPage() {

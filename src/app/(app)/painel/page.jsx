@@ -1,5 +1,6 @@
 "use client";
 
+import { todaySP, currentMonthSP } from "@/lib/tz";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSession } from "@/contexts/SessionContext";
@@ -56,7 +57,7 @@ function previousYm(ym) {
 }
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return todaySP();
 }
 
 function percentDelta(curr, prev) {
@@ -205,7 +206,7 @@ export default function PainelPage() {
   const canReadFinance = isAdmin || !!perms?.finance?.read;
   const canReadRegistry = isAdmin || !!perms?.registry?.read;
 
-  const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
+  const [ym, setYm] = useState(() => currentMonthSP());
   const [showValues, setShowValues] = useState(true);
   const [openMail, setOpenMail] = useState(false);
   const [registering, setRegistering] = useState(null);

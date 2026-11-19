@@ -1,3 +1,4 @@
+import { todaySP } from "@/lib/tz";
 import { supabase } from "../supabaseClient";
 import { mapErr, monthStartOf, nextMonthStartOf, dueDateFor } from "./helpers";
 import type { PaymentStatus } from "@/types";
@@ -272,7 +273,7 @@ export const paymentGateway = {
           : 0,
     }));
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todaySP();
     const kpis: PaymentKpis = {
       receita_a_receber: rows
         .filter((r) => r.status === "pending")

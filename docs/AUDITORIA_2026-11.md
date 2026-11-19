@@ -209,7 +209,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 
 | # | Problema | Onde | Status |
 |---|----------|------|--------|
-| M1 | "Hoje" e "mês atual" em UTC em cerca de 15 lugares (o CLAUDE.md manda usar `tzToday`). Depois das 21h de Brasília, os atrasos contam um dia antes e o seletor de mês pula. | painel, mensalidades, gastos, financeiro, outras-receitas, turmas, professores, `financeKpisGateway`, crons | ⬜ |
+| M1 | "Hoje" e "mês atual" em UTC em cerca de 15 lugares (o CLAUDE.md manda usar `tzToday`). Depois das 21h de Brasília, os atrasos contam um dia antes e o seletor de mês pula. | painel, mensalidades, gastos, financeiro, outras-receitas, turmas, professores, `financeKpisGateway`, crons | ✅ `src/lib/tz.ts` (`todaySP`/`currentMonthSP`) em páginas, gateways, `subscribe` e `monthly-previa` |
 | M2 | O KPI de despesas soma os lançamentos cancelados (a receita os exclui). | [`financeKpisGateway.ts:46`](../src/lib/gateways/financeKpisGateway.ts#L46) | ✅ canceladas fora do total e do detalhamento por centro de custo |
 | M3 | O repasse do professor usa dois critérios: o total por `teacher_id_snapshot`, a lista por `turmas.teacher_id`. | [`teacherGateway.ts`](../src/lib/gateways/teacherGateway.ts) | ⬜ |
 | M4 | O `createOtherRevenueTemplate` apaga colunas (como `end_month`) quando dá erro, e uma receita "até o mês X" vira indefinida. | [`otherRevenueGateway.ts:60`](../src/lib/gateways/otherRevenueGateway.ts#L60) | ⬜ |

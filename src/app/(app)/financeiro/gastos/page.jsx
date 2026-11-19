@@ -1,5 +1,6 @@
 "use client";
 
+import { todaySP, currentMonthSP } from "@/lib/tz";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSession } from "@/contexts/SessionContext";
@@ -53,7 +54,7 @@ const ymLabel = (ym) => {
 };
 
 function statusChip(row) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todaySP();
   if (row.status === "paid")
     return { cls: "p-chip-success", icon: CheckCircle2, label: "Pago" };
   if (row.status === "canceled")
@@ -125,7 +126,7 @@ export default function GastosPage() {
   }, [ready, sess?.user?.id]);
 
   // Estado
-  const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
+  const [ym, setYm] = useState(() => currentMonthSP());
   const [statusFilter, setStatusFilter] = useState("all");
   const [costCenter, setCostCenter] = useState("all");
   const [q, setQ] = useState("");
