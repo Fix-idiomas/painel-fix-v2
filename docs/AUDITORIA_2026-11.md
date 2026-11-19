@@ -144,12 +144,15 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
   (logout). O `npm run lint` não analisa nenhum `.js` ou `.jsx`, que é quase toda a UI.
   **[confirmado]** rodando o ESLint nos JSX.
 
-### A6. A Prévia manual e o cron geram mensalidades com regras diferentes — 🔧
+### A6. A Prévia manual e o cron geram mensalidades com regras diferentes — ✅
 - **Feito:** vencimento limitado a 28 (`dueDateFor`); duplicata em lote tratada linha a
   linha (o `code` cru é lido antes do `mapErr`); retorno sempre
   `{ inserted, skipped_existing, created_payers }`; testes cobrindo esses casos.
-- **Falta (decisão):** (a) a Prévia manual deve recriar mês cancelado? Hoje sim, o cron
-  não. (b) Aplicar à Prévia manual a regra do cron de "aluno cadastrado no meio do mês"?
+- **Decidido (2026-11-19):** (a) a Prévia **não** recria mês cancelado — conta como
+  "já existe", igual ao cron; para cobrar de novo usa-se "Reabrir" na mensalidade (já
+  existia). (b) Aluno cadastrado no meio do mês **entra** na Prévia manual de propósito:
+  ela cobre justamente quem o cron do dia 01 não alcança. Diferença intencional, documentada
+  no código.
 - **Onde:** [`paymentGateway.generateMonth`](../src/lib/gateways/paymentGateway.ts#L71) e
   [`server/monthlyGeneration.ts`](../src/lib/server/monthlyGeneration.ts).
 - **Problema:**
@@ -245,3 +248,5 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 - **2026-11-19** — migration `20261119_fix_billing_grace_and_dunning.sql` testada com
   rollback (pagante 2d → readonly, 8d → blocked; dunning encontra o owner) e aplicada em
   produção. Preview atualizado com lotes 1+2.
+- **2026-11-19** — lotes 1 e 2 em produção (PR #5, https://fixdash.com.br). A6 decidido e
+  corrigido: a Prévia deixa de recriar mês cancelado; aluno do meio do mês segue entrando.
