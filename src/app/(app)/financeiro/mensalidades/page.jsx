@@ -274,6 +274,7 @@ export default function MensalidadesPage() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null); // feedback de sucesso (ex.: "N mensalidades geradas")
   const [revKpis, setRevKpis] = useState({
     receita_a_receber: 0,
     receita_recebida: 0,
@@ -472,22 +473,10 @@ export default function MensalidadesPage() {
   async function openPreview() {
     if (!canWriteDB) return;
     try {
-      const rawPrev = (await financeGateway.previewGenerateMonth({ ym })) || [];
-      // remove os que já existem
-      const existingKeys = new Set(
-        rows
-          .map((r) => {
-            const sid = r.student_id ?? null;
-            const due = r.due_date ? String(r.due_date).slice(0, 10) : null;
-            return sid && due ? `${sid}::${due}` : null;
-          })
-          .filter(Boolean)
-      );
-      const prev = rawPrev.filter((p) => {
-        const sid = p.student_id ?? null;
-        const due = p.due_date ? String(p.due_date).slice(0, 10) : null;
-        return !(sid && due && existingKeys.has(`${sid}::${due}`));
-      });
+      // A Prévia já vem filtrada do banco (alunos ativos SEM lançamento no mês de
+      // competência) — mesma regra do Gerar. Não filtrar pelas linhas da tela:
+      // elas dependem do filtro ativo e antes eram truncadas em 50 (auditoria A1).
+      const prev = (await financeGateway.previewGenerateMonth({ ym })) || [];
 
       // enriquecer com nomes
       const { supabase } = await import("@/lib/supabaseClient");
@@ -543,7 +532,7 @@ export default function MensalidadesPage() {
           payer_name: pid ? payerNameById[pid] || "—" : "—",
         };
       });
-      setPreviewModal({ items: enriched, generating: false });
+      setPreviewModal({ items: enriched, generating: false, error: null });
     } catch (e) {
       setError(e?.message || String(e));
     }
@@ -552,13 +541,20 @@ export default function MensalidadesPage() {
   async function confirmGenerate() {
     if (!previewModal || !canWriteDB) return;
     try {
-      setPreviewModal((p) => ({ ...p, generating: true }));
-      await financeGateway.generateMonth({ ym });
+      setPreviewModal((p) => ({ ...p, generating: true, error: null }));
+      const res = await financeGateway.generateMonth({ ym });
+      const inserted = Number(res?.inserted || 0);
       setPreviewModal(null);
       await load();
+      setNotice(
+        inserted > 0
+          ? `${inserted} mensalidade${inserted === 1 ? "" : "s"} gerada${inserted === 1 ? "" : "s"} para ${ymLabel(ym)}.`
+          : `Nenhuma mensalidade nova: todas já existiam para ${ymLabel(ym)}.`
+      );
     } catch (e) {
-      setError(e?.message || String(e));
-      setPreviewModal((p) => p && { ...p, generating: false });
+      // Mostra o erro DENTRO do modal (antes ia para o banner atrás do overlay e
+      // o usuário via só o botão "voltar ao normal", como se nada acontecesse).
+      setPreviewModal((p) => p && { ...p, generating: false, error: e?.message || String(e) });
     }
   }
 
@@ -969,6 +965,22 @@ export default function MensalidadesPage() {
         </div>
       )}
 
+      {notice && (
+        <div
+          role="status"
+          className="flex items-start justify-between gap-3 rounded-lg border border-[var(--p-success)]/30 bg-[var(--p-success-50)] px-4 py-3 text-sm text-[var(--p-success)]"
+        >
+          <span>{notice}</span>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            className="text-xs underline-offset-2 hover:underline"
+          >
+            Fechar
+          </button>
+        </div>
+      )}
+
       {/* Lista */}
       <div className="p-card overflow-hidden">
         {loading ? (
@@ -1142,6 +1154,7 @@ export default function MensalidadesPage() {
           maxWidth="lg"
         >
           <div className="flex flex-col gap-4 px-5 py-5">
+            <FormError message={previewModal.error} />
             {previewModal.items.length === 0 ? (
               <p className="text-sm text-[var(--p-text-muted)]">
                 Nada a gerar — todas as mensalidades já existem para este mês.

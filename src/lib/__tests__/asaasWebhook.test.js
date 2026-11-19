@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { addMonthsISO, normalizeRef, mapBillingType, transition } from "../asaasWebhook";
+import {
+  addMonthsISO,
+  normalizeRef,
+  mapBillingType,
+  transition,
+  mappingStrategy,
+  isStalePaymentEvent,
+} from "../asaasWebhook";
 import { verifyWebhook } from "../asaas";
 
 describe("addMonthsISO", () => {
@@ -65,6 +72,44 @@ describe("transition", () => {
   });
   it("evento desconhecido → null (ignora)", () => {
     expect(transition("ALGO_NOVO", {})).toBeNull();
+  });
+});
+
+// C4: evento com id de assinatura NUNCA cai no fallback por customer.
+describe("mappingStrategy", () => {
+  it("com assinatura → só por assinatura (mesmo havendo customer)", () => {
+    expect(mappingStrategy("sub_orfa", "cus_1")).toBe("subscription");
+  });
+  it("sem assinatura → por customer", () => {
+    expect(mappingStrategy(null, "cus_1")).toBe("customer");
+  });
+  it("sem nada → none", () => {
+    expect(mappingStrategy(null, null)).toBe("none");
+  });
+});
+
+// M10: cobranças de período anterior não mexem no estado.
+describe("isStalePaymentEvent", () => {
+  const cur = "2026-07-25"; // período vigente começou em 25/07
+
+  it("RECEIVED tardio da cobrança de junho é stale", () => {
+    expect(isStalePaymentEvent("PAYMENT_RECEIVED", { dueDate: "2026-06-25" }, cur)).toBe(true);
+  });
+  it("OVERDUE de cobrança antiga é stale", () => {
+    expect(isStalePaymentEvent("PAYMENT_OVERDUE", { dueDate: "2026-06-25" }, cur)).toBe(true);
+  });
+  it("cobrança do período vigente ou futura não é stale", () => {
+    expect(isStalePaymentEvent("PAYMENT_CONFIRMED", { dueDate: "2026-07-25" }, cur)).toBe(false);
+    expect(isStalePaymentEvent("PAYMENT_OVERDUE", { dueDate: "2026-08-25" }, cur)).toBe(false);
+  });
+  it("estorno/chargeback de cobrança antiga continua valendo", () => {
+    expect(isStalePaymentEvent("PAYMENT_REFUNDED", { dueDate: "2026-06-25" }, cur)).toBe(false);
+    expect(isStalePaymentEvent("PAYMENT_CHARGEBACK_REQUESTED", { dueDate: "2026-06-25" }, cur)).toBe(false);
+  });
+  it("sem período vigente (1ª cobrança) ou sem dueDate → não é stale", () => {
+    expect(isStalePaymentEvent("PAYMENT_CONFIRMED", { dueDate: "2026-06-25" }, null)).toBe(false);
+    expect(isStalePaymentEvent("PAYMENT_CONFIRMED", {}, cur)).toBe(false);
+    expect(isStalePaymentEvent("PAYMENT_CONFIRMED", null, cur)).toBe(false);
   });
 });
 

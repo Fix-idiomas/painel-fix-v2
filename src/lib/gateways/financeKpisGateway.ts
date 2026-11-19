@@ -1,5 +1,5 @@
 import { supabase } from "../supabaseClient";
-import { mapErr, monthStartOf, tzToday } from "./helpers";
+import { mapErr, monthStartOf, nextMonthStartOf, tzToday } from "./helpers";
 import { paymentGateway } from "./paymentGateway";
 import { otherRevenueGateway } from "./otherRevenueGateway";
 import { teacherGateway } from "./teacherGateway";
@@ -8,11 +8,8 @@ import type { MonthlyFinanceKpis, CombinedRevenueKpis, FinancialSummary } from "
 export const financeKpisGateway = {
   async getMonthlyFinanceKpis({ ym, cost_center = null }: { ym: string; tenant_id?: string; cost_center?: string | null }): Promise<MonthlyFinanceKpis> {
     const mStart = monthStartOf(ym);
-    const monthEnd = (() => {
-      const d = new Date(`${ym}-01T00:00:00`);
-      d.setMonth(d.getMonth() + 1);
-      return d.toISOString().slice(0, 10);
-    })();
+    // Por string (imune a fuso) — antes dependia do fuso do navegador (A3).
+    const monthEnd = nextMonthStartOf(ym);
     const today = tzToday("America/Sao_Paulo");
 
     const qPay = supabase
@@ -42,8 +39,10 @@ export const financeKpisGateway = {
     const { data: expRows, error: e2 } = await q;
     if (e2) mapErr("getMonthlyFinanceKpis.expenses", e2);
 
+    // Canceladas não são despesa — mesmo critério da receita (total_billed). M2.
+    const expActive = (expRows || []).filter((r) => r.status !== "canceled");
     const expense = {
-      total: sum(expRows || []),
+      total: sum(expActive),
       paid: sum((expRows || []).filter(r => r.status === "paid")),
       pending: sum((expRows || []).filter(r => r.status === "pending")),
       overdue: sum((expRows || []).filter(r => r.status === "pending" && r.due_date < today)),
@@ -52,7 +51,7 @@ export const financeKpisGateway = {
     const net = revenue.paid - expense.paid;
 
     const by_cost_center_map: Record<string, { total: number; paid: number; pending: number; overdue: number }> = {};
-    for (const r of (expRows || [])) {
+    for (const r of expActive) {
       const cc = r.cost_center || "N/A";
       if (!by_cost_center_map[cc]) {
         by_cost_center_map[cc] = { total: 0, paid: 0, pending: 0, overdue: 0 };

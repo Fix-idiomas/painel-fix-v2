@@ -9,7 +9,13 @@ const { paymentGateway } = await import("../paymentGateway");
 beforeEach(() => {
   vi.clearAllMocks();
   mock._result = { data: null, error: null };
+  mock._tableResults = {};
+  mock._consumed = {};
+  mock._calls = [];
 });
+
+const calls = (table: string, method: string) =>
+  mock._calls.filter((c) => c.table === table && c.method === method);
 
 describe("paymentGateway.previewGenerateMonth", () => {
   it("throws when ym is missing", async () => {
@@ -17,23 +23,136 @@ describe("paymentGateway.previewGenerateMonth", () => {
   });
 
   it("filters students with zero value", async () => {
-    mock._result = {
+    mock._tableResults.students = {
       data: [
         { id: "1", name: "João", monthly_value: 500, due_day: 10, payer_id: "p1" },
         { id: "2", name: "Maria", monthly_value: 0, due_day: 5, payer_id: null },
       ],
       error: null,
     };
+    mock._tableResults.payments = { data: [], error: null };
     const result = await paymentGateway.previewGenerateMonth({ ym: "2024-03" });
     expect(result).toHaveLength(1);
     expect(result[0].student_id).toBe("1");
     expect(result[0].due_date).toBe("2024-03-10");
+  });
+
+  // A1: a Prévia usa a MESMA regra do Gerar (banco, por competence_month).
+  it("exclui alunos que já têm lançamento não cancelado no mês", async () => {
+    mock._tableResults.students = {
+      data: [
+        { id: "1", name: "João", monthly_value: 500, due_day: 10 },
+        { id: "2", name: "Maria", monthly_value: 300, due_day: 5 },
+      ],
+      error: null,
+    };
+    mock._tableResults.payments = { data: [{ student_id: "1" }], error: null };
+    const result = await paymentGateway.previewGenerateMonth({ ym: "2026-11" });
+    expect(result.map((r) => r.student_id)).toEqual(["2"]);
+    expect(calls("payments", "eq")[0].args).toEqual(["competence_month", "2026-11-01"]);
+    expect(calls("payments", "neq")[0].args).toEqual(["status", "canceled"]);
+  });
+
+  it("limita o dia de vencimento a 28 (não transborda de mês)", async () => {
+    mock._tableResults.students = {
+      data: [{ id: "1", name: "João", monthly_value: 500, due_day: 31 }],
+      error: null,
+    };
+    mock._tableResults.payments = { data: [], error: null };
+    const [p] = await paymentGateway.previewGenerateMonth({ ym: "2026-02" });
+    expect(p.due_date).toBe("2026-02-28");
+  });
+});
+
+describe("paymentGateway.generateMonth", () => {
+  const students = {
+    data: [
+      { id: "1", name: "João", monthly_value: 500, due_day: 10, payer_id: "p1" },
+      { id: "2", name: "Maria", monthly_value: 300, due_day: 5, payer_id: "p2" },
+    ],
+    error: null,
+  };
+  const payers = { data: [{ id: "p1", name: "Pai João" }, { id: "p2", name: "Mãe Maria" }], error: null };
+
+  it("retorna sempre { inserted, skipped_existing, created_payers }", async () => {
+    mock._tableResults.students = students;
+    mock._tableResults.payers = payers;
+    mock._tableResults.payments = [
+      { data: [{ student_id: "1" }], error: null }, // existentes
+      { data: null, error: null }, // insert
+    ];
+    const res = await paymentGateway.generateMonth({ ym: "2026-11" });
+    expect(res).toEqual({ inserted: 1, skipped_existing: 1, created_payers: 0 });
+    const inserted = calls("payments", "insert")[0].args[0] as Array<Record<string, unknown>>;
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0]).toMatchObject({ student_id: "2", due_date: "2026-11-05", competence_month: "2026-11-01" });
+  });
+
+  it("nada a gerar → inserted 0 sem chamar insert", async () => {
+    mock._tableResults.students = students;
+    mock._tableResults.payments = { data: [{ student_id: "1" }, { student_id: "2" }], error: null };
+    const res = await paymentGateway.generateMonth({ ym: "2026-11" });
+    expect(res).toEqual({ inserted: 0, skipped_existing: 2, created_payers: 0 });
+    expect(calls("payments", "insert")).toHaveLength(0);
+  });
+
+  // A6: antes o mapErr descartava o code e o lote inteiro falhava.
+  it("duplicado em lote → re-tenta linha a linha ignorando os duplicados", async () => {
+    mock._tableResults.students = students;
+    mock._tableResults.payers = payers;
+    mock._tableResults.payments = [
+      { data: [], error: null }, // existentes
+      { data: null, error: { code: "23505", message: "duplicate key" } }, // lote
+      { data: null, error: { code: "23505", message: "duplicate key" } }, // linha 1 (dup)
+      { data: null, error: null }, // linha 2 ok
+    ];
+    const res = await paymentGateway.generateMonth({ ym: "2026-11" });
+    expect(res).toEqual({ inserted: 1, skipped_existing: 1, created_payers: 0 });
+  });
+
+  it("erro que não é duplicado é propagado (não engole)", async () => {
+    mock._tableResults.students = students;
+    mock._tableResults.payers = payers;
+    mock._tableResults.payments = [
+      { data: [], error: null },
+      { data: null, error: { code: "42501", message: "row-level security" } },
+    ];
+    await expect(paymentGateway.generateMonth({ ym: "2026-11" })).rejects.toThrow("permissão");
   });
 });
 
 describe("paymentGateway.listPayments", () => {
   it("throws when ym is missing", async () => {
     await expect(paymentGateway.listPayments({} as never)).rejects.toThrow("obrigatório");
+  });
+
+  // A3: janela por string, independente do fuso.
+  it.each([
+    ["2026-02", "2026-02-01", "2026-03-01"],
+    ["2026-03", "2026-03-01", "2026-04-01"],
+    ["2026-04", "2026-04-01", "2026-05-01"],
+    ["2026-12", "2026-12-01", "2027-01-01"],
+  ])("janela de %s = [%s, %s)", async (ym, start, end) => {
+    mock._result = { data: [], error: null };
+    await paymentGateway.listPayments({ ym });
+    expect(calls("payments", "gte")[0].args).toEqual(["due_date", start]);
+    expect(calls("payments", "lt")[0].args).toEqual(["due_date", end]);
+  });
+
+  // A2: sem pageSize traz o mês inteiro (antes cortava em 50).
+  it("sem pageSize pagina até trazer todas as linhas", async () => {
+    const page1 = Array.from({ length: 1000 }, (_, i) => ({ id: `a${i}`, status: "pending", due_date: "2026-11-10", amount: 1 }));
+    const page2 = [{ id: "b0", status: "paid", due_date: "2026-11-25", amount: 1 }];
+    mock._tableResults.payments = [{ data: page1, error: null }, { data: page2, error: null }];
+    const res = await paymentGateway.listPayments({ ym: "2026-11" });
+    expect(res.rows).toHaveLength(1001);
+    expect(calls("payments", "range").map((c) => c.args)).toEqual([[0, 999], [1000, 1999]]);
+  });
+
+  it("com pageSize respeita a página pedida", async () => {
+    mock._result = { data: [], error: null };
+    await paymentGateway.listPayments({ ym: "2026-11", page: 3, pageSize: 20 });
+    expect(calls("payments", "range")[0].args).toEqual([40, 59]);
   });
 
   it("calculates days_overdue for pending payments", async () => {

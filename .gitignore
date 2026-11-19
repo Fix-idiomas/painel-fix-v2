@@ -42,3 +42,6 @@ next-env.d.ts
 
 # claude code
 .claude/worktrees/
+
+# supabase cli (link local: project-ref, versões)
+supabase/.temp/

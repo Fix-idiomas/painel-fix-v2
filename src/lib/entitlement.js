@@ -39,7 +39,13 @@ export function accessLevel(sub, now = Date.now()) {
   if (sub.status === "trial" && (!sub.trial_end || new Date(sub.trial_end).getTime() >= now)) {
     return "full";
   }
-  const ref = sub.trial_end || sub.current_period_end;
+  // Referência da carência depende do status (espelha tenant_access_level —
+  // migration 20261119). Antes era `trial_end || current_period_end`: como todo
+  // tenant nasce com trial_end, o pagante em atraso usava a data velha do trial e
+  // ia direto para 'blocked' (auditoria C3).
+  const ref = sub.status === "trial"
+    ? sub.trial_end
+    : (sub.current_period_end || sub.trial_end);
   if (ref && new Date(ref).getTime() >= now - GRACE_DAYS * DAY_MS) return "readonly";
   return "blocked";
 }

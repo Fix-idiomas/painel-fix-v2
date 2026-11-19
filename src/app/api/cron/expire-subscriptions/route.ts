@@ -6,13 +6,14 @@
 //
 // Transições (apenas linhas NÃO isentas — billing_exempt = false):
 //   - trial  com trial_end           < now → expired
-//   - active com current_period_end  < now → past_due
+//   - active com current_period_end  < now - EXPIRE_GRACE_DAYS → past_due
 //
 // Proteção: header `Authorization: Bearer ${CRON_SECRET}` (igual aos demais crons).
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import crypto from "node:crypto";
+import { pastDueCutoffIso } from "@/lib/billingSchedule";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -60,16 +61,18 @@ export async function GET(req: NextRequest) {
       .select("id");
     if (e1) throw e1;
 
-    // 2) Assinaturas ativas vencidas sem renovação → past_due
-    // NOTA: linhas com current_period_end NULL são ignoradas (NULL < now → NULL),
-    // o que é intencional. Esse campo só é populado quando há cobrança real
-    // (webhook do PRD-2); até lá, esta transição fica efetivamente inerte.
+    // 2) Assinaturas ativas vencidas sem renovação → past_due, com FOLGA de
+    // EXPIRE_GRACE_DAYS (auditoria C3). Antes usava `< now`: às 03h de Brasília do
+    // próprio dia do vencimento o pagante virava past_due antes de poder pagar.
+    // O webhook PAYMENT_OVERDUE da Asaas é a fonte; este cron só cobre webhook
+    // perdido. Linhas com current_period_end NULL são ignoradas (NULL < x → NULL).
+    const cutoffIso = pastDueCutoffIso(Date.parse(nowIso));
     const { data: pastDue, error: e2 } = await supabase
       .from("subscriptions")
       .update({ status: "past_due" })
       .eq("status", "active")
       .eq("billing_exempt", false)
-      .lt("current_period_end", nowIso)
+      .lt("current_period_end", cutoffIso)
       .select("id");
     if (e2) throw e2;
 

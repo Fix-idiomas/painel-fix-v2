@@ -98,6 +98,24 @@ describe("accessLevel (tri-estado)", () => {
   it("past_due sem datas → blocked", () => {
     expect(accessLevel({ status: "past_due" }, NOW)).toBe("blocked");
   });
+  // C3: pagante em atraso que veio de trial (trial_end antigo continua preenchido)
+  // tem carência contada a partir do período pago, não do trial.
+  it("past_due com trial_end antigo usa current_period_end (não bloqueia direto)", () => {
+    const sub = { status: "past_due", trial_end: longPast, current_period_end: graceRef };
+    expect(accessLevel(sub, NOW)).toBe("readonly");
+  });
+  it("canceled com trial_end antigo e período recente → readonly", () => {
+    const sub = { status: "canceled", trial_end: longPast, current_period_end: graceRef };
+    expect(accessLevel(sub, NOW)).toBe("readonly");
+  });
+  it("trial vencido ignora current_period_end", () => {
+    const sub = { status: "trial", trial_end: longPast, current_period_end: graceRef };
+    expect(accessLevel(sub, NOW)).toBe("blocked");
+  });
+  it("expired sem período cai no trial_end (fallback)", () => {
+    expect(accessLevel({ status: "expired", trial_end: graceRef }, NOW)).toBe("readonly");
+    expect(accessLevel({ status: "expired", trial_end: longPast }, NOW)).toBe("blocked");
+  });
 });
 
 describe("trialDaysLeft", () => {
