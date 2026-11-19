@@ -39,7 +39,24 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 - **Problema:** a rota só envia e-mail. A tela manda `{ user_id, perms }`, a rota exige
   `to` e `subject` e responde 400. Nenhuma rota atualiza permissões. **[código]**
 
-### C3. Pagante bloqueado no dia da renovação — ⬜
+### C3. Pagante bloqueado no dia da renovação — ✅ código · ⏸️ migration a aplicar
+- **Correção:**
+  1. Carência: a referência passa a depender do status (trial → `trial_end`; demais →
+     `current_period_end`), no banco (`tenant_access_level`) e no front
+     ([`entitlement.js`](../src/lib/entitlement.js), com testes).
+  2. O cron `expire-subscriptions` só marca `past_due` **3 dias** depois do fim do
+     período (é a rede de segurança; o webhook `PAYMENT_OVERDUE` é a fonte principal).
+  3. O cron `subscription-dunning` avisa nos dias **1, 3 e 6** (antes, todo dia), com
+     texto neutro (Pix ou cartão), a data do bloqueio e HTML escapado. As regras de datas
+     ficam em [`billingSchedule.ts`](../src/lib/billingSchedule.ts), com testes.
+- **Achado extra:** a RPC `subscription_dunning_targets` buscava o dono por
+  `user_claims.role = 'owner'`, papel que o banco não aceita. Ela **nunca retornava
+  ninguém**, ou seja, o e-mail de assinatura em atraso nunca era enviado. Passa a usar
+  `tenants.owner_user_id`.
+- **Falta:** aplicar
+  [`20261119_fix_billing_grace_and_dunning.sql`](../db/migrations/20261119_fix_billing_grace_and_dunning.sql).
+  Hoje nenhum tenant é pagante (6 isentos e 3 com trial expirado), então aplicar não muda
+  o acesso de ninguém. A ordem entre código e migration não importa.
 - **Onde:** [`cron/expire-subscriptions`](../src/app/api/cron/expire-subscriptions/route.ts),
   [`20260621_entitlement_enforcement.sql:30`](../db/migrations/20260621_entitlement_enforcement.sql#L30),
   [`entitlement.js:42`](../src/lib/entitlement.js#L42),
@@ -53,7 +70,12 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
   3. O dunning fala em "limite ou validade do cartão" também para quem paga com Pix,
      e reenvia todo dia. **[código]**
 
-### C4. O webhook aplica eventos de outras assinaturas ao tenant — ⬜
+### C4. O webhook aplica eventos de outras assinaturas ao tenant — ✅
+- **Correção:** um evento que traz id de assinatura é mapeado **só** por esse id. Se não
+  bater com a assinatura atual (antiga ou órfã), o evento fica registrado mas não tem
+  efeito. O fallback por `customer` só vale quando o evento não traz assinatura
+  (`mappingStrategy`, com testes). Erros de leitura no mapeamento agora são propagados
+  (antes eram ignorados).
 - **Onde:** [`webhooks/asaas/route.ts:158`](../src/app/api/webhooks/asaas/route.ts#L158).
 - **Problema:** quando o id da assinatura não bate, o código cai no fallback por
   `customer`, que é o mesmo do tenant. O reconcile, ou o `subscribe`, cancela uma
@@ -184,7 +206,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 | M7 | `create-user`: tenant escolhido por `owner_user_id` com `limit(1)`; o front envia `tenant_id`; uma falha parcial deixa o login órfão (depois dá 409). | [`admin/create-user`](../src/app/api/admin/create-user/route.ts) | ⬜ |
 | M8 | O `subscribe` sem linha em `subscriptions` cria a assinatura na Asaas sem gravar nada, e o reconcile não a vê. `nextDueDate` em UTC. | [`billing/subscribe`](../src/app/api/billing/subscribe/route.ts) | ⬜ |
 | M9 | Cancelar a assinatura deixa o tenant só com leitura na hora, mesmo com período pago. | [`billing/cancel`](../src/app/api/billing/cancel/route.ts) | ⏸️ decisão de produto |
-| M10 | No cartão, um `PAYMENT_RECEIVED` atrasado pode fazer o `current_period_end` voltar um mês (plausível). | [`asaasWebhook.ts`](../src/lib/asaasWebhook.ts) | ⬜ |
+| M10 | No cartão, um `PAYMENT_RECEIVED` atrasado pode fazer o `current_period_end` voltar um mês (plausível). | [`asaasWebhook.ts`](../src/lib/asaasWebhook.ts) | ✅ `CONFIRMED`/`RECEIVED`/`OVERDUE` de cobrança anterior ao período vigente ficam registrados sem efeito (`isStalePaymentEvent`); estornos continuam valendo |
 | M11 | Paywall: `/accept-invite` e `/reset-password` estão em `(app)` mas fora da allowlist, então um convidado ou um tenant bloqueado cai em `/assinatura`. | [`paywallRoutes.js`](../src/lib/paywallRoutes.js) | ⬜ |
 | M12 | `Guard` com `check` inline refaz a RPC a cada render do layout. | [`Guard.jsx`](../src/components/Guard.jsx) | ⬜ |
 
@@ -194,7 +216,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 |---|----------|--------|
 | B1 | Matcher do middleware: o `\.` dentro da string vira `.`, e o lookahead não tem âncora no fim. | ⬜ |
 | B2 | Algumas rotas devolvem a mensagem crua do Postgres; o `subscribe` usa mensagem genérica. | ⬜ |
-| B3 | O HTML dos e-mails não escapa nomes de aluno, pagador e escola. | ⬜ |
+| B3 | O HTML dos e-mails não escapa nomes de aluno, pagador e escola. | 🔧 escapado no `subscription-dunning`; falta no `dunning-reminders` e em Mensalidades |
 | B4 | O banco aceita `role` ∈ {admin, user}; o CLAUDE.md e o `SessionContext` falam em `member`. | ⬜ |
 | B5 | A RPC `can_registry_read` (em `cadastro/page.jsx`) não aparece em nenhuma migration; a tela tem guard duplo. | ⬜ |
 | B6 | `EmailModal.jsx` é código morto e contém `innerHTML`. | ⬜ |
@@ -217,3 +239,6 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
   A9 revisto: as pendências de aluno inativo **não** são canceladas automaticamente
   (o débito continua; o cancelamento é manual). As migrations do trigger e do backfill
   foram removidas.
+- **2026-11-19** — lote 2 (cobrança): C3 (código e migration ainda não aplicada), C4 e
+  M10 corrigidos; B3 parcial. Achado extra: o dunning de assinatura nunca enviava (RPC
+  procurava `role = 'owner'`). 313 testes passando.

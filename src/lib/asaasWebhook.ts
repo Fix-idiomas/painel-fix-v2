@@ -33,6 +33,43 @@ export function mapBillingType(bt: unknown): string | null {
   return null;
 }
 
+// Como mapear o evento → linha de subscriptions (auditoria C4).
+// - Evento COM id de assinatura → só pela assinatura. Se não bater com a atual do
+//   tenant, o evento é de uma assinatura ANTIGA/ÓRFÃ (cancelada pelo subscribe ou
+//   pelo reconcile) e deve ser IGNORADO — antes caía no fallback por customer (o
+//   mesmo do tenant) e um SUBSCRIPTION_DELETED da órfã cancelava o pagante.
+// - Evento SEM id de assinatura (cobrança avulsa) → fallback por customer.
+export function mappingStrategy(asaasSubId: string | null, asaasCustId: string | null):
+  "subscription" | "customer" | "none" {
+  if (asaasSubId) return "subscription";
+  if (asaasCustId) return "customer";
+  return "none";
+}
+
+const PAYMENT_STATUS_EVENTS = new Set([
+  "PAYMENT_CONFIRMED",
+  "PAYMENT_RECEIVED",
+  "PAYMENT_OVERDUE",
+]);
+
+// Evento de cobrança de um período ANTERIOR ao vigente (auditoria M10)?
+// Ex.: no cartão, o PAYMENT_RECEIVED (liquidação) chega ~30 dias após o
+// CONFIRMED — já depois da confirmação do mês seguinte. Aplicá-lo faria
+// current_period_end "voltar" um mês (e o cron expiraria um pagante); um OVERDUE
+// atrasado de cobrança antiga rebaixaria quem já pagou a atual.
+// Estornos/chargebacks NÃO entram aqui: valem mesmo para cobranças antigas.
+export function isStalePaymentEvent(
+  event: string,
+  payment: Dict | null,
+  currentPeriodStart: string | null | undefined
+): boolean {
+  if (!PAYMENT_STATUS_EVENTS.has(event)) return false;
+  const due = payment?.dueDate ? String(payment.dueDate).slice(0, 10) : null;
+  const cur = currentPeriodStart ? String(currentPeriodStart).slice(0, 10) : null;
+  if (!due || !cur) return false;
+  return due < cur;
+}
+
 // Patch de status a partir do evento Asaas (ou null = ignorar).
 // Transições idempotentes (setam valor absoluto). Omite payment_method quando
 // não vier billingType, para não sobrescrever o valor já gravado.

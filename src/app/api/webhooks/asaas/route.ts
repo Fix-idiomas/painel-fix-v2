@@ -5,8 +5,12 @@
 // - Idempotência: registra subscription_events.asaas_event_id (unique). Como as
 //   transições são idempotentes (setam status), o padrão é check → processa →
 //   registra; uma reentrega rara só reaplica o mesmo status (inócuo).
-// - Mapeia evento → tenant via subscriptions (asaas_subscription_id, fallback
-//   asaas_customer_id). NUNCA confia em tenant vindo do corpo.
+// - Mapeia evento → tenant via subscriptions: por asaas_subscription_id quando o
+//   evento traz assinatura (SEM fallback — evento de assinatura antiga/órfã é
+//   ignorado); por asaas_customer_id só quando não traz. NUNCA confia em tenant
+//   vindo do corpo.
+// - Cobrança de período anterior ao vigente (ex.: RECEIVED tardio do cartão) é
+//   auditada sem efeito, para não "voltar" o período nem rebaixar quem já pagou.
 // - Contas billing_exempt são auditadas mas NÃO rebaixadas.
 // Service role (server-to-server, sem sessão). Sempre 2xx quando o evento foi
 // recebido/registrado, para a Asaas não reenviar em loop.
@@ -14,7 +18,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyWebhook } from "@/lib/asaas";
-import { transition, normalizeRef } from "@/lib/asaasWebhook";
+import {
+  transition,
+  normalizeRef,
+  mappingStrategy,
+  isStalePaymentEvent,
+} from "@/lib/asaasWebhook";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -69,29 +78,41 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2) Resolve tenant via subscriptions (nunca pelo corpo)
-    let row: { id: string; tenant_id: string; billing_exempt: boolean } | null =
-      null;
-    if (asaasSubId) {
-      const { data } = await supabase
+    // 2) Resolve tenant via subscriptions (nunca pelo corpo).
+    //    Com id de assinatura → SÓ por ela (sem fallback por customer): evento de
+    //    assinatura antiga/órfã fica sem mapeamento e é apenas auditado (C4).
+    type SubRow = {
+      id: string;
+      tenant_id: string;
+      billing_exempt: boolean;
+      current_period_start: string | null;
+    };
+    const cols = "id, tenant_id, billing_exempt, current_period_start";
+    const strategy = mappingStrategy(asaasSubId, asaasCustId);
+    let row: SubRow | null = null;
+    if (strategy === "subscription") {
+      const { data, error } = await supabase
         .from("subscriptions")
-        .select("id, tenant_id, billing_exempt")
+        .select(cols)
         .eq("asaas_subscription_id", asaasSubId)
         .maybeSingle();
-      row = data ?? null;
-    }
-    if (!row && asaasCustId) {
-      const { data } = await supabase
+      if (error) throw error;
+      row = (data as SubRow) ?? null;
+    } else if (strategy === "customer") {
+      const { data, error } = await supabase
         .from("subscriptions")
-        .select("id, tenant_id, billing_exempt")
+        .select(cols)
         .eq("asaas_customer_id", asaasCustId)
         .maybeSingle();
-      row = data ?? null;
+      if (error) throw error;
+      row = (data as SubRow) ?? null;
     }
 
     // 3) Aplica transição (idempotente). Isento = auditado, sem rebaixar.
+    //    Cobrança de período anterior ao vigente = auditada, sem efeito (M10).
     let applied = false;
-    if (row && !row.billing_exempt) {
+    const stale = !!row && isStalePaymentEvent(event, payment, row.current_period_start);
+    if (row && !row.billing_exempt && !stale) {
       const patch = transition(event, payment);
       if (patch) {
         const { error: upErr } = await supabase
@@ -119,8 +140,10 @@ export async function POST(req: NextRequest) {
     console.log("[webhook:asaas] done", {
       event,
       tenant: row?.tenant_id ?? null,
+      strategy,
       mapped: !!row,
       exempt: !!row?.billing_exempt,
+      stale,
       applied,
     });
     return NextResponse.json({ ok: true, mapped: !!row, applied });
