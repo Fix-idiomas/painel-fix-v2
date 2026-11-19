@@ -152,20 +152,22 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
   nunca é lido do banco), usado em
   [`mensalidades/page.jsx:168`](../src/app/(app)/financeiro/mensalidades/page.jsx#L168). **[código]**
 
-### A9. Aluno inativo continua com mensalidades pendentes — ⏸️
-- **Problema:** inativar só muda o status. As mensalidades continuam inflando "a
-  receber", a inadimplência e os lembretes.
-- **[confirmado]** com dados: 38 pendências de alunos inativos (35 da Fix Idiomas,
-  R$ 8.353,00, de 10/2025 a 11/2026; 3 da Escola Caos).
-- **Decisão (2026-11-13):** ao inativar, cancelar **todas as pendentes** e manter as
-  pagas. A reativação não restaura nada.
-- **Feito:** trigger em
-  [`20261113_cancel_payments_on_student_inactivation.sql`](../db/migrations/20261113_cancel_payments_on_student_inactivation.sql),
-  backfill em
-  [`20261113_backfill_cancel_payments_inactive_students.sql`](../db/migrations/20261113_backfill_cancel_payments_inactive_students.sql)
-  e [verify](../db/verify/cancel_payments_on_student_inactivation.verify.sql).
-- **Falta:** aplicar no banco. Aguarda ok para o teste com rollback, o trigger e o
-  backfill (inclusive se entra a Escola Caos).
+### A9. Aluno inativo continua com mensalidades pendentes — ❎ (comportamento correto)
+- **Observação:** inativar só muda o status; as pendências que já existem continuam.
+  Em 2026-11-13 eram 38 pendências de alunos inativos (35 da Fix Idiomas, R$ 8.353,00,
+  de 10/2025 a 11/2026; 3 da Escola Caos).
+- **Decisão final (2026-11-19):** isso é **intencional**. Aluno que sai devendo continua
+  com o débito. As pendências só são canceladas **manualmente**, em Mensalidades. A regra
+  é: **aluno inativo não recebe cobranças novas.** Isso já é garantido, porque o cron
+  (`monthlyGeneration`) e a Prévia/Gerar (`pendingStudentsForMonth`) só geram para
+  `status = 'ativo'`.
+- **Atenção operacional:** se o aluno for inativado no meio do mês, a mensalidade daquele
+  mês (gerada no dia 1) continua pendente e precisa ser cancelada à mão, se não for devida.
+- **Histórico:** um trigger que cancelava as pendências automaticamente chegou a ser
+  escrito e testado com `ROLLBACK` (funcionou, nada foi gravado), mas foi **descartado**
+  com a mudança de decisão. Não há migration.
+- **Melhoria possível (não feita):** ao inativar, mostrar as pendências do aluno com um
+  botão opcional "cancelar as selecionadas".
 
 ---
 
@@ -211,3 +213,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 - **2026-11-13** — 1º lote no código (sem commit nem deploy): C1, C2, A1, A2, A3, M2 e M6
   corrigidos; A5 e A6 parciais; C5 verificado no banco e rebaixado. `tsc` limpo, lint
   limpo, 293 testes passando.
+- **2026-11-19** — lote 1 na branch `fix/auditoria-lote-1`, com deploy de preview.
+  A9 revisto: as pendências de aluno inativo **não** são canceladas automaticamente
+  (o débito continua; o cancelamento é manual). As migrations do trigger e do backfill
+  foram removidas.
