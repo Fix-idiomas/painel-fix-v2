@@ -39,7 +39,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 - **Problema:** a rota só envia e-mail. A tela manda `{ user_id, perms }`, a rota exige
   `to` e `subject` e responde 400. Nenhuma rota atualiza permissões. **[código]**
 
-### C3. Pagante bloqueado no dia da renovação — ✅ código · ⏸️ migration a aplicar
+### C3. Pagante bloqueado no dia da renovação — ✅ código · 🚀 migration aplicada em prod (2026-11-19)
 - **Correção:**
   1. Carência: a referência passa a depender do status (trial → `trial_end`; demais →
      `current_period_end`), no banco (`tenant_access_level`) e no front
@@ -242,3 +242,6 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 - **2026-11-19** — lote 2 (cobrança): C3 (código e migration ainda não aplicada), C4 e
   M10 corrigidos; B3 parcial. Achado extra: o dunning de assinatura nunca enviava (RPC
   procurava `role = 'owner'`). 313 testes passando.
+- **2026-11-19** — migration `20261119_fix_billing_grace_and_dunning.sql` testada com
+  rollback (pagante 2d → readonly, 8d → blocked; dunning encontra o owner) e aplicada em
+  produção. Preview atualizado com lotes 1+2.
