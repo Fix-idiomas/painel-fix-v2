@@ -163,7 +163,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
     uma duplicata derruba o lote inteiro.
   - O tipo de retorno varia: objeto ou array. **[código]**
 
-### A7. O cron `dunning-reminders` cobra todo dia, para sempre — ✅ código · ⏸️ migration a aplicar
+### A7. O cron `dunning-reminders` cobra todo dia, para sempre — ✅ código · 🚀 migration aplicada (2026-11-19)
 - **Onde:** [`cron/dunning-reminders`](../src/app/api/cron/dunning-reminders/route.ts).
 - **Problema:**
   - Não consulta `finance_reminders_log`, então reenvia o mesmo lembrete diariamente.
