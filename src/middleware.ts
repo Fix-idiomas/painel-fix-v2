@@ -10,7 +10,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { createMiddlewareClient } from '@supabase/auth-helpers-nextjs';
 
 // Rotas de debug/dev que não devem ser acessíveis em produção.
-const DEV_ONLY_PREFIXES = ['/debug-jwt', '/debug-payments', '/debug/', '/dev/'];
+const DEV_ONLY_PREFIXES = ['/debug-jwt', '/debug-payments', '/debug/', '/dev/', '/teste-email'];
 
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();

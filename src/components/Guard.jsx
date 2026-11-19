@@ -28,13 +28,10 @@ import { useSession } from "@/contexts/SessionContext";
 export default function Guard({ roles, check, fallback = null, children }) {
   const { session } = useSession();
 
-  // 1) sessão ainda não carregou → não renderiza nada (evita flicker)
-  if (!session) return null;
+  // Hooks SEMPRE no topo e incondicionais (regra dos hooks). Antes vinham depois
+  // do `if (!session) return null` → crash quando a sessão voltava a null (logout).
 
-  // 2) checagem por roles (opcional)
-  const allowedByRole = Array.isArray(roles) ? roles.includes(session.role) : true;
-
-  // 3) checagem assíncrona (opcional, DB-first)
+  // checagem assíncrona (opcional, DB-first)
   const [checked, setChecked] = useState(!check);   // se não houver check, já consideramos ok
   const [allowedByCheck, setAllowedByCheck] = useState(true);
   const [checkError, setCheckError] = useState(null);
@@ -61,6 +58,12 @@ export default function Guard({ roles, check, fallback = null, children }) {
 
     return () => { alive = false; };
   }, [check]);
+
+  // 1) sessão ainda não carregou → não renderiza nada (evita flicker)
+  if (!session) return null;
+
+  // 2) checagem por roles (opcional)
+  const allowedByRole = Array.isArray(roles) ? roles.includes(session.role) : true;
 
   // 4) enquanto aguardamos a checagem DB-first, não renderizar children
   if (!checked) return null;

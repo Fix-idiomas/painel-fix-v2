@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { safeNextPath } from "@/lib/safeNextPath";
 import {
   Mail,
   Lock,
@@ -84,8 +85,9 @@ function LoginInner() {
         return;
       }
 
-      const next = searchParams?.get("next") || "/recepcao";
-      router.replace(next);
+      // Só aceita caminho interno ("/x"); bloqueia "//host", "/\host" e URLs
+      // absolutas → evita open redirect pós-login (auditoria M6).
+      router.replace(safeNextPath(searchParams?.get("next")));
       router.refresh();
     } catch (err) {
       setError(err?.message || String(err));

@@ -81,6 +81,15 @@ export const monthStartOf = (ym?: string | null): string => {
   return `${Y}-${M}-01`;
 };
 
+// "YYYY-MM-01" do mês seguinte, por aritmética de string (sem Date → imune a
+// fuso). Usado como limite EXCLUSIVO de janelas mensais (.lt(due_date, ...)).
+export const nextMonthStartOf = (ym?: string | null): string => {
+  const [Y, M] = monthStartOf(ym).split("-").map(Number);
+  const nY = M === 12 ? Y + 1 : Y;
+  const nM = M === 12 ? 1 : M + 1;
+  return `${nY}-${String(nM).padStart(2, "0")}-01`;
+};
+
 export const clampDay1to28 = (n: unknown): number =>
   Math.min(Math.max(Number(n || 5), 1), 28);
 
