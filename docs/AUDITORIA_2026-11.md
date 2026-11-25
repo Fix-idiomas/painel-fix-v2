@@ -14,7 +14,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 
 ## 🔴 Críticos
 
-### C1. E-mail aberto para qualquer usuário logado (relay) — ✅
+### C1. E-mail aberto para qualquer usuário logado (relay) — 🚀
 - **Correção:** `/api/send-mail` passou a exigir tenant, permissão `is_admin_or_finance_write`
   e `tenant_can_write()`, com limites de 10 destinatários, assunto e tamanho do corpo
   ([`mailPolicy.ts`](../src/lib/mailPolicy.ts), com testes). `/teste-email` foi bloqueada
@@ -28,7 +28,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 - **Risco:** phishing com a marca e suspensão do domínio no Mailgun. O repositório é
   **público**. **[código]**
 
-### C2. "Editar permissões" não salva nada — ✅
+### C2. "Editar permissões" não salva nada — 🚀
 - **Correção:** a rota agora atualiza `user_claims.perms` com o client do próprio usuário
   (sem service role; a RLS `is_admin_or_members_write` continua valendo) e exige
   `is_admin_or_owner`. Altera só `classes`, `finance` e `registry`; preserva as outras
@@ -39,7 +39,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 - **Problema:** a rota só envia e-mail. A tela manda `{ user_id, perms }`, a rota exige
   `to` e `subject` e responde 400. Nenhuma rota atualiza permissões. **[código]**
 
-### C3. Pagante bloqueado no dia da renovação — ✅ código · 🚀 migration aplicada em prod (2026-11-19)
+### C3. Pagante bloqueado no dia da renovação — 🚀
 - **Correção:**
   1. Carência: a referência passa a depender do status (trial → `trial_end`; demais →
      `current_period_end`), no banco (`tenant_access_level`) e no front
@@ -70,7 +70,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
   3. O dunning fala em "limite ou validade do cartão" também para quem paga com Pix,
      e reenvia todo dia. **[código]**
 
-### C4. O webhook aplica eventos de outras assinaturas ao tenant — ✅
+### C4. O webhook aplica eventos de outras assinaturas ao tenant — 🚀
 - **Correção:** um evento que traz id de assinatura é mapeado **só** por esse id. Se não
   bater com a assinatura atual (antiga ou órfã), o evento fica registrado mas não tem
   efeito. O fallback por `customer` só vale quando o evento não traz assinatura
@@ -96,7 +96,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 
 ## 🟠 Altos
 
-### A1. A Prévia de mensalidades "não efetiva" — ✅
+### A1. A Prévia de mensalidades "não efetiva" — 🚀
 - **Correção:** a Prévia e o Gerar usam a mesma função (`pendingStudentsForMonth`): alunos
   ativos sem lançamento não cancelado no `competence_month`. A tela de Mensalidades não
   filtra mais pelas linhas visíveis. O modal mostra o erro por dentro, e a página mostra
@@ -113,7 +113,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
   lista carrega **50**. Com 21 empatadas no vencimento 25/11, a que fica de fora muda a
   cada carregamento.
 
-### A2. Lista de mensalidades limitada a 50, com KPIs calculados só sobre elas — ✅
+### A2. Lista de mensalidades limitada a 50, com KPIs calculados só sobre elas — 🚀
 - **Correção:** sem `pageSize`, o `listPayments` traz o mês inteiro (paginando de 1000 em
   1000) e ordena por `due_date, id`, para o resultado ser estável. Com `pageSize`, respeita
   a página pedida. Cobre também o `getCombinedRevenueKpis`.
@@ -121,7 +121,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
   (`pageSize = 50`; o `financeGateway` não repassa `page`).
   O `getCombinedRevenueKpis` herda o mesmo corte. **[confirmado]**
 
-### A3. Janela de mês errada no fuso de Brasília — ✅
+### A3. Janela de mês errada no fuso de Brasília — 🚀
 - **Correção:** novo helper `nextMonthStartOf` (aritmética de string), usado em
   `paymentGateway.listPayments` e em `financeKpisGateway.getMonthlyFinanceKpis`.
   Coberto por testes de fevereiro, março, abril e dezembro.
@@ -130,7 +130,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 - **[confirmado]** com Node (`TZ=America/Sao_Paulo`): fevereiro vai até 03/03, março
   corta no dia 28, abril inclui 1 e 2 de maio e dezembro perde o dia 31.
 
-### A4. Aulas a partir das 21h são apagadas pelo prune — ✅
+### A4. Aulas a partir das 21h são apagadas pelo prune — 🚀
 - **Onde:** [`turmaGateway.pruneSessionsNotInRules`](../src/lib/gateways/turmaGateway.ts#L505).
 - **Problema:** usa `getUTCDay()` num horário local. Aulas às 21h ou depois caem no dia
   seguinte em UTC e são apagadas como "fora da regra". **[confirmado]** com Node.
@@ -146,7 +146,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
   (logout). O `npm run lint` não analisa nenhum `.js` ou `.jsx`, que é quase toda a UI.
   **[confirmado]** rodando o ESLint nos JSX.
 
-### A6. A Prévia manual e o cron geram mensalidades com regras diferentes — ✅
+### A6. A Prévia manual e o cron geram mensalidades com regras diferentes — 🚀
 - **Feito:** vencimento limitado a 28 (`dueDateFor`); duplicata em lote tratada linha a
   linha (o `code` cru é lido antes do `mapErr`); retorno sempre
   `{ inserted, skipped_existing, created_payers }`; testes cobrindo esses casos.
@@ -165,7 +165,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
     uma duplicata derruba o lote inteiro.
   - O tipo de retorno varia: objeto ou array. **[código]**
 
-### A7. O cron `dunning-reminders` cobra todo dia, para sempre — ✅ código · 🚀 migration aplicada (2026-11-19)
+### A7. O cron `dunning-reminders` cobra todo dia, para sempre — 🚀
 - **Onde:** [`cron/dunning-reminders`](../src/app/api/cron/dunning-reminders/route.ts).
 - **Problema:**
   - Não consulta `finance_reminders_log`, então reenvia o mesmo lembrete diariamente.
@@ -209,16 +209,16 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 
 | # | Problema | Onde | Status |
 |---|----------|------|--------|
-| M1 | "Hoje" e "mês atual" em UTC em cerca de 15 lugares (o CLAUDE.md manda usar `tzToday`). Depois das 21h de Brasília, os atrasos contam um dia antes e o seletor de mês pula. | painel, mensalidades, gastos, financeiro, outras-receitas, turmas, professores, `financeKpisGateway`, crons | ✅ `src/lib/tz.ts` (`todaySP`/`currentMonthSP`) em páginas, gateways, `subscribe` e `monthly-previa` |
-| M2 | O KPI de despesas soma os lançamentos cancelados (a receita os exclui). | [`financeKpisGateway.ts:46`](../src/lib/gateways/financeKpisGateway.ts#L46) | ✅ canceladas fora do total e do detalhamento por centro de custo |
+| M1 | "Hoje" e "mês atual" em UTC em cerca de 15 lugares (o CLAUDE.md manda usar `tzToday`). Depois das 21h de Brasília, os atrasos contam um dia antes e o seletor de mês pula. | painel, mensalidades, gastos, financeiro, outras-receitas, turmas, professores, `financeKpisGateway`, crons | 🚀 `src/lib/tz.ts` (`todaySP`/`currentMonthSP`) em páginas, gateways, `subscribe` e `monthly-previa` |
+| M2 | O KPI de despesas soma os lançamentos cancelados (a receita os exclui). | [`financeKpisGateway.ts:46`](../src/lib/gateways/financeKpisGateway.ts#L46) | 🚀 canceladas fora do total e do detalhamento por centro de custo |
 | M3 | O repasse do professor usa dois critérios: o total por `teacher_id_snapshot`, a lista por `turmas.teacher_id`. | [`teacherGateway.ts`](../src/lib/gateways/teacherGateway.ts) | ⬜ |
 | M4 | O `createOtherRevenueTemplate` apaga colunas (como `end_month`) quando dá erro, e uma receita "até o mês X" vira indefinida. | [`otherRevenueGateway.ts:60`](../src/lib/gateways/otherRevenueGateway.ts#L60) | ⬜ |
 | M5 | O `deleteTurma` apaga todo o histórico de aulas, sem atomicidade, e muda repasses e relatórios passados. | [`turmaGateway.ts:121`](../src/lib/gateways/turmaGateway.ts#L121) | ⬜ |
-| M6 | Open redirect no login: `router.replace(next)` sem validar. | [`login/page.jsx:87`](../src/app/(auth)/login/page.jsx#L87) | ✅ [`safeNextPath`](../src/lib/safeNextPath.js) (com testes) |
+| M6 | Open redirect no login: `router.replace(next)` sem validar. | [`login/page.jsx:87`](../src/app/(auth)/login/page.jsx#L87) | 🚀 [`safeNextPath`](../src/lib/safeNextPath.js) (com testes) |
 | M7 | `create-user`: tenant escolhido por `owner_user_id` com `limit(1)`; o front envia `tenant_id`; uma falha parcial deixa o login órfão (depois dá 409). | [`admin/create-user`](../src/app/api/admin/create-user/route.ts) | ⬜ |
 | M8 | O `subscribe` sem linha em `subscriptions` cria a assinatura na Asaas sem gravar nada, e o reconcile não a vê. `nextDueDate` em UTC. | [`billing/subscribe`](../src/app/api/billing/subscribe/route.ts) | ⬜ |
 | M9 | Cancelar a assinatura deixa o tenant só com leitura na hora, mesmo com período pago. | [`billing/cancel`](../src/app/api/billing/cancel/route.ts) | ⏸️ decisão de produto |
-| M10 | No cartão, um `PAYMENT_RECEIVED` atrasado pode fazer o `current_period_end` voltar um mês (plausível). | [`asaasWebhook.ts`](../src/lib/asaasWebhook.ts) | ✅ `CONFIRMED`/`RECEIVED`/`OVERDUE` de cobrança anterior ao período vigente ficam registrados sem efeito (`isStalePaymentEvent`); estornos continuam valendo |
+| M10 | No cartão, um `PAYMENT_RECEIVED` atrasado pode fazer o `current_period_end` voltar um mês (plausível). | [`asaasWebhook.ts`](../src/lib/asaasWebhook.ts) | 🚀 `CONFIRMED`/`RECEIVED`/`OVERDUE` de cobrança anterior ao período vigente ficam registrados sem efeito (`isStalePaymentEvent`); estornos continuam valendo |
 | M11 | Paywall: `/accept-invite` e `/reset-password` estão em `(app)` mas fora da allowlist, então um convidado ou um tenant bloqueado cai em `/assinatura`. | [`paywallRoutes.js`](../src/lib/paywallRoutes.js) | ⬜ |
 | M12 | `Guard` com `check` inline refaz a RPC a cada render do layout. | [`Guard.jsx`](../src/components/Guard.jsx) | ⬜ |
 
@@ -236,7 +236,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 | B8 | 10 páginas acessam o Supabase direto, fora da camada de gateways, e 4 arquivos importam o barrel `supabaseGateway`. | ⬜ |
 | B9 | O Vitest falha quando o terminal abre a pasta como `c:\` (minúsculo); rodar a partir de `C:\`. | ⬜ |
 | B10 | `npm audit`: 19 vulnerabilidades (2 críticas); `@supabase/auth-helpers-nextjs` deprecado. | ⬜ |
-| B11 | A pasta `supabase/.temp/` (criada pelo `supabase link`) não está no `.gitignore`. | ✅ |
+| B11 | A pasta `supabase/.temp/` (criada pelo `supabase link`) não está no `.gitignore`. | 🚀 |
 
 ---
 
@@ -267,4 +267,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
 - **2026-11-25** — **S1 (alerta do Supabase `rls_disabled_in_public`):** `public.audit_log`
   sem RLS e com grants para `anon`/`authenticated` (leitura e escrita públicas com a anon
   key). Tabela sem uso (1 linha de teste). Migration `20261125_audit_log_enable_rls.sql`:
-  liga RLS sem policies, revoga grants e o EXECUTE de `fn_audit_log`. Testada com rollback.
+  liga RLS sem policies, revoga grants e o EXECUTE de `fn_audit_log`. Testada com rollback e
+  aplicada em produção (0 tabelas públicas sem RLS).
+- **2026-11-25** — lote 3 (A4, A6, A7, A10, M1) em produção; todos os ✅ anteriores
+  passam a 🚀.
