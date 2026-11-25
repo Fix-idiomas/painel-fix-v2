@@ -1,5 +1,6 @@
 "use client";
 
+import { todaySP } from "@/lib/tz";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { financeGateway } from "@/lib/financeGateway";
@@ -136,7 +137,7 @@ export default function FinanceiroPage() {
 
   const paidPayments = payments.filter((p) => p.status === "paid");
   const overdueCount = payments.filter((p) => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todaySP();
     return (
       p.status === "pending" &&
       p.due_date &&
@@ -662,7 +663,7 @@ function NewLancamentoModal({ ym, categories, onClose, onCreated }) {
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("");
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todaySP();
   const [date, setDate] = useState(today);
   const [dueDay, setDueDay] = useState("5");
   const [frequency, setFrequency] = useState("monthly"); // 'monthly' | 'annual'

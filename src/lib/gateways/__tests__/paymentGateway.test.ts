@@ -38,7 +38,8 @@ describe("paymentGateway.previewGenerateMonth", () => {
   });
 
   // A1: a Prévia usa a MESMA regra do Gerar (banco, por competence_month).
-  it("exclui alunos que já têm lançamento não cancelado no mês", async () => {
+  // A6: mês cancelado também conta como "já existe" (Reabrir é explícito).
+  it("exclui alunos que já têm lançamento no mês, inclusive cancelado", async () => {
     mock._tableResults.students = {
       data: [
         { id: "1", name: "João", monthly_value: 500, due_day: 10 },
@@ -50,7 +51,7 @@ describe("paymentGateway.previewGenerateMonth", () => {
     const result = await paymentGateway.previewGenerateMonth({ ym: "2026-11" });
     expect(result.map((r) => r.student_id)).toEqual(["2"]);
     expect(calls("payments", "eq")[0].args).toEqual(["competence_month", "2026-11-01"]);
-    expect(calls("payments", "neq")[0].args).toEqual(["status", "canceled"]);
+    expect(calls("payments", "neq")).toHaveLength(0);
   });
 
   it("limita o dia de vencimento a 28 (não transborda de mês)", async () => {

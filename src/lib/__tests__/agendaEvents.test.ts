@@ -179,3 +179,24 @@ describe("buildEventsFromSessions", () => {
     expect(events[0].start).toBe("09:00");
   });
 });
+
+describe("turmaId nos eventos (UUID com hífens)", () => {
+  const uuid = "f848ed19-3ba4-4888-88e5-7c750e9b506d";
+  it("evento de regra carrega o UUID inteiro da turma", () => {
+    const [ev] = buildEventsFromRules(
+      [{ id: uuid, name: "T1", meeting_rules: [{ weekday: 4, time: "08:30", duration_hours: 0.5 }] }],
+      {}
+    );
+    expect(ev.turmaId).toBe(uuid);
+  });
+  it("evento de aula carrega o UUID inteiro da turma", () => {
+    const monday = new Date("2026-11-16T00:00:00");
+    const [ev] = buildEventsFromSessions(
+      [{ id: "s1", turma_id: uuid, date: "2026-11-19T08:30:00", duration_hours: 0.5 }],
+      { [uuid]: { id: uuid, name: "T1" } },
+      {},
+      monday
+    );
+    expect(ev.turmaId).toBe(uuid);
+  });
+});

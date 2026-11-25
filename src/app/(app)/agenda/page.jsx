@@ -1,5 +1,6 @@
 "use client";
 
+import { todaySP } from "@/lib/tz";
 import { useEffect, useMemo, useState } from "react";
 import { financeGateway } from "@/lib/financeGateway";
 import {
@@ -167,9 +168,9 @@ export default function AgendaPage() {
       return;
     }
     // rule event → abrir modal de nova aula com prefill
-    const turmaId = String(ev.id || "")
-      .replace(/^rule-/, "")
-      .split("-")[0];
+    // turmaId explícito no evento: antes cortava o id no primeiro hífen, o que
+    // truncava o UUID da turma (o modal abria sem a turma certa selecionada).
+    const turmaId = ev.turmaId;
     setNewPrefill({
       turma_id: turmaId,
       datetime: localDateTimeForGridSlot(weekStart, ev.day, ev.start),
@@ -547,7 +548,7 @@ function DayList({ list, onClick }) {
 // ─── Modal: Nova aula ────────────────────────────────────────────
 function NewSessionModal({ turmas, prefill, onClose, onCreated }) {
   const initialDate =
-    prefill?.datetime?.slice(0, 10) || new Date().toISOString().slice(0, 10);
+    prefill?.datetime?.slice(0, 10) || todaySP();
   const initialTime = prefill?.datetime?.slice(11, 16) || "19:00";
   const [turmaId, setTurmaId] = useState(
     prefill?.turma_id || turmas?.[0]?.id || ""

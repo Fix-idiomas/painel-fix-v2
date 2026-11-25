@@ -1,3 +1,4 @@
+import { todaySP } from "@/lib/tz";
 import { supabase } from "../supabaseClient";
 import { mapErr, monthStartOf, nextMonthStartOf, dueDateFor } from "./helpers";
 import type { PaymentStatus } from "@/types";
@@ -41,12 +42,17 @@ interface PaymentPreview {
   _needs_payer: boolean;
 }
 
-// Alunos ativos com mensalidade > 0 que AINDA NÃO têm lançamento (não cancelado)
-// no mês de competência. Fonte ÚNICA de verdade para a Prévia e para o Gerar —
-// antes a Prévia comparava com as linhas da tela (sujeitas a filtro/paginação) e
-// oferecia alunos que o Gerar pulava em silêncio (auditoria A1/A6).
-// A existência é por competence_month (mesma chave do índice único parcial
-// payments_unique_tenant_student_month, WHERE status <> 'canceled').
+// Alunos ativos com mensalidade > 0 que AINDA NÃO têm lançamento (de QUALQUER
+// status, inclusive cancelado) no mês de competência. Fonte ÚNICA de verdade para
+// a Prévia e para o Gerar — antes a Prévia comparava com as linhas da tela
+// (sujeitas a filtro/paginação) e oferecia alunos que o Gerar pulava em silêncio
+// (auditoria A1).
+// Canceladas CONTAM como existentes (auditoria A6): cancelar é decisão manual e a
+// Prévia não deve "ressuscitar" o mês sem querer — mesma regra do cron
+// (src/lib/server/monthlyGeneration.ts). Para cobrar de novo, use "Reabrir" na
+// própria mensalidade (reopenPayment).
+// Aluno cadastrado no meio do mês ENTRA aqui de propósito: o cron do dia 01 não o
+// alcança (evita cobrança retroativa automática) — esse é o papel da Prévia manual.
 async function pendingStudentsForMonth(ym: string, ctx: string) {
   const monthStart = monthStartOf(ym);
 
@@ -62,8 +68,7 @@ async function pendingStudentsForMonth(ym: string, ctx: string) {
   const { data: existing, error: e2 } = await supabase
     .from("payments")
     .select("student_id")
-    .eq("competence_month", monthStart)
-    .neq("status", "canceled");
+    .eq("competence_month", monthStart);
   if (e2) mapErr(`${ctx}.existing`, e2);
 
   const exists = new Set((existing || []).map((p) => p.student_id));
@@ -268,7 +273,7 @@ export const paymentGateway = {
           : 0,
     }));
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todaySP();
     const kpis: PaymentKpis = {
       receita_a_receber: rows
         .filter((r) => r.status === "pending")

@@ -1,5 +1,5 @@
 import { supabase } from "../supabaseClient";
-import { mapErr, normalizeRules, toIsoTz, tzToday, addDaysISO } from "./helpers";
+import { mapErr, normalizeRules, toIsoTz, tzToday, addDaysISO, weekdayInTz } from "./helpers";
 import type { Turma } from "@/types";
 
 export const turmaGateway = {
@@ -535,9 +535,10 @@ export const turmaGateway = {
 
     const toDelete = [];
     for (const sRow of sessions) {
-      const d = new Date(sRow.date);
-      if (isNaN(d.getTime())) continue;
-      const wd = d.getUTCDay();
+      // Dia da semana no fuso de SP (A4): com getUTCDay(), aula às 21h+ caía no
+      // dia seguinte em UTC e era apagada como "fora da regra".
+      const wd = weekdayInTz(sRow.date);
+      if (wd === null) continue;
       if (!validWeekdays.has(wd) && !protectedIds.has(sRow.id)) {
         toDelete.push(sRow.id);
       }

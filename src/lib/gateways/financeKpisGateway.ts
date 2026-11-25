@@ -1,3 +1,4 @@
+import { todaySP } from "@/lib/tz";
 import { supabase } from "../supabaseClient";
 import { mapErr, monthStartOf, nextMonthStartOf, tzToday } from "./helpers";
 import { paymentGateway } from "./paymentGateway";
@@ -165,7 +166,7 @@ export const financeKpisGateway = {
       ...(Array.isArray(others?.rows) ? others.rows : []),
     ];
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todaySP();
     const sum = (a) => a.reduce((acc, r) => acc + Number(r.amount || 0), 0);
 
     const received = sum(rows.filter(r => r.status === "paid"));

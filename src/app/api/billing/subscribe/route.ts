@@ -5,6 +5,7 @@
 // verdade). Aqui apenas persistimos asaas_customer_id/asaas_subscription_id.
 // Escrita em subscriptions via service role (cliente não tem policy de escrita).
 
+import { todaySP } from "@/lib/tz";
 import { cookies } from "next/headers";
 import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
 import { createClient } from "@supabase/supabase-js";
@@ -34,7 +35,7 @@ function json(body: unknown, status = 200) {
   });
 }
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return todaySP();
 }
 
 export async function POST(req: NextRequest) {

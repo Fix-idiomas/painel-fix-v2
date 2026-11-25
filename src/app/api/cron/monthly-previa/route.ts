@@ -11,6 +11,7 @@
 // Idempotente: re-rodar não duplica (pula competence_month já existente).
 // Proteção: header Authorization: Bearer ${CRON_SECRET} (comparação constante).
 
+import { currentMonthSP } from "@/lib/tz";
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import crypto from "node:crypto";
@@ -44,7 +45,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Config ausente." }, { status: 500 });
   }
 
-  const ym = new Date().toISOString().slice(0, 7);
+  const ym = currentMonthSP();
   const startedAt = new Date().toISOString();
   const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },

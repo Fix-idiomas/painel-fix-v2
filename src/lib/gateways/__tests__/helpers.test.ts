@@ -16,6 +16,7 @@ const {
   normalizeDate,
   addDaysISO,
   tzToday,
+  weekdayInTz,
 } = await import("../helpers");
 
 // --- mapErr ---
@@ -248,5 +249,17 @@ describe("tzToday", () => {
   it("returns YYYY-MM-DD format", () => {
     const result = tzToday("America/Sao_Paulo");
     expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe("weekdayInTz (A4)", () => {
+  it("usa o dia da semana de São Paulo, não o de UTC", () => {
+    // quarta 18/11/2026 21:30 em SP = quinta 00:30 UTC
+    expect(weekdayInTz("2026-11-19T00:30:00.000Z")).toBe(3);
+    expect(new Date("2026-11-19T00:30:00.000Z").getUTCDay()).toBe(4);
+    expect(weekdayInTz("2026-11-19T13:00:00.000Z")).toBe(4);
+  });
+  it("data inválida → null", () => {
+    expect(weekdayInTz("lixo")).toBeNull();
   });
 });

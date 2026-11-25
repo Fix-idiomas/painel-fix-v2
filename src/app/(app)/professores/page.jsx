@@ -1,5 +1,6 @@
 "use client";
 
+import { currentMonthSP } from "@/lib/tz";
 import { useEffect, useMemo, useState } from "react";
 import { financeGateway } from "@/lib/financeGateway";
 import {
@@ -63,7 +64,7 @@ function statusChip(s) {
     return { cls: "p-chip-success", icon: CheckCircle2, label: "Ativo" };
   return { cls: "p-chip-neutral", icon: PauseCircle, label: "Inativo" };
 }
-const monthNow = () => new Date().toISOString().slice(0, 7);
+const monthNow = () => currentMonthSP();
 
 // ─── Página ──────────────────────────────────────────────────────
 export default function ProfessoresPage() {

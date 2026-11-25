@@ -1,6 +1,7 @@
 // src/app/(app)/financeiro/mensalidades/page.jsx
 "use client";
 
+import { todaySP, currentMonthSP } from "@/lib/tz";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "@/contexts/SessionContext";
 import { financeGateway } from "@/lib/financeGateway";
@@ -73,7 +74,7 @@ function reminderStatus(due, status) {
 }
 
 function statusChip(row) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todaySP();
   if (row.status === "paid")
     return { cls: "p-chip-success", icon: CheckCircle2, label: "Pago" };
   if (row.status === "canceled")
@@ -268,7 +269,7 @@ export default function MensalidadesPage() {
   }, [ready]);
 
   // Estado
-  const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
+  const [ym, setYm] = useState(() => currentMonthSP());
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
   const [rows, setRows] = useState([]);
@@ -692,8 +693,11 @@ export default function MensalidadesPage() {
           fail++;
         }
         try {
-          await supabase.from("finance_reminders_log").insert({
-            tenant_id: session?.tenant?.id ?? session?.tenantId ?? null,
+          // tenant_id: preenchido pelo banco (DEFAULT current_tenant_id()) — nunca
+          // enviar do frontend. Status só aceita 'sent' | 'failed'; sent_at é
+          // NOT NULL (momento da tentativa). Antes nada era gravado (auditoria A7).
+          // Este histórico também adia o próximo lembrete automático do cron.
+          const { error: logErr } = await supabase.from("finance_reminders_log").insert({
             payment_id: r.id ?? null,
             student_id: r.student_id ?? null,
             payer_id: r.payer_id ?? null,
@@ -701,11 +705,12 @@ export default function MensalidadesPage() {
             subject: payload.subject ?? null,
             provider: "mailgun",
             provider_id: providerId,
-            status: res.ok ? "sent" : "error",
+            status: res.ok ? "sent" : "failed",
             error_text: errorText,
             payload,
-            sent_at: res.ok ? new Date().toISOString() : null,
+            sent_at: new Date().toISOString(),
           });
+          if (logErr) console.warn("[lembretes] falha ao registrar histórico", logErr.message);
         } catch {
           /* log opcional */
         }
@@ -720,7 +725,7 @@ export default function MensalidadesPage() {
   }
 
   // Filtragem cliente
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todaySP();
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase();
     return rows.filter((r) => {

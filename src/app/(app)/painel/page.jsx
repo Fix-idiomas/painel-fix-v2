@@ -1,5 +1,6 @@
 "use client";
 
+import { todaySP, currentMonthSP } from "@/lib/tz";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSession } from "@/contexts/SessionContext";
@@ -56,7 +57,7 @@ function previousYm(ym) {
 }
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return todaySP();
 }
 
 function percentDelta(curr, prev) {
@@ -106,6 +107,7 @@ function buildClassesForToday(turmas, teacherMap) {
       const mins = Math.round(dur * 60);
       out.push({
         id: `${t.id}-${r.weekday}-${time}`,
+        turmaId: t.id,
         time,
         title: t.name || "—",
         room: t.room || "—",
@@ -205,7 +207,7 @@ export default function PainelPage() {
   const canReadFinance = isAdmin || !!perms?.finance?.read;
   const canReadRegistry = isAdmin || !!perms?.registry?.read;
 
-  const [ym, setYm] = useState(() => new Date().toISOString().slice(0, 7));
+  const [ym, setYm] = useState(() => currentMonthSP());
   const [showValues, setShowValues] = useState(true);
   const [openMail, setOpenMail] = useState(false);
   const [registering, setRegistering] = useState(null);
@@ -531,17 +533,24 @@ export default function PainelPage() {
       setRegistering(c.id);
       setError(null);
       const todayStr = todayISO();
-      const [tId] = String(c.id).split("-");
+      // turmaId explícito: antes fazia String(c.id).split("-")[0], que cortava o
+      // UUID da turma no primeiro hífen → "formato inválido" no banco.
       const dur = parseFloat(String(c.duration).replace(" min", "")) / 60;
       await financeGateway.createSession({
-        turma_id: tId,
+        turma_id: c.turmaId,
         date: `${todayStr}T${c.time}:00`,
         duration_hours: Number.isFinite(dur) && dur > 0 ? dur : 1,
       });
       alert(`Aula "${c.title}" registrada.`);
       await load();
     } catch (e) {
-      setError(e?.message || String(e));
+      const msg = e?.message || String(e);
+      // Índice único (turma_id, date): a aula deste horário já existe na agenda.
+      if (msg === "Já existe um registro com esses dados.") {
+        setError(`A aula "${c.title}" das ${c.time} já está registrada hoje. Veja na Agenda.`);
+      } else {
+        setError(msg);
+      }
     } finally {
       setRegistering(null);
     }
