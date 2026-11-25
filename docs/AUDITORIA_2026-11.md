@@ -264,3 +264,7 @@ com calma. Cada item tem **status**, **onde** está e **como foi confirmado**.
   `split("-")[0]`, que corta o UUID no primeiro hífen. Mesmo erro ao clicar numa aula
   prevista na Agenda (modal abria sem a turma certa). Corrigido: eventos carregam `turmaId`;
   aula já registrada mostra mensagem clara. ✅
+- **2026-11-25** — **S1 (alerta do Supabase `rls_disabled_in_public`):** `public.audit_log`
+  sem RLS e com grants para `anon`/`authenticated` (leitura e escrita públicas com a anon
+  key). Tabela sem uso (1 linha de teste). Migration `20261125_audit_log_enable_rls.sql`:
+  liga RLS sem policies, revoga grants e o EXECUTE de `fn_audit_log`. Testada com rollback.
